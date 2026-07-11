@@ -1,0 +1,555 @@
+"""Step-event normalization and ADK plugin integration."""
+
+from __future__ import annotations
+
+import logging
+import threading
+from dataclasses import dataclass
+from typing import Any
+
+from google.adk.plugins.base_plugin import BasePlugin
+
+from ..bus.events import OutboundMessage
+from .tool_confirmation import REQUEST_CONFIRMATION_TOOL_NAME, extract_tool_confirmation_requests
+from .tool_context import get_route
+
+logger = logging.getLogger(__name__)
+
+_STEP_EVENT_PUBLISHER = None
+_ORDERING_LOCK = threading.Lock()
+_EVENT_SEQ_BY_SCOPE: dict[str, int] = {}
+_STEP_ORDER_BY_SCOPE: dict[str, int] = {}
+_KNOWN_STEPS_BY_SCOPE: dict[str, set[str]] = {}
+
+
+def configure_step_event_publisher(publisher) -> None:
+    """Configure the async publisher used by runtime step events."""
+
+    global _STEP_EVENT_PUBLISHER
+    _STEP_EVENT_PUBLISHER = publisher
+
+
+def _bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
+
+
+def _clean_str(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    return str(value).strip()
+
+
+def _legacy_feedback_event_class(feedback_type: str) -> str:
+    mapping = {
+        "status": "step_update",
+        "tool": "step_update",
+        "tool_output": "step_output",
+    }
+    return mapping.get(feedback_type, "final_text")
+
+
+def _legacy_feedback_phase(status: str, *, done: bool) -> str:
+    normalized = status.strip().lower()
+    if normalized in {"accepted", "pending"}:
+        return "queued"
+    if normalized in {"queued", "started", "running", "waiting", "finished", "failed", "cancelled"}:
+        return normalized
+    if normalized in {"error", "errored"}:
+        return "failed"
+    if normalized in {"completed", "complete", "done", "success", "succeeded"}:
+        return "finished"
+    if done:
+        return "finished"
+    return "running" if normalized else ""
+
+
+def _infer_step_update_kind(
+    *,
+    event_class: str,
+    step_phase: str,
+    current_value: Any,
+) -> str:
+    explicit = _clean_str(current_value).lower()
+    if explicit:
+        return explicit
+    if event_class == "step_output":
+        return "output"
+    if step_phase in {"queued", "started", "finished", "failed", "cancelled"}:
+        return "lifecycle"
+    if step_phase in {"running", "waiting"}:
+        return "progress"
+    return "status"
+
+
+def _resolve_ordering_scope(metadata: dict[str, Any]) -> str:
+    invocation_id = _clean_str(metadata.get("_invocation_id"))
+    if invocation_id:
+        return f"invocation:{invocation_id}"
+    step_id = _clean_str(metadata.get("_step_id"))
+    if step_id:
+        return f"step:{step_id}"
+    session_id = _clean_str(metadata.get("_session_id"))
+    if session_id:
+        return f"session:{session_id}"
+    task_id = _clean_str(metadata.get("_task_id"))
+    if task_id:
+        return f"task:{task_id}"
+    channel, chat_id = get_route()
+    if channel and chat_id:
+        return f"route:{channel}:{chat_id}"
+    tool_name = _clean_str(metadata.get("_tool_name"))
+    if tool_name:
+        return f"tool:{tool_name}"
+    return ""
+
+
+def _resolve_step_key(metadata: dict[str, Any]) -> str:
+    return (
+        _clean_str(metadata.get("_step_id"))
+        or _clean_str(metadata.get("_function_call_id"))
+        or _clean_str(metadata.get("_task_id"))
+        or _clean_str(metadata.get("_session_id"))
+        or _clean_str(metadata.get("_tool_name"))
+        or _clean_str(metadata.get("_event_class"))
+        or "event"
+    )
+
+
+def _ensure_step_ordering(metadata: dict[str, Any]) -> None:
+    if metadata.get("_event_class") not in {"step_update", "step_output"}:
+        return
+    scope = _resolve_ordering_scope(metadata)
+    if not scope:
+        return
+    with _ORDERING_LOCK:
+        if metadata.get("_event_seq") is None:
+            next_event_seq = _EVENT_SEQ_BY_SCOPE.get(scope, 0) + 1
+            _EVENT_SEQ_BY_SCOPE[scope] = next_event_seq
+            metadata["_event_seq"] = next_event_seq
+
+        if metadata.get("_step_order") is None:
+            known_steps = _KNOWN_STEPS_BY_SCOPE.setdefault(scope, set())
+            step_key = _resolve_step_key(metadata)
+            if step_key not in known_steps:
+                known_steps.add(step_key)
+                _STEP_ORDER_BY_SCOPE[scope] = _STEP_ORDER_BY_SCOPE.get(scope, 0) + 1
+            metadata["_step_order"] = _STEP_ORDER_BY_SCOPE.get(scope, 1)
+
+
+def normalize_outbound_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    """Return a normalized metadata dict for channel consumption."""
+
+    source = metadata if isinstance(metadata, dict) else {}
+    normalized = dict(source)
+    if normalized.get("_stream_delta"):
+        normalized["_event_class"] = "stream_delta"
+        return normalized
+    if normalized.get("_stream_end"):
+        normalized["_event_class"] = "stream_end"
+        return normalized
+
+    event_class = _clean_str(normalized.get("_event_class"))
+    feedback_type = _clean_str(normalized.get("_feedback_type")).lower()
+    feedback_status = _clean_str(normalized.get("_feedback_status"))
+    done = _bool(normalized.get("_done"))
+
+    if not event_class and feedback_type:
+        event_class = _legacy_feedback_event_class(feedback_type)
+        normalized["_event_class"] = event_class
+
+    if event_class in {"step_update", "step_output"}:
+        if "_step_phase" not in normalized:
+            phase = _legacy_feedback_phase(feedback_status, done=done)
+            if phase:
+                normalized["_step_phase"] = phase
+        if "_step_kind" not in normalized:
+            tool_name = _clean_str(normalized.get("_tool_name"))
+            task_id = _clean_str(normalized.get("_task_id"))
+            origin = _clean_str(normalized.get("_feedback_origin")).lower()
+            if task_id and tool_name == "spawn_subagent":
+                normalized["_step_kind"] = "subagent"
+            elif tool_name:
+                normalized["_step_kind"] = "tool"
+            elif origin == "runtime":
+                normalized["_step_kind"] = "runtime"
+            else:
+                normalized["_step_kind"] = "system"
+        if "_step_title" not in normalized:
+            title = _clean_str(normalized.get("_tool_name"))
+            if title:
+                normalized["_step_title"] = title
+        if "_step_id" not in normalized:
+            step_id = (
+                _clean_str(normalized.get("_function_call_id"))
+                or _clean_str(normalized.get("_task_id"))
+                or _clean_str(normalized.get("_session_id"))
+            )
+            if step_id:
+                normalized["_step_id"] = step_id
+        normalized["_step_update_kind"] = _infer_step_update_kind(
+            event_class=event_class,
+            step_phase=_clean_str(normalized.get("_step_phase")).lower(),
+            current_value=normalized.get("_step_update_kind"),
+        )
+        normalized["_done"] = done
+        normalized["_important"] = _bool(normalized.get("_important"))
+        _ensure_step_ordering(normalized)
+    elif event_class:
+        normalized["_done"] = done
+        normalized["_important"] = _bool(normalized.get("_important"))
+
+    return normalized
+
+
+def build_step_metadata(
+    *,
+    event_class: str = "step_update",
+    step_phase: str,
+    step_title: str,
+    step_kind: str,
+    content: str | None = None,
+    invocation_id: str | None = None,
+    function_call_id: str | None = None,
+    step_id: str | None = None,
+    step_order: int | None = None,
+    event_seq: int | None = None,
+    step_update_kind: str | None = None,
+    feedback_status: str | None = None,
+    tool_name: str | None = None,
+    task_id: str | None = None,
+    session_id: str | None = None,
+    done: bool = False,
+    important: bool = False,
+    extra_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build one normalized step-event metadata payload."""
+
+    metadata: dict[str, Any] = {
+        "_event_class": event_class,
+        "_step_phase": step_phase,
+        "_step_update_kind": step_update_kind,
+        "_step_title": step_title,
+        "_step_kind": step_kind,
+        "_done": bool(done),
+        "_important": bool(important),
+        "_feedback_type": "tool_output" if event_class == "step_output" else "status",
+        "_feedback_status": feedback_status or step_phase,
+    }
+    if invocation_id:
+        metadata["_invocation_id"] = invocation_id
+    if function_call_id:
+        metadata["_function_call_id"] = function_call_id
+    resolved_step_id = step_id or function_call_id or task_id or session_id
+    if resolved_step_id:
+        metadata["_step_id"] = resolved_step_id
+    if step_order is not None:
+        metadata["_step_order"] = step_order
+    if event_seq is not None:
+        metadata["_event_seq"] = event_seq
+    if tool_name:
+        metadata["_tool_name"] = tool_name
+    if task_id:
+        metadata["_task_id"] = task_id
+    if session_id:
+        metadata["_session_id"] = session_id
+    if content:
+        metadata["_content_preview"] = content[:200]
+    if extra_metadata:
+        metadata.update(extra_metadata)
+    return normalize_outbound_metadata(metadata)
+
+
+@dataclass(slots=True)
+class NormalizedOutboundEvent:
+    """A lightweight normalized view of one outbound message."""
+
+    event_class: str
+    content: str
+    metadata: dict[str, Any]
+
+    @property
+    def is_stream(self) -> bool:
+        return self.event_class in {"stream_delta", "stream_end"}
+
+
+def classify_outbound_message(content: str, metadata: dict[str, Any] | None) -> NormalizedOutboundEvent:
+    """Classify one outbound payload for manager/channel handling."""
+
+    normalized = normalize_outbound_metadata(metadata)
+    event_class = _clean_str(normalized.get("_event_class")) or "final_text"
+    return NormalizedOutboundEvent(event_class=event_class, content=content, metadata=normalized)
+
+
+class OpenPpxStepEventPlugin(BasePlugin):
+    """ADK plugin that emits normalized step events for tool lifecycle updates."""
+
+    def __init__(self) -> None:
+        super().__init__(name="openppx_step_events")
+        self._event_seq_by_invocation: dict[str, int] = {}
+        self._step_order_by_invocation: dict[str, int] = {}
+        self._known_steps: dict[str, set[str]] = {}
+
+    async def before_run_callback(self, *, invocation_context: Any) -> None:
+        invocation_id = _clean_str(getattr(invocation_context, "invocation_id", None))
+        if not invocation_id:
+            return None
+        self._event_seq_by_invocation[invocation_id] = 0
+        self._step_order_by_invocation[invocation_id] = 0
+        self._known_steps[invocation_id] = set()
+        return None
+
+    async def after_run_callback(self, *, invocation_context: Any) -> None:
+        invocation_id = _clean_str(getattr(invocation_context, "invocation_id", None))
+        if invocation_id:
+            self._event_seq_by_invocation.pop(invocation_id, None)
+            self._step_order_by_invocation.pop(invocation_id, None)
+            self._known_steps.pop(invocation_id, None)
+
+    def _next_event_seq(self, invocation_id: str) -> int:
+        current = self._event_seq_by_invocation.get(invocation_id, 0) + 1
+        self._event_seq_by_invocation[invocation_id] = current
+        return current
+
+    def _ensure_step_order(self, invocation_id: str, step_id: str) -> int:
+        known = self._known_steps.setdefault(invocation_id, set())
+        if step_id not in known:
+            known.add(step_id)
+            self._step_order_by_invocation[invocation_id] = self._step_order_by_invocation.get(invocation_id, 0) + 1
+        return self._step_order_by_invocation.get(invocation_id, 1)
+
+    async def _publish_step_event(
+        self,
+        *,
+        invocation_id: str,
+        function_call_id: str,
+        tool_name: str,
+        step_phase: str,
+        content: str,
+        step_update_kind: str = "status",
+        step_title: str | None = None,
+        step_kind: str = "tool",
+        done: bool = False,
+        important: bool = False,
+        extra_metadata: dict[str, Any] | None = None,
+    ) -> None:
+        if _STEP_EVENT_PUBLISHER is None:
+            return
+        channel, chat_id = get_route()
+        if not channel or not chat_id:
+            return
+
+        step_order = self._ensure_step_order(invocation_id, function_call_id)
+        metadata: dict[str, Any] = {
+            **build_step_metadata(
+                event_class="step_update",
+                invocation_id=invocation_id,
+                event_seq=self._next_event_seq(invocation_id),
+                step_id=function_call_id,
+                function_call_id=function_call_id,
+                step_phase=step_phase,
+                step_update_kind=step_update_kind,
+                step_title=step_title or tool_name,
+                step_kind=step_kind,
+                step_order=step_order,
+                tool_name=tool_name,
+                done=done,
+                important=important,
+                content=content,
+            ),
+            "_feedback_origin": "adk_plugin",
+        }
+        if extra_metadata:
+            metadata.update(extra_metadata)
+
+        try:
+            await _STEP_EVENT_PUBLISHER(
+                OutboundMessage(
+                    channel=channel,
+                    chat_id=chat_id,
+                    content=content,
+                    metadata=metadata,
+                )
+            )
+        except Exception:
+            logger.exception("Failed publishing openppx step event")
+
+    async def before_tool_callback(
+        self,
+        *,
+        tool: Any,
+        tool_args: dict[str, Any],
+        tool_context: Any,
+    ) -> None:
+        invocation_id = _clean_str(getattr(tool_context, "invocation_id", None))
+        function_call_id = _clean_str(getattr(tool_context, "function_call_id", None))
+        tool_name = _clean_str(getattr(tool, "name", None)) or "tool"
+        if not invocation_id or not function_call_id:
+            return None
+        await self._publish_step_event(
+            invocation_id=invocation_id,
+            function_call_id=function_call_id,
+            tool_name=tool_name,
+            step_phase="started",
+            step_update_kind="lifecycle",
+            content=f"Started `{tool_name}`",
+        )
+        return None
+
+    async def after_tool_callback(
+        self,
+        *,
+        tool: Any,
+        tool_args: dict[str, Any],
+        tool_context: Any,
+        result: Any,
+    ) -> None:
+        invocation_id = _clean_str(getattr(tool_context, "invocation_id", None))
+        function_call_id = _clean_str(getattr(tool_context, "function_call_id", None))
+        tool_name = _clean_str(getattr(tool, "name", None)) or "tool"
+        if not invocation_id or not function_call_id:
+            return None
+        await self._publish_step_event(
+            invocation_id=invocation_id,
+            function_call_id=function_call_id,
+            tool_name=tool_name,
+            step_phase="finished",
+            step_update_kind="lifecycle",
+            content=f"Finished `{tool_name}`",
+            done=True,
+        )
+        return None
+
+    async def on_tool_error_callback(
+        self,
+        *,
+        tool: Any,
+        tool_args: dict[str, Any],
+        tool_context: Any,
+        error: Exception,
+    ) -> None:
+        invocation_id = _clean_str(getattr(tool_context, "invocation_id", None))
+        function_call_id = _clean_str(getattr(tool_context, "function_call_id", None))
+        tool_name = _clean_str(getattr(tool, "name", None)) or "tool"
+        if not invocation_id or not function_call_id:
+            return None
+        await self._publish_step_event(
+            invocation_id=invocation_id,
+            function_call_id=function_call_id,
+            tool_name=tool_name,
+            step_phase="failed",
+            step_update_kind="lifecycle",
+            content=f"`{tool_name}` failed: {type(error).__name__}",
+            done=True,
+            important=True,
+        )
+        return None
+
+    async def on_event_callback(self, *, invocation_context: Any, event: Any) -> None:
+        invocation_id = _clean_str(getattr(invocation_context, "invocation_id", None))
+        if not invocation_id or event is None:
+            return None
+
+        long_running_ids = set(getattr(event, "long_running_tool_ids", None) or [])
+        get_function_calls = getattr(event, "get_function_calls", None)
+        if not callable(get_function_calls):
+            return None
+        confirmation_ids: set[str] = set()
+        for confirmation in extract_tool_confirmation_requests(event):
+            confirmation_ids.add(confirmation.confirmation_id)
+            await self._publish_step_event(
+                invocation_id=invocation_id,
+                function_call_id=confirmation.original_function_call_id or confirmation.confirmation_id,
+                tool_name=confirmation.tool_name,
+                step_phase="waiting",
+                content=f"`{confirmation.tool_name}` requires confirmation",
+                step_update_kind="confirmation",
+                step_kind="approval",
+                step_title="Confirmation required",
+                important=True,
+            )
+        for function_call in get_function_calls() or []:
+            function_call_id = _clean_str(getattr(function_call, "id", None))
+            tool_name = _clean_str(getattr(function_call, "name", None)) or "tool"
+            if function_call_id in confirmation_ids or tool_name == REQUEST_CONFIRMATION_TOOL_NAME:
+                continue
+            if not function_call_id or function_call_id not in long_running_ids:
+                continue
+            await self._publish_step_event(
+                invocation_id=invocation_id,
+                function_call_id=function_call_id,
+                tool_name=tool_name,
+                step_phase="waiting",
+                content=f"`{tool_name}` is running in the background",
+                step_update_kind="progress",
+            )
+        return None
+
+
+async def publish_runtime_step_event(
+    *,
+    step_phase: str,
+    step_title: str,
+    step_kind: str,
+    content: str,
+    invocation_id: str | None = None,
+    function_call_id: str | None = None,
+    step_id: str | None = None,
+    step_update_kind: str = "status",
+    tool_name: str | None = None,
+    session_id: str | None = None,
+    done: bool = False,
+    important: bool = False,
+    extra_metadata: dict[str, Any] | None = None,
+) -> bool:
+    """Publish one normalized step event through the configured route.
+
+    Returns False when no channel route or step-event publisher is active.
+    """
+    if _STEP_EVENT_PUBLISHER is None:
+        return False
+    channel, chat_id = get_route()
+    if not channel or not chat_id:
+        return False
+
+    metadata = build_step_metadata(
+        event_class="step_update",
+        invocation_id=invocation_id,
+        function_call_id=function_call_id,
+        step_id=step_id,
+        step_phase=step_phase,
+        step_update_kind=step_update_kind,
+        step_title=step_title,
+        step_kind=step_kind,
+        tool_name=tool_name,
+        session_id=session_id,
+        done=done,
+        important=important,
+        content=content,
+        extra_metadata=extra_metadata,
+    )
+    metadata["_feedback_origin"] = metadata.get("_feedback_origin") or "runtime"
+    try:
+        await _STEP_EVENT_PUBLISHER(
+            OutboundMessage(
+                channel=channel,
+                chat_id=chat_id,
+                content=content,
+                metadata=metadata,
+            )
+        )
+        return True
+    except Exception:
+        logger.exception("Failed publishing openppx runtime step event")
+        return False
