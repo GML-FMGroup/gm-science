@@ -100,24 +100,24 @@ class OpenAICodexLlmTests(unittest.TestCase):
 
     def test_generate_content_async_success_path(self) -> None:
         """Adapter should emit one final ADK response object on successful call."""
-        llm = OpenAICodexLlm(model="openai-codex/gpt-5.1-codex")
+        llm = OpenAICodexLlm(model="openai-codex/gpt-5.5")
         llm_request = LlmRequest(
-            model="openai-codex/gpt-5.1-codex",
+            model="openai-codex/gpt-5.5",
             contents=[types.Content(role="user", parts=[types.Part.from_text(text="hello")])],
             config=types.GenerateContentConfig(system_instruction="system"),
         )
 
         fake_token = type("Token", (), {"account_id": "acc_1", "access": "tok_1"})()
+        request_mock = AsyncMock(return_value=("hello world", [], types.FinishReason.STOP))
         with patch("openppx.core.openai_codex_llm._get_codex_token", return_value=fake_token):
-            with patch(
-                "openppx.core.openai_codex_llm._request_codex",
-                new=AsyncMock(return_value=("hello world", [], types.FinishReason.STOP)),
-            ):
+            with patch("openppx.core.openai_codex_llm._request_codex", new=request_mock):
                 async def _collect():
                     return [event async for event in llm.generate_content_async(llm_request, stream=False)]
 
                 events = asyncio.run(_collect())
 
+        request_body = request_mock.await_args.kwargs["body"]
+        self.assertEqual(request_body["model"], "gpt-5.5")
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].finish_reason, types.FinishReason.STOP)
         self.assertIsNotNone(events[0].content)
