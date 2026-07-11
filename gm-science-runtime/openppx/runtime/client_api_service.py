@@ -2678,7 +2678,7 @@ class ClientApiHttpServer(ThreadingHTTPServer):
         self.coordinator = coordinator
 
 
-def serve_client_api(*, host: str = "127.0.0.1", port: int = 8765) -> None:
+def serve_client_api(*, host: str = "127.0.0.1", port: int = 8876) -> None:
     """Start the local client API HTTP server."""
 
     coordinator = ClientApiCoordinator()

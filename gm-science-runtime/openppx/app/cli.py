@@ -4665,7 +4665,7 @@ def main(argv: list[str] | None = None) -> None:
     client_api_subparsers = client_api_parser.add_subparsers(dest="client_api_command", required=True)
     client_api_serve_parser = client_api_subparsers.add_parser("serve", help="Start the local client API server.")
     client_api_serve_parser.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1).")
-    client_api_serve_parser.add_argument("--port", type=int, default=8765, help="Bind port (default: 8765).")
+    client_api_serve_parser.add_argument("--port", type=int, default=8876, help="Bind port (default: 8876).")
     client_api_access_parser = client_api_subparsers.add_parser(
         "access",
         help="Inspect or manage agent owner/participant access state locally.",

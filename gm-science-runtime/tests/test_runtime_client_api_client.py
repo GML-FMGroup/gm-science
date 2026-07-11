@@ -20,6 +20,12 @@ class _FakeHttpResponse:
         return None
 
 
+def test_client_api_client_honors_configured_base_url(monkeypatch) -> None:
+    monkeypatch.setenv("OPENPPX_CLIENT_API_BASE_URL", "http://127.0.0.1:9123")
+
+    assert ClientApiClient().base_url == "http://127.0.0.1:9123"
+
+
 def test_client_api_client_get_agent_access_builds_get_request() -> None:
     captured: dict[str, object] = {}
 
@@ -57,7 +63,7 @@ def test_client_api_client_list_memory_audit_builds_get_request() -> None:
     assert payload["ok"] is True
     assert captured["method"] == "GET"
     assert captured["data"] is None
-    assert captured["url"] == "http://127.0.0.1:8765/api/v1/agents/writer/memory/audit?user_id=owner&limit=25"
+    assert captured["url"] == "http://127.0.0.1:8876/api/v1/agents/writer/memory/audit?user_id=owner&limit=25"
 
 
 def test_client_api_client_list_access_audit_builds_get_request() -> None:
@@ -76,7 +82,7 @@ def test_client_api_client_list_access_audit_builds_get_request() -> None:
     assert payload["ok"] is True
     assert captured["method"] == "GET"
     assert captured["data"] is None
-    assert captured["url"] == "http://127.0.0.1:8765/api/v1/agents/writer/access/audit?user_id=owner&limit=10&category=mutation"
+    assert captured["url"] == "http://127.0.0.1:8876/api/v1/agents/writer/access/audit?user_id=owner&limit=10&category=mutation"
 
 
 def test_client_api_client_posts_owner_update() -> None:
@@ -94,7 +100,7 @@ def test_client_api_client_posts_owner_update() -> None:
 
     assert payload["ok"] is True
     assert captured["method"] == "POST"
-    assert captured["url"] == "http://127.0.0.1:8765/api/v1/agents/writer/access/owner"
+    assert captured["url"] == "http://127.0.0.1:8876/api/v1/agents/writer/access/owner"
     assert json.loads(captured["data"].decode("utf-8")) == {
         "user_id": "admin",
         "owner_principal_id": "root-user",
@@ -116,7 +122,7 @@ def test_client_api_client_membership_mutations_cover_post_and_delete() -> None:
     assert add_payload["ok"] is True
     assert remove_payload["ok"] is True
     assert calls[0][0] == "POST"
-    assert calls[0][1] == "http://127.0.0.1:8765/api/v1/agents/writer/access/memberships"
+    assert calls[0][1] == "http://127.0.0.1:8876/api/v1/agents/writer/access/memberships"
     assert json.loads(calls[0][2].decode("utf-8")) == {
         "user_id": "owner",
         "principal_id": "alice",
@@ -124,7 +130,7 @@ def test_client_api_client_membership_mutations_cover_post_and_delete() -> None:
     }
     assert calls[1] == (
         "DELETE",
-        "http://127.0.0.1:8765/api/v1/agents/writer/access/memberships/alice?user_id=owner",
+        "http://127.0.0.1:8876/api/v1/agents/writer/access/memberships/alice?user_id=owner",
         None,
     )
 
@@ -146,7 +152,7 @@ def test_client_api_client_batch_membership_mutations_use_batch_endpoint() -> No
     assert remove_payload["ok"] is True
     assert sync_payload["ok"] is True
     assert all(call[0] == "POST" for call in calls)
-    assert all(call[1] == "http://127.0.0.1:8765/api/v1/agents/writer/access/memberships/batch" for call in calls)
+    assert all(call[1] == "http://127.0.0.1:8876/api/v1/agents/writer/access/memberships/batch" for call in calls)
     assert json.loads(calls[0][2].decode("utf-8")) == {
         "user_id": "owner",
         "operation": "add",

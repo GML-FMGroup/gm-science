@@ -31,7 +31,7 @@ macOS 用户可以直接双击：
 - Python 3.11 或更新版本
 - Node.js LTS
 
-默认数据目录是 `~/.gm-science`。需要换目录时，可以设置 `GM_SCIENCE_DATA_DIR`。
+默认数据目录是 `~/.gm-science`，本地 client-api 使用 `127.0.0.1:8876`。需要换目录或端口时，可以设置 `GM_SCIENCE_DATA_DIR` 或 `OPENPPX_CLIENT_API_PORT`。
 
 ## Development
 

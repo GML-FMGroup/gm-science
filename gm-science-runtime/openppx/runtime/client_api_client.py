@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from typing import Any
 from urllib import parse, request
+
+
+def _default_client_api_base_url() -> str:
+    """Resolve the local client-api URL used by gm-science runtime clients."""
+
+    configured = os.environ.get("OPENPPX_CLIENT_API_BASE_URL", "").strip()
+    return configured or "http://127.0.0.1:8876"
 
 
 @dataclass(slots=True)
 class ClientApiClient:
     """Call the local HTTP + SSE client API with stable typed helpers."""
 
-    base_url: str = "http://127.0.0.1:8765"
+    base_url: str = field(default_factory=_default_client_api_base_url)
     timeout_seconds: float = 10.0
 
     def _build_url(self, path: str, *, query: dict[str, Any] | None = None) -> str:

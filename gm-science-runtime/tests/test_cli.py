@@ -69,6 +69,16 @@ def tearDownModule() -> None:
 
 
 class CLITests(unittest.TestCase):
+    def test_client_api_serve_uses_gm_science_default_port(self) -> None:
+        from openppx import cli
+
+        with patch("openppx.runtime.client_api_service.serve_client_api") as mocked_serve:
+            with self.assertRaises(SystemExit) as ctx:
+                cli.main(["client-api", "serve"])
+
+        self.assertEqual(ctx.exception.code, 0)
+        mocked_serve.assert_called_once_with(host="127.0.0.1", port=8876)
+
     def test_message_mode_dispatch(self) -> None:
         from openppx import cli
 

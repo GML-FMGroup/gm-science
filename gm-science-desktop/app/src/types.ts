@@ -39,8 +39,6 @@ export interface ClientDiagnostics {
   clientApiManagedByClient: boolean;
   clientApiHealthy: boolean;
   clientApiProcessRunning: boolean;
-  bridgeScriptPath: string;
-  bridgeScriptExists: boolean;
   agentCount: number;
   sessionCacheEntries: number;
   messageCacheEntries: number;

@@ -87,7 +87,7 @@ function buildConnectionSettings(diagnostics: ClientDiagnostics | null): Connect
     targetType: diagnostics?.target.type ?? "local",
     targetId: diagnostics?.target.id ?? "local-default",
     targetName: diagnostics?.target.name ?? "This Mac",
-    clientApiBaseUrl: diagnostics?.clientApiBaseUrl ?? "http://127.0.0.1:8765",
+    clientApiBaseUrl: diagnostics?.clientApiBaseUrl ?? "http://127.0.0.1:8876",
   };
 }
 
@@ -111,7 +111,7 @@ function normalizeConnectionSettings(settings: ConnectionSettings): ConnectionSe
     targetType,
     targetId,
     targetName,
-    clientApiBaseUrl: settings.clientApiBaseUrl.trim() || "http://127.0.0.1:8765",
+    clientApiBaseUrl: settings.clientApiBaseUrl.trim() || "http://127.0.0.1:8876",
   };
 }
 
@@ -153,6 +153,7 @@ export function App() {
   const [composer, setComposer] = useState("");
   const [sendError, setSendError] = useState<string | null>(null);
   const [projectError, setProjectError] = useState<string | null>(null);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
   const [sendingSessionIds, setSendingSessionIds] = useState<string[]>([]);
   const [connectionForm, setConnectionForm] = useState<ConnectionSettings>(buildConnectionSettings(null));
   const [savingConnection, setSavingConnection] = useState(false);
@@ -455,23 +456,34 @@ export function App() {
     if (!runtime) {
       return;
     }
-    const command = runtime.state === "stopped" ? "start" : "restart";
-    const next = await window.ppxClient.runRuntimeCommand(command);
-    setRuntime(next);
-    const nextDiagnostics = await window.ppxClient.getDiagnostics();
-    setDiagnostics(nextDiagnostics);
-    setConnectionForm(buildConnectionSettings(nextDiagnostics));
+    setSettingsError(null);
+    try {
+      const command = runtime.state === "stopped" ? "start" : "restart";
+      const next = await window.ppxClient.runRuntimeCommand(command);
+      setRuntime(next);
+      const nextDiagnostics = await window.ppxClient.getDiagnostics();
+      setDiagnostics(nextDiagnostics);
+      setConnectionForm(buildConnectionSettings(nextDiagnostics));
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : String(error));
+    }
   }
 
   async function refreshDiagnostics(): Promise<void> {
-    const nextDiagnostics = await window.ppxClient.getDiagnostics();
-    setDiagnostics(nextDiagnostics);
-    setConnectionForm(buildConnectionSettings(nextDiagnostics));
+    setSettingsError(null);
+    try {
+      const nextDiagnostics = await window.ppxClient.getDiagnostics();
+      setDiagnostics(nextDiagnostics);
+      setConnectionForm(buildConnectionSettings(nextDiagnostics));
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : String(error));
+    }
   }
 
   async function handleConnectionSave(): Promise<void> {
     const nextSettings = normalizeConnectionSettings(connectionForm);
     setSavingConnection(true);
+    setSettingsError(null);
     try {
       const nextDiagnostics = await window.ppxClient.saveConnectionSettings(nextSettings);
       setDiagnostics(nextDiagnostics);
@@ -479,6 +491,8 @@ export function App() {
       const nextRuntime = await window.ppxClient.runRuntimeCommand("restart");
       setRuntime(nextRuntime);
       await refreshProjects();
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : String(error));
     } finally {
       setSavingConnection(false);
     }
@@ -711,6 +725,7 @@ export function App() {
           </header>
           <section className="workspace-frame settings-frame">
             <div className="settings-page">
+              {settingsError ? <p className="composer-error">{settingsError}</p> : null}
               <section className="settings-card runtime-panel">
                 <h2>Runtime</h2>
                 <p>{runtime.summary}</p>

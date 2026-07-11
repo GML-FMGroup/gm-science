@@ -19,14 +19,13 @@ Renderer (React)
   -> preload host API
   -> Electron main
   -> openppx local adapter
-  -> openppx client-api gateway / legacy bridge / mock fallback
+  -> managed openppx client-api gateway / mock fallback
 ```
 
 当前优先级顺序是：
 
 1. 优先使用 `openppx client-api` HTTP + SSE
-2. 本地模式下必要时回退到 legacy Python bridge
-3. `openppx` 不可用时回退到 mock mode
+2. `openppx` runtime 不可用时回退到 mock mode
 
 ## 前置条件
 
@@ -83,7 +82,7 @@ pnpm test
 ```bash
 cd ../gm-science-runtime
 source .venv/bin/activate
-ppx client-api serve --host 127.0.0.1 --port 8765
+ppx client-api serve --host 127.0.0.1 --port 8876
 ```
 
 然后在 `gm-science-desktop` 里启动：
@@ -166,18 +165,12 @@ pnpm dev
 OPENPPX_CLIENT_DEBUG=1 pnpm dev
 ```
 
-后端 `client-api` 调试日志：
+后端 `client-api` 前台日志：
 
 ```bash
 cd ../gm-science-runtime
 source .venv/bin/activate
-OPENPIPIXIA_DEBUG=1 ppx client-api serve --host 127.0.0.1 --port 8765
-```
-
-如果需要把后端日志写入文件：
-
-```bash
-OPENPIPIXIA_DEBUG=1 OPENPIPIXIA_DEBUG_LOG_PATH=/tmp/openppx-client-api-debug.log ppx client-api serve --host 127.0.0.1 --port 8765
+ppx client-api serve --host 127.0.0.1 --port 8876
 ```
 
 ## 常见问题
@@ -224,7 +217,7 @@ pnpm dev
 ```bash
 cd ../gm-science-runtime
 source .venv/bin/activate
-ppx client-api serve --host 127.0.0.1 --port 8765
+ppx client-api serve --host 127.0.0.1 --port 8876
 ```
 
 然后再开客户端。这样最容易看出是 gateway 问题、agent 配置问题，还是前端问题。

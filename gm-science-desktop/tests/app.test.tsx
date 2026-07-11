@@ -71,12 +71,10 @@ function buildDiagnostics(): ClientDiagnostics {
     pythonBin: "/tmp/gm-science-runtime/.venv/bin/python",
     globalConfigPath: "/tmp/.openppx/global_config.json",
     globalConfigExists: true,
-    clientApiBaseUrl: "http://127.0.0.1:8765",
+    clientApiBaseUrl: "http://127.0.0.1:8876",
     clientApiManagedByClient: true,
     clientApiHealthy: true,
     clientApiProcessRunning: true,
-    bridgeScriptPath: "/tmp/gm-science-desktop/scripts/openppx_bridge.py",
-    bridgeScriptExists: true,
     agentCount: 1,
     sessionCacheEntries: 1,
     messageCacheEntries: 1,
@@ -571,8 +569,38 @@ describe("App sending state", () => {
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
 
     await screen.findByText("Connection");
-    expect(screen.getByText("http://127.0.0.1:8765")).toBeInTheDocument();
+    expect(screen.getByText("http://127.0.0.1:8876")).toBeInTheDocument();
     expect(screen.getByText("This Mac (local)")).toBeInTheDocument();
+  });
+
+  it("shows runtime restart failures in the settings view", async () => {
+    installClient({
+      runRuntimeCommand: async () => {
+        throw new Error("Local gm-science client-api failed to start: address already in use");
+      },
+    });
+
+    render(<App />);
+    await screen.findByText("gm-science");
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "重启" }));
+
+    await screen.findByText("Local gm-science client-api failed to start: address already in use");
+  });
+
+  it("shows connection save failures in the settings view", async () => {
+    installClient({
+      saveConnectionSettings: async () => {
+        throw new Error("Unable to save local connection");
+      },
+    });
+
+    render(<App />);
+    await screen.findByText("gm-science");
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Save connection" }));
+
+    await screen.findByText("Unable to save local connection");
   });
 
   it("renders remote target diagnostics when provided", async () => {
@@ -625,7 +653,7 @@ describe("App sending state", () => {
     fireEvent.change(screen.getByDisplayValue("This Mac"), {
       target: { value: "Ops Gateway" },
     });
-    fireEvent.change(screen.getByDisplayValue("http://127.0.0.1:8765"), {
+    fireEvent.change(screen.getByDisplayValue("http://127.0.0.1:8876"), {
       target: { value: "http://10.0.0.8:8765" },
     });
     fireEvent.change(screen.getByDisplayValue("local"), {

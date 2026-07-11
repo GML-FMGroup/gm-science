@@ -6,6 +6,7 @@ RUNTIME_DIR="$ROOT_DIR/gm-science-runtime"
 DESKTOP_DIR="$ROOT_DIR/gm-science-desktop"
 VENV_DIR="${GM_SCIENCE_VENV_DIR:-$RUNTIME_DIR/.venv}"
 DATA_DIR="${GM_SCIENCE_DATA_DIR:-$HOME/.gm-science}"
+CLIENT_API_PORT="${OPENPPX_CLIENT_API_PORT:-8876}"
 PYTHON_BIN="$VENV_DIR/bin/python"
 PYPROJECT_FILE="$RUNTIME_DIR/pyproject.toml"
 BACKEND_STAMP="$VENV_DIR/.gm-science-runtime-installed"
@@ -36,6 +37,7 @@ gm-science 一键启动器
 环境变量：
   GM_SCIENCE_DATA_DIR        修改默认数据目录（默认 ~/.gm-science）
   GM_SCIENCE_VENV_DIR        修改 Python 虚拟环境目录
+  OPENPPX_CLIENT_API_PORT    修改本地 client-api 端口（默认 8876）
   GM_SCIENCE_REFRESH_DEPS=1  强制重新安装后端和前端依赖
 EOF
 }
@@ -165,8 +167,11 @@ start_desktop() {
   export GM_SCIENCE_MODE=1
   export GM_SCIENCE_DATA_DIR="$DATA_DIR"
   export OPENPPX_DATA_DIR="$DATA_DIR"
+  export OPENPPX_CLIENT_API_PORT="$CLIENT_API_PORT"
+  export OPENPPX_CLIENT_API_BASE_URL="http://127.0.0.1:$CLIENT_API_PORT"
 
   log "数据目录：$DATA_DIR"
+  log "本地 client-api：http://127.0.0.1:$CLIENT_API_PORT"
   log "正在启动 gm-science 桌面端。关闭应用或在此窗口按 Ctrl+C 可以停止。"
   (cd "$DESKTOP_DIR" && run_pnpm dev)
 }
@@ -181,6 +186,7 @@ if [ "$DRY_RUN" = "1" ]; then
   log "桌面端目录：$DESKTOP_DIR"
   log "Python 虚拟环境：$VENV_DIR"
   log "数据目录：$DATA_DIR"
+  log "本地 client-api 端口：$CLIENT_API_PORT"
   exit 0
 fi
 

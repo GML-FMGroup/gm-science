@@ -1,10 +1,54 @@
 import {
+  DEFAULT_GM_SCIENCE_CLIENT_API_PORT,
+  appendClientApiLogTail,
   buildClientApiRunPath,
   buildClientApiSpawnEnv,
+  formatClientApiStartupError,
+  isOpenPpxClientApiHealthPayload,
+  managedProcessAfterClose,
+  resolveClientApiPort,
   resolveGmScienceDataRoot,
 } from "../electron/main/gm-science-adapter-helpers";
 
 describe("gm-science local adapter helpers", () => {
+  it("uses a gm-science-specific client-api port by default", () => {
+    expect(DEFAULT_GM_SCIENCE_CLIENT_API_PORT).toBe(8876);
+    expect(resolveClientApiPort({})).toBe(8876);
+  });
+
+  it("lets OPENPPX_CLIENT_API_PORT override the default port", () => {
+    expect(resolveClientApiPort({ OPENPPX_CLIENT_API_PORT: "9123" })).toBe(9123);
+  });
+
+  it("accepts health payloads only from the openppx client-api", () => {
+    expect(
+      isOpenPpxClientApiHealthPayload({
+        ok: true,
+        data: { service: "openppx-client-api", state: "healthy" },
+      }),
+    ).toBe(true);
+    expect(isOpenPpxClientApiHealthPayload({ ok: true, data: { service: "claude-science" } })).toBe(false);
+    expect(isOpenPpxClientApiHealthPayload({ detail: "invalid bearer token" })).toBe(false);
+  });
+
+  it("surfaces the managed client-api stderr when startup fails", () => {
+    expect(formatClientApiStartupError("OSError: [Errno 48] Address already in use\n", "")).toBe(
+      "Local gm-science client-api failed to start: OSError: [Errno 48] Address already in use",
+    );
+  });
+
+  it("keeps only a bounded tail of managed client-api output", () => {
+    expect(appendClientApiLogTail("12345", "67890", 6)).toBe("567890");
+  });
+
+  it("does not clear a replacement process when an older process closes", () => {
+    const oldProcess = { id: "old" };
+    const newProcess = { id: "new" };
+
+    expect(managedProcessAfterClose(newProcess, oldProcess)).toBe(newProcess);
+    expect(managedProcessAfterClose(oldProcess, oldProcess)).toBeNull();
+  });
+
   it("defaults gm-science data to the user's home directory", () => {
     expect(resolveGmScienceDataRoot({}, "/home/researcher")).toBe("/home/researcher/.gm-science");
   });
