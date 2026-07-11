@@ -12,6 +12,27 @@
 
 The application stores gm-science project data under `~/.gm-science` by default. Set `GM_SCIENCE_DATA_DIR` to override this location.
 
+## 一键启动
+
+macOS 用户可以直接双击：
+
+- `start-gm-science.command`
+
+命令行用户可以运行：
+
+```bash
+./start-gm-science.sh
+```
+
+首次启动时，脚本会自动创建 `gm-science-runtime/.venv`，安装后端和桌面端依赖，然后启动本地桌面应用。
+
+本机需要提前安装：
+
+- Python 3.11 或更新版本
+- Node.js LTS
+
+默认数据目录是 `~/.gm-science`。需要换目录时，可以设置 `GM_SCIENCE_DATA_DIR`。
+
 ## Development
 
 Backend:
