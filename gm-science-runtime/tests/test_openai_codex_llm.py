@@ -29,7 +29,7 @@ class OpenAICodexLlmTests(unittest.TestCase):
         tool_output.function_response.id = "call_123"
 
         llm_request = LlmRequest(
-            model="openai-codex/gpt-5.1-codex",
+            model="openai-codex/gpt-5.5",
             contents=[
                 types.Content(role="user", parts=[types.Part.from_text(text="Find OAuth docs")]),
                 types.Content(role="model", parts=[assistant_call]),
@@ -125,9 +125,9 @@ class OpenAICodexLlmTests(unittest.TestCase):
 
     def test_generate_content_async_retries_transient_codex_transport_error(self) -> None:
         """Transient stream disconnects should retry before surfacing an error event."""
-        llm = OpenAICodexLlm(model="openai-codex/gpt-5.1-codex")
+        llm = OpenAICodexLlm(model="openai-codex/gpt-5.5")
         llm_request = LlmRequest(
-            model="openai-codex/gpt-5.1-codex",
+            model="openai-codex/gpt-5.5",
             contents=[types.Content(role="user", parts=[types.Part.from_text(text="hello")])],
             config=types.GenerateContentConfig(system_instruction="system"),
         )

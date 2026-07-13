@@ -11,7 +11,6 @@ from openppx.core.provider_registry import find_provider_spec
 
 
 EXPECTED_CODEX_MODEL = "openai-codex/gpt-5.5"
-LEGACY_CODEX_MODEL = "openai-codex/gpt-5.1-codex"
 
 
 def test_openai_codex_provider_defaults_to_supported_chatgpt_model() -> None:
@@ -58,15 +57,3 @@ def test_bootstrap_is_idempotent_and_does_not_overwrite_existing_agent_config(tm
     saved = json.loads(second.config_path.read_text(encoding="utf-8"))
     assert saved["providers"]["openai_codex"]["model"] == "openai-codex/custom-research-model"
     assert second == first
-
-
-def test_bootstrap_migrates_only_the_legacy_openai_codex_default(tmp_path: Path) -> None:
-    first = ensure_gm_science_initialized(root_dir=tmp_path)
-    config = json.loads(first.config_path.read_text(encoding="utf-8"))
-    config["providers"]["openai_codex"]["model"] = LEGACY_CODEX_MODEL
-    first.config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
-    ensure_gm_science_initialized(root_dir=tmp_path)
-
-    saved = json.loads(first.config_path.read_text(encoding="utf-8"))
-    assert saved["providers"]["openai_codex"]["model"] == EXPECTED_CODEX_MODEL

@@ -82,7 +82,7 @@ class ProviderTests(unittest.TestCase):
     def test_build_openai_codex_model_from_env(self) -> None:
         env = {
             "OPENPPX_PROVIDER": "openai_codex",
-            "OPENPPX_MODEL": "openai-codex/gpt-5.1-codex",
+            "OPENPPX_MODEL": "openai-codex/gpt-5.5",
             "OPENPPX_PROVIDER_API_BASE": "https://chatgpt.com/backend-api/codex/responses",
         }
         with patch("openppx.core.provider.importlib.util.find_spec", return_value=object()):

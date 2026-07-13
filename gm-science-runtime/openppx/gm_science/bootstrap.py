@@ -21,7 +21,6 @@ from .paths import get_gm_science_data_dir
 GM_SCIENCE_DEFAULT_AGENT_NAME = "science-research"
 GM_SCIENCE_DEFAULT_PROVIDER = "openai_codex"
 GM_SCIENCE_DEFAULT_PRIVILEGE_LEVEL = "medium"
-_LEGACY_OPENAI_CODEX_DEFAULT_MODEL = "openai-codex/gpt-5.1-codex"
 
 
 @dataclass(frozen=True)
@@ -55,8 +54,6 @@ def ensure_gm_science_initialized(root_dir: Path | str | None = None) -> GmScien
         save_config(config, config_path=config_path)
     else:
         config = load_config(config_path=config_path)
-        if _migrate_legacy_openai_codex_default(config):
-            save_config(config, config_path=config_path)
         configured_workspace = str(config.get("agent", {}).get("workspace", "")).strip()
         if configured_workspace:
             workspace_path = Path(configured_workspace).expanduser().resolve(strict=False)
@@ -108,25 +105,6 @@ def _prefer_provider(config: dict[str, Any], provider_name: str) -> None:
     for name, provider_config in providers.items():
         if isinstance(provider_config, dict):
             provider_config["enabled"] = name == selected
-
-
-def _migrate_legacy_openai_codex_default(config: dict[str, Any]) -> bool:
-    """Upgrade the obsolete generated Codex model without changing custom models."""
-
-    providers = config.get("providers")
-    if not isinstance(providers, dict):
-        return False
-    codex_config = providers.get(GM_SCIENCE_DEFAULT_PROVIDER)
-    if not isinstance(codex_config, dict):
-        return False
-    if codex_config.get("model") != _LEGACY_OPENAI_CODEX_DEFAULT_MODEL:
-        return False
-
-    provider = find_provider_spec(GM_SCIENCE_DEFAULT_PROVIDER)
-    if provider is None:
-        return False
-    codex_config["model"] = provider.default_model
-    return True
 
 
 def _init_agent_support_files(agent_home: Path) -> None:

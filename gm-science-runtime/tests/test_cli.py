@@ -1646,7 +1646,7 @@ class CLITests(unittest.TestCase):
                     "openai-codex": {
                         "enabled": True,
                         "apiKey": "legacy-key",
-                        "model": "openai-codex/gpt-5.1-codex",
+                        "model": "openai-codex/gpt-5.5",
                     }
                 },
                 "channels": {"local": {"enabled": True}},
