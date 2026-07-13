@@ -136,6 +136,81 @@ function formatArtifactType(type: string): string {
   return type.replace(/[_-]+/g, " ");
 }
 
+function metadataText(metadata: Record<string, unknown>, key: string): string {
+  const value = metadata[key];
+  return typeof value === "string" || typeof value === "number" ? String(value) : "";
+}
+
+function metadataList(metadata: Record<string, unknown>, key: string): string[] {
+  const value = metadata[key];
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && Boolean(item)) : [];
+}
+
+function artifactSearchText(artifact: GmScienceArtifact): string {
+  return `${artifact.title} ${artifact.type} ${JSON.stringify(artifact.metadata)}`.toLowerCase();
+}
+
+function isWebUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value.trim());
+}
+
+function ArtifactItem({ artifact }: { artifact: GmScienceArtifact }) {
+  const type = artifact.type.trim().toLowerCase() || "artifact";
+  const metadata = artifact.metadata ?? {};
+  const authors = metadataList(metadata, "authors");
+  const sources = metadataList(metadata, "source_names");
+  const year = metadataText(metadata, "year");
+  const citationCount = metadataText(metadata, "citation_count");
+  const identifier =
+    (metadataText(metadata, "doi") && `DOI ${metadataText(metadata, "doi")}`) ||
+    (metadataText(metadata, "pmid") && `PMID ${metadataText(metadata, "pmid")}`) ||
+    (metadataText(metadata, "arxiv_id") && `arXiv ${metadataText(metadata, "arxiv_id")}`) ||
+    (metadataText(metadata, "openalex_id") && `OpenAlex ${metadataText(metadata, "openalex_id")}`) ||
+    "";
+  const paperDetails = [
+    year,
+    sources.join(" + "),
+    citationCount && `${citationCount} citation${citationCount === "1" ? "" : "s"}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const citedPapers = metadataList(metadata, "paper_artifact_ids").length;
+  const reportFileName = artifact.pathOrUrl.split(/[\\/]/).pop() ?? "";
+  const reportDate = artifact.createdAt ? new Date(artifact.createdAt).toLocaleDateString("zh-CN") : "";
+  const reportDetails = [
+    reportFileName,
+    `${citedPapers} cited ${citedPapers === 1 ? "paper" : "papers"}`,
+    reportDate,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const marker = type === "paper" ? "P" : type === "report" ? "R" : type === "citation" ? "C" : "A";
+
+  return (
+    <article className={`artifact-item artifact-${type}`}>
+      <div className="artifact-title-row">
+        <span className="artifact-marker" aria-hidden="true">
+          {marker}
+        </span>
+        <div>
+          <strong>{artifact.title}</strong>
+          <span className="artifact-kind">{formatArtifactType(type)}</span>
+        </div>
+      </div>
+      {type === "paper" && authors.length > 0 ? <p className="artifact-byline">{authors.slice(0, 3).join(", ")}</p> : null}
+      {type === "paper" && paperDetails ? <p className="artifact-detail">{paperDetails}</p> : null}
+      {type === "paper" && identifier ? <p className="artifact-identifier">{identifier}</p> : null}
+      {type === "report" ? <p className="artifact-detail">{reportDetails}</p> : null}
+      {type === "citation" ? <p className="artifact-detail">Linked to report</p> : null}
+      {isWebUrl(artifact.pathOrUrl) ? (
+        <a className="artifact-link" href={artifact.pathOrUrl} target="_blank" rel="noreferrer">
+          Open
+        </a>
+      ) : null}
+    </article>
+  );
+}
+
 export function App() {
   const [view, setView] = useState<NavView>("projects");
   const [ready, setReady] = useState(false);
@@ -145,6 +220,7 @@ export function App() {
   const [agents, setAgents] = useState<AgentProfile[]>([]);
   const [projects, setProjects] = useState<GmScienceProject[]>([]);
   const [artifacts, setArtifacts] = useState<GmScienceArtifact[]>([]);
+  const [artifactSearch, setArtifactSearch] = useState("");
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState("");
@@ -164,6 +240,7 @@ export function App() {
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const messageStreamRef = useRef<HTMLElement | null>(null);
   const nextScrollBehaviorRef = useRef<ScrollBehavior>("auto");
+  const selectedProjectIdRef = useRef("");
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === selectedProjectId) ?? null,
@@ -184,6 +261,10 @@ export function App() {
         sessions.some((session) => session.agentId === selectedAgentId && sendingSessionIds.includes(session.id))),
     [selectedAgentId, selectedSessionId, sendingSessionIds, sessions],
   );
+  const visibleArtifacts = useMemo(() => {
+    const query = artifactSearch.trim().toLowerCase();
+    return query ? artifacts.filter((artifact) => artifactSearchText(artifact).includes(query)) : artifacts;
+  }, [artifactSearch, artifacts]);
   const canSend = Boolean(composer.trim()) && Boolean(selectedAgentId) && Boolean(selectedProjectId) && !selectedAgentBusy;
 
   useEffect(() => {
@@ -209,6 +290,9 @@ export function App() {
         if (event.status === "completed" || event.status === "failed" || event.status === "cancelled") {
           setSendingSessionIds((current) => removeSendingSession(current, event.sessionId));
         }
+        if (event.status === "failed") {
+          void refreshArtifacts(selectedProjectIdRef.current);
+        }
         return;
       }
       if (event.type === "session.updated") {
@@ -225,6 +309,7 @@ export function App() {
       }
       if (event.type === "run.finished") {
         setSendingSessionIds((current) => removeSendingSession(current, event.sessionId));
+        void refreshArtifacts(selectedProjectIdRef.current);
       }
     });
 
@@ -297,12 +382,29 @@ export function App() {
     setProjects(listed.projects);
   }
 
+  async function refreshArtifacts(projectId: string, clearOnError = false): Promise<void> {
+    if (!projectId) {
+      return;
+    }
+    try {
+      const payload = await window.ppxClient.listGmScienceArtifacts(projectId);
+      if (selectedProjectIdRef.current === projectId) {
+        setArtifacts(payload.artifacts);
+      }
+    } catch {
+      if (clearOnError && selectedProjectIdRef.current === projectId) {
+        setArtifacts([]);
+      }
+    }
+  }
+
   async function openProject(project: GmScienceProject): Promise<void> {
     setProjectError(null);
+    selectedProjectIdRef.current = project.id;
     setSelectedProjectId(project.id);
+    setArtifactSearch("");
     setView("workspace");
-    const artifactsPayload = await window.ppxClient.listGmScienceArtifacts(project.id).catch(() => ({ artifacts: [] }));
-    setArtifacts(artifactsPayload.artifacts);
+    await refreshArtifacts(project.id, true);
   }
 
   async function createProject(): Promise<void> {
@@ -318,9 +420,9 @@ export function App() {
         name,
         description: projectForm.description,
         agentContext: projectForm.agentContext,
-        enabledSkills: ["Literature Review"],
-        enabledConnectors: ["OpenAlex"],
-        enabledSpecialists: ["Reviewer"],
+        enabledSkills: ["literature-review"],
+        enabledConnectors: ["arxiv", "pubmed", "openalex"],
+        enabledSpecialists: [],
       });
       setProjects((current) => [created.project, ...current.filter((project) => project.id !== created.project.id)]);
       setProjectForm(EMPTY_PROJECT_FORM);
@@ -436,6 +538,7 @@ export function App() {
     } catch (error) {
       console.error("Failed to send message", error);
       setSendError(error instanceof Error ? error.message : String(error));
+      await refreshArtifacts(selectedProjectId);
     } finally {
       setSendingSessionIds((current) => current.filter((item) => item !== sessionId));
     }
@@ -701,15 +804,21 @@ export function App() {
               <strong>Artifacts</strong>
               <span>{artifacts.length}</span>
             </header>
-            <div className="artifact-search">Search artifacts...</div>
+            <input
+              className="artifact-search"
+              value={artifactSearch}
+              placeholder="Search artifacts..."
+              aria-label="Search artifacts"
+              onChange={(event) => setArtifactSearch(event.target.value)}
+            />
             <div className="artifact-list">
-              {artifacts.map((artifact) => (
-                <article key={artifact.id} className="artifact-item">
-                  <strong>{artifact.title}</strong>
-                  <span>{formatArtifactType(artifact.type)}</span>
-                </article>
+              {visibleArtifacts.map((artifact) => (
+                <ArtifactItem key={artifact.id} artifact={artifact} />
               ))}
               {artifacts.length === 0 ? <div className="artifact-empty">No artifacts yet</div> : null}
+              {artifacts.length > 0 && visibleArtifacts.length === 0 ? (
+                <div className="artifact-empty">No matching artifacts</div>
+              ) : null}
             </div>
           </aside>
         </>

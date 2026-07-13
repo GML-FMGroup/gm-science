@@ -1592,6 +1592,8 @@ button.primary:disabled {
 .artifact-list {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .project-row {
@@ -1719,32 +1721,110 @@ button.primary:disabled {
 }
 
 .artifact-search {
-  display: flex;
-  align-items: center;
   margin: 12px 16px;
   padding: 0 12px;
+  min-width: 0;
+  border: 1px solid transparent;
   border-radius: 8px;
   background: rgba(24, 23, 22, 0.04);
-  color: rgba(24, 23, 22, 0.42);
+  color: #181716;
   font-size: 0.88rem;
+  outline: none;
+}
+
+.artifact-search:focus {
+  border-color: rgba(48, 103, 154, 0.42);
+  background: #fff;
+}
+
+.artifact-search::placeholder {
+  color: rgba(24, 23, 22, 0.42);
 }
 
 .artifact-item {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 7px;
   padding: 14px 18px;
   border-bottom: 1px solid rgba(24, 23, 22, 0.06);
 }
 
-.artifact-item strong {
-  font-size: 0.92rem;
+.artifact-title-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
 }
 
-.artifact-item span {
+.artifact-title-row > div {
+  min-width: 0;
+}
+
+.artifact-title-row strong {
+  display: block;
+  font-size: 0.92rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.artifact-kind {
+  display: block;
+  margin-top: 3px;
   color: rgba(24, 23, 22, 0.48);
-  font-size: 0.8rem;
+  font-size: 0.74rem;
   text-transform: capitalize;
+}
+
+.artifact-marker {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(24, 23, 22, 0.1);
+  border-radius: 5px;
+  background: #eef4ee;
+  color: #2f6a42;
+  font-size: 0.7rem;
+  font-weight: 750;
+}
+
+.artifact-report .artifact-marker {
+  background: #f8eeee;
+  color: #8a3f43;
+}
+
+.artifact-citation .artifact-marker {
+  background: #edf3f8;
+  color: #386789;
+}
+
+.artifact-byline,
+.artifact-detail,
+.artifact-identifier {
+  margin: 0 0 0 33px;
+  color: rgba(24, 23, 22, 0.6);
+  font-size: 0.78rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.artifact-identifier {
+  color: rgba(24, 23, 22, 0.48);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+}
+
+.artifact-link {
+  align-self: flex-start;
+  margin-left: 33px;
+  color: #386789;
+  font-size: 0.78rem;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.artifact-link:hover {
+  text-decoration: underline;
 }
 
 .science-app .settings-shell {

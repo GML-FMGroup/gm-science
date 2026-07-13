@@ -12,6 +12,57 @@
 
 The application stores gm-science project data under `~/.gm-science` by default. Set `GM_SCIENCE_DATA_DIR` to override this location.
 
+## 文献检索配置
+
+gm-science 原生支持 arXiv、PubMed 和 OpenAlex。配置统一位于：
+
+```text
+~/.gm-science/science-research/config.json
+```
+
+首次启动后，编辑其中的 `science.literature`：
+
+```json
+{
+  "science": {
+    "literature": {
+      "defaultSources": ["arxiv", "pubmed", "openalex"],
+      "maxResultsPerSource": 10,
+      "requestTimeoutSeconds": 20,
+      "cacheTtlSeconds": 86400,
+      "arxiv": {
+        "enabled": true,
+        "apiBase": "https://export.arxiv.org/api/query",
+        "minIntervalSeconds": 3
+      },
+      "pubmed": {
+        "enabled": true,
+        "apiBase": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils",
+        "tool": "gm-science",
+        "email": "your-email@example.com",
+        "apiKey": "",
+        "minIntervalSeconds": 0.34
+      },
+      "openalex": {
+        "enabled": true,
+        "apiBase": "https://api.openalex.org",
+        "apiKey": "your-openalex-api-key"
+      }
+    }
+  }
+}
+```
+
+- arXiv 不需要密钥。
+- PubMed 要求填写联系邮箱；API key 可选。
+- OpenAlex 要求填写 API key。
+- 单个来源未配置或请求失败时，其他来源仍会继续检索。
+- Project 的 `enabledConnectors` 会限制实际可请求来源；空列表使用 `defaultSources`。
+- 搜索结果会跨来源去重，并可保存为 Project 内的 `paper` artifact；综述可登记为 `report` 和 `citation` artifacts。
+- citation artifact 包含 CSL JSON metadata，report artifact 保存关联的 paper/citation IDs。
+
+配置文件可能包含密钥，不要提交到 Git 仓库。
+
 ## 一键启动
 
 macOS 用户可以直接双击：
@@ -39,7 +90,7 @@ Backend:
 
 ```bash
 cd gm-science-runtime
-../.venv/bin/python -m pytest tests/test_gm_science_store.py tests/test_gm_science_bootstrap.py tests/test_gm_science_client_api.py -q
+../.venv/bin/python -m pytest tests/test_literature_config.py tests/test_literature_connectors.py tests/test_literature_service.py tests/test_literature_tools.py -q
 ```
 
 Desktop:
