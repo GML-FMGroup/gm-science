@@ -19,6 +19,7 @@ from typing import Any
 from ..core.config import get_data_dir
 from ..core.logging_utils import debug_logging_enabled, emit_debug
 from ..gm_science.bootstrap import ensure_gm_science_initialized
+from ..gm_science.literature.config import load_literature_config, select_literature_sources
 from ..gm_science.models import ArtifactRecord, ProjectRecord
 from ..gm_science.store import GmScienceStore
 from .access_policy import AccessPolicy
@@ -278,17 +279,32 @@ def _gm_science_artifact_payload(artifact: ArtifactRecord) -> dict[str, Any]:
     }
 
 
-def _gm_science_project_context_message(project: ProjectRecord, text: str) -> str:
+def _gm_science_project_context_message(
+    project: ProjectRecord,
+    text: str,
+    *,
+    session_id: str,
+    source_statuses: dict[str, str],
+) -> str:
     """Build a run message with project context prepended."""
 
     context = project.agent_context.strip()
     user_text = str(text or "").strip()
-    if not context:
-        return user_text
+    sources = ", ".join(f"{name}:{status}" for name, status in source_statuses.items())
+    machine_context = (
+        "<gm_science_context>\n"
+        f"<project_id>{project.id}</project_id>\n"
+        f"<session_id>{session_id}</session_id>\n"
+        f"<workspace>{project.workspace_path}</workspace>\n"
+        f"<literature_sources>{sources}</literature_sources>\n"
+        "</gm_science_context>\n\n"
+    )
+    project_context = f"Project context:\n{context}\n\n" if context else ""
     return (
-        "Project context:\n"
-        f"{context}\n\n"
-        "Use the project context as standing instructions for this gm-science project. "
+        machine_context
+        + project_context
+        + "Use the project context as standing instructions for this gm-science project. "
+        "Use the machine context when calling science tools. "
         "Do not reveal this wrapper unless the user asks how the project is configured.\n\n"
         "User request:\n"
         f"{user_text}"
@@ -1177,7 +1193,25 @@ class ClientApiCoordinator:
         project = self._gm_science_store.get_project(project_id)
         if project is None:
             return _error("PROJECT_NOT_FOUND", f"Project '{project_id}' was not found.")
-        message = _gm_science_project_context_message(project, text)
+        literature_config = load_literature_config(agent_config_path(agent_id, self.data_dir))
+        source_selection = select_literature_sources(
+            literature_config,
+            enabled_connectors=project.enabled_connectors,
+        )
+        source_statuses = {
+            name: (
+                "disabled"
+                if name in source_selection.project_disabled
+                else str(status["status"])
+            )
+            for name, status in literature_config.public_source_statuses().items()
+        }
+        message = _gm_science_project_context_message(
+            project,
+            text,
+            session_id=session_id,
+            source_statuses=source_statuses,
+        )
         return self.create_run(agent_id, session_id, message, user_id=user_id)
 
     def list_sessions(self, agent_id: str, *, user_id: str = "ppx-client-user") -> dict[str, Any]:

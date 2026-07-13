@@ -21,6 +21,32 @@ def _tool_names(tools: list[object]) -> set[str]:
 
 
 class AgentMcpTests(unittest.TestCase):
+    def test_build_tools_hides_science_tools_outside_gm_science_mode(self) -> None:
+        from openppx import agent
+
+        with patch.dict(os.environ, {"GM_SCIENCE_MODE": "0"}, clear=False):
+            with patch("openppx.app.agent.build_mcp_toolsets_from_env", return_value=[]):
+                names = _tool_names(agent._build_tools())
+
+        self.assertNotIn("science_list_sources", names)
+        self.assertNotIn("science_search", names)
+        self.assertNotIn("science_register_review", names)
+
+    def test_build_tools_adds_science_tools_only_in_gm_science_mode(self) -> None:
+        from openppx import agent
+
+        with patch.dict(
+            os.environ,
+            {"GM_SCIENCE_MODE": "1", "OPENPPX_AGENT_PRIVILEGE_LEVEL": "medium"},
+            clear=False,
+        ):
+            with patch("openppx.app.agent.build_mcp_toolsets_from_env", return_value=[]):
+                names = _tool_names(agent._build_tools())
+
+        self.assertIn("science_list_sources", names)
+        self.assertIn("science_search", names)
+        self.assertIn("science_register_review", names)
+
     def test_build_tools_appends_mcp_toolsets(self) -> None:
         from openppx import agent
 

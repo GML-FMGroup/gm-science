@@ -179,7 +179,58 @@ def test_client_api_project_run_injects_agent_context(tmp_path: Path, monkeypatc
     assert payload["ok"] is True
     message_index = observed_cmd.index("--message") + 1
     message = observed_cmd[message_index]
+    assert "<gm_science_context>" in message
+    assert f"<project_id>{project['id']}</project_id>" in message
+    assert "<session_id>session_1</session_id>" in message
+    assert f"<workspace>{project['workspace_path']}</workspace>" in message
+    assert "arxiv:ok" in message
+    assert "pubmed:needs_configuration" in message
+    assert "openalex:needs_configuration" in message
     assert "Project context:" in message
     assert "Prefer reproducible scripts and cite sources." in message
     assert "User request:" in message
     assert "Summarize the papers." in message
+
+
+def test_client_api_project_run_injects_machine_context_without_custom_context(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path / "gm-science"))
+    (tmp_path / "global_config.json").write_text(
+        json.dumps({"agents": [{"name": "science-research", "enabled": True}]}),
+        encoding="utf-8",
+    )
+    agent_dir = tmp_path / "science-research"
+    agent_dir.mkdir()
+    (agent_dir / "config.json").write_text(
+        json.dumps({"agent": {"workspace": "workspace/science-research"}}),
+        encoding="utf-8",
+    )
+    observed_cmd: list[str] = []
+
+    class _ImmediateProcess:
+        stdout = iter([json.dumps({"type": "final", "text": "ok"}) + "\n"])
+        stderr = iter(())
+
+        def poll(self) -> int:
+            return 0
+
+        def terminate(self) -> None:
+            return None
+
+        def wait(self) -> int:
+            return 0
+
+    def fake_popen(cmd: list[str], **_kwargs: object) -> _ImmediateProcess:
+        observed_cmd.extend(cmd)
+        return _ImmediateProcess()
+
+    monkeypatch.setattr("openppx.runtime.client_api_service.subprocess.Popen", fake_popen)
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    project = coordinator.create_gm_science_project({"name": "No custom context"})["data"]["project"]
+
+    payload = coordinator.create_gm_science_project_run(project["id"], "session_2", "Search papers.")
+
+    assert payload["ok"] is True
+    message = observed_cmd[observed_cmd.index("--message") + 1]
+    assert f"<project_id>{project['id']}</project_id>" in message
+    assert "<session_id>session_2</session_id>" in message
+    assert "User request:\nSearch papers." in message

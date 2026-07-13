@@ -58,3 +58,77 @@ def test_create_and_list_project_artifacts_round_trips_metadata(tmp_path: Path) 
     assert artifact.metadata == {"source": "manual", "year": 2017}
     assert artifact.provenance == {"created_by": "science-research", "run_id": "run-1"}
     assert store.list_artifacts(project.id) == [artifact]
+
+
+def test_find_project_paper_and_artifact_by_id(tmp_path: Path) -> None:
+    store = GmScienceStore(tmp_path)
+    project = store.create_project(name="Review", description="", agent_context="")
+    other_project = store.create_project(name="Other", description="", agent_context="")
+    paper = store.create_artifact(
+        project_id=project.id,
+        artifact_type="paper",
+        title="Reliable Protein Folding",
+        path_or_url="https://doi.org/10.1000/folding",
+        metadata={"canonical_id": "doi:10.1000/folding"},
+    )
+    store.create_artifact(
+        project_id=other_project.id,
+        artifact_type="paper",
+        title="Other copy",
+        path_or_url="",
+        metadata={"canonical_id": "doi:10.1000/folding"},
+    )
+
+    assert store.get_artifact(paper.id) == paper
+    assert store.find_paper_artifact(project.id, "doi:10.1000/folding") == paper
+    assert store.find_paper_artifact(project.id, "doi:missing") is None
+
+
+def test_find_citation_is_scoped_to_report_and_paper(tmp_path: Path) -> None:
+    store = GmScienceStore(tmp_path)
+    project = store.create_project(name="Review", description="", agent_context="")
+    paper = store.create_artifact(
+        project_id=project.id,
+        artifact_type="paper",
+        title="Paper",
+        path_or_url="",
+    )
+    report = store.create_artifact(
+        project_id=project.id,
+        artifact_type="report",
+        title="Report",
+        path_or_url="report.md",
+    )
+    citation = store.create_artifact(
+        project_id=project.id,
+        artifact_type="citation",
+        title="Citation",
+        path_or_url="",
+        metadata={"paper_artifact_id": paper.id, "report_artifact_id": report.id},
+    )
+
+    assert store.find_citation_artifact(project.id, report.id, paper.id) == citation
+    assert store.find_citation_artifact(project.id, report.id, "art_missing") is None
+
+
+def test_update_artifact_metadata_replaces_metadata(tmp_path: Path) -> None:
+    store = GmScienceStore(tmp_path)
+    project = store.create_project(name="Review", description="", agent_context="")
+    artifact = store.create_artifact(
+        project_id=project.id,
+        artifact_type="report",
+        title="Report",
+        path_or_url="report.md",
+        metadata={"paper_artifact_ids": []},
+    )
+
+    updated = store.update_artifact_metadata(
+        artifact.id,
+        {"paper_artifact_ids": ["art-paper"], "citation_artifact_ids": ["art-citation"]},
+    )
+
+    assert updated.metadata == {
+        "paper_artifact_ids": ["art-paper"],
+        "citation_artifact_ids": ["art-citation"],
+    }
+    assert updated.updated_at >= artifact.updated_at

@@ -15,6 +15,7 @@ from ..core.config import normalize_agent_privilege_level
 from ..core.env_utils import env_enabled
 from ..core.mcp_registry import build_mcp_toolsets_from_env
 from ..core.provider import build_adk_model_from_env
+from ..gm_science.literature.tools import science_list_sources, science_register_review, science_search
 from ..tooling.skills_adapter import list_skills, read_skill
 from ..tooling.registry import (
     browser,
@@ -232,6 +233,8 @@ def _build_tools() -> list[Any]:
         base_tools.append(LongRunningFunctionTool(func=spawn_subagent))
     if _gui_builtin_tools_enabled():
         base_tools.extend([start_gui_task, computer_task, computer_use])
+    if env_enabled("GM_SCIENCE_MODE", default=False):
+        base_tools.extend([science_list_sources, science_search, science_register_review])
 
     privilege_level = _agent_privilege_level()
     if privilege_level == "low":

@@ -210,6 +210,71 @@ class GmScienceStore:
             ).fetchall()
         return [_artifact_from_row(row) for row in rows]
 
+    def get_artifact(self, artifact_id: str) -> ArtifactRecord | None:
+        """Return one artifact by id, or None when it does not exist."""
+
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM gm_science_artifacts WHERE id = ?",
+                (artifact_id,),
+            ).fetchone()
+        return _artifact_from_row(row) if row is not None else None
+
+    def update_artifact_metadata(self, artifact_id: str, metadata: dict[str, Any]) -> ArtifactRecord:
+        """Replace artifact metadata and return the updated record."""
+
+        artifact = self.get_artifact(artifact_id)
+        if artifact is None:
+            raise ValueError(f"Artifact '{artifact_id}' was not found.")
+        timestamp = _utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE gm_science_artifacts SET metadata = ?, updated_at = ? WHERE id = ?",
+                (_json_dumps(dict(metadata)), timestamp, artifact_id),
+            )
+            conn.execute(
+                "UPDATE gm_science_projects SET updated_at = ? WHERE id = ?",
+                (timestamp, artifact.project_id),
+            )
+        updated = self.get_artifact(artifact_id)
+        if updated is None:
+            raise RuntimeError(f"Artifact '{artifact_id}' disappeared during update.")
+        return updated
+
+    def find_paper_artifact(self, project_id: str, canonical_id: str) -> ArtifactRecord | None:
+        """Find a canonical paper artifact within one project."""
+
+        target = str(canonical_id or "").strip()
+        if not target:
+            return None
+        return next(
+            (
+                artifact
+                for artifact in self.list_artifacts(project_id)
+                if artifact.type == "paper" and artifact.metadata.get("canonical_id") == target
+            ),
+            None,
+        )
+
+    def find_citation_artifact(
+        self,
+        project_id: str,
+        report_artifact_id: str,
+        paper_artifact_id: str,
+    ) -> ArtifactRecord | None:
+        """Find a citation linking one project report and paper."""
+
+        return next(
+            (
+                artifact
+                for artifact in self.list_artifacts(project_id)
+                if artifact.type == "citation"
+                and artifact.metadata.get("report_artifact_id") == report_artifact_id
+                and artifact.metadata.get("paper_artifact_id") == paper_artifact_id
+            ),
+            None,
+        )
+
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
