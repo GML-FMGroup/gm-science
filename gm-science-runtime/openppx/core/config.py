@@ -571,6 +571,32 @@ def default_config() -> dict[str, Any]:
                 "maxResults": 5,
             },
         },
+        "science": {
+            "literature": {
+                "defaultSources": ["arxiv", "pubmed", "openalex"],
+                "maxResultsPerSource": 10,
+                "requestTimeoutSeconds": 20,
+                "cacheTtlSeconds": 86400,
+                "arxiv": {
+                    "enabled": True,
+                    "apiBase": "https://export.arxiv.org/api/query",
+                    "minIntervalSeconds": 3,
+                },
+                "pubmed": {
+                    "enabled": True,
+                    "apiBase": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils",
+                    "tool": "gm-science",
+                    "email": "",
+                    "apiKey": "",
+                    "minIntervalSeconds": 0.34,
+                },
+                "openalex": {
+                    "enabled": True,
+                    "apiBase": "https://api.openalex.org",
+                    "apiKey": "",
+                },
+            },
+        },
         "security": {
             "restrictToWorkspace": False,
             "allowExec": True,

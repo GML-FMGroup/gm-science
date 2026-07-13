@@ -41,6 +41,12 @@ def test_bootstrap_creates_default_science_agent_with_openai_codex_provider(tmp_
     assert config["providers"]["openai_codex"]["enabled"] is True
     assert config["providers"]["openai_codex"]["model"] == EXPECTED_CODEX_MODEL
     assert config["providers"]["google"]["enabled"] is False
+    literature = config["science"]["literature"]
+    assert literature["defaultSources"] == ["arxiv", "pubmed", "openalex"]
+    assert literature["arxiv"]["apiBase"] == "https://export.arxiv.org/api/query"
+    assert literature["pubmed"]["tool"] == "gm-science"
+    assert literature["pubmed"]["email"] == ""
+    assert literature["openalex"]["apiKey"] == ""
 
     runtime_config = json.loads(result.runtime_config_path.read_text(encoding="utf-8"))
     assert isinstance(runtime_config["env"], dict)
@@ -57,3 +63,17 @@ def test_bootstrap_is_idempotent_and_does_not_overwrite_existing_agent_config(tm
     saved = json.loads(second.config_path.read_text(encoding="utf-8"))
     assert saved["providers"]["openai_codex"]["model"] == "openai-codex/custom-research-model"
     assert second == first
+
+
+def test_bootstrap_persists_missing_literature_defaults_into_existing_config(tmp_path: Path) -> None:
+    first = ensure_gm_science_initialized(root_dir=tmp_path)
+    config = json.loads(first.config_path.read_text(encoding="utf-8"))
+    config.pop("science")
+    first.config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    ensure_gm_science_initialized(root_dir=tmp_path)
+
+    saved = json.loads(first.config_path.read_text(encoding="utf-8"))
+    assert saved["science"]["literature"]["defaultSources"] == ["arxiv", "pubmed", "openalex"]
+    assert saved["science"]["literature"]["pubmed"]["email"] == ""
+    assert saved["science"]["literature"]["openalex"]["apiKey"] == ""

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PubmedArticleSet>
+  <PubmedArticle>
+    <MedlineCitation>
+      <PMID Version="1">12345678</PMID>
+      <Article>
+        <Journal>
+          <Title>Journal of Reliable Science</Title>
+          <JournalIssue>
+            <PubDate><Year>2024</Year><Month>Jan</Month><Day>03</Day></PubDate>
+          </JournalIssue>
+        </Journal>
+        <ArticleTitle>Reliable Protein Folding with Agents</ArticleTitle>
+        <Abstract>
+          <AbstractText Label="BACKGROUND">We evaluate a reproducible</AbstractText>
+          <AbstractText Label="RESULTS">folding workflow.</AbstractText>
+        </Abstract>
+        <AuthorList>
+          <Author><ForeName>Ada</ForeName><LastName>Lovelace</LastName></Author>
+          <Author><CollectiveName>Reliable Science Consortium</CollectiveName></Author>
+        </AuthorList>
+      </Article>
+    </MedlineCitation>
+    <PubmedData>
+      <ArticleIdList>
+        <ArticleId IdType="pubmed">12345678</ArticleId>
+        <ArticleId IdType="doi">10.1000/folding.2024.1</ArticleId>
+        <ArticleId IdType="pmc">PMC123456</ArticleId>
+      </ArticleIdList>
+    </PubmedData>
+  </PubmedArticle>
+</PubmedArticleSet>

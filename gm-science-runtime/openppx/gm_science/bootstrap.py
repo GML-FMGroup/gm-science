@@ -54,6 +54,7 @@ def ensure_gm_science_initialized(root_dir: Path | str | None = None) -> GmScien
         save_config(config, config_path=config_path)
     else:
         config = load_config(config_path=config_path)
+        save_config(config, config_path=config_path)
         configured_workspace = str(config.get("agent", {}).get("workspace", "")).strip()
         if configured_workspace:
             workspace_path = Path(configured_workspace).expanduser().resolve(strict=False)

@@ -1,0 +1,42 @@
+{
+  "meta": {
+    "count": 1,
+    "page": 1,
+    "per_page": 1,
+    "cost_usd": 0.001
+  },
+  "results": [
+    {
+      "id": "https://openalex.org/W1234567890",
+      "doi": "https://doi.org/10.1000/folding.2024.1",
+      "display_name": "Reliable Protein Folding with Agents",
+      "publication_year": 2024,
+      "publication_date": "2024-01-03",
+      "type": "article",
+      "cited_by_count": 17,
+      "is_retracted": false,
+      "ids": {
+        "openalex": "https://openalex.org/W1234567890",
+        "doi": "https://doi.org/10.1000/folding.2024.1",
+        "pmid": "https://pubmed.ncbi.nlm.nih.gov/12345678"
+      },
+      "abstract_inverted_index": {
+        "We": [0],
+        "evaluate": [1],
+        "a": [2],
+        "reproducible": [3],
+        "folding": [4],
+        "workflow.": [5]
+      },
+      "authorships": [
+        {"author": {"display_name": "Ada Lovelace"}},
+        {"author": {"display_name": "Grace Hopper"}}
+      ],
+      "primary_location": {
+        "landing_page_url": "https://doi.org/10.1000/folding.2024.1",
+        "pdf_url": "https://example.test/folding.pdf",
+        "source": {"display_name": "Journal of Reliable Science"}
+      }
+    }
+  ]
+}
