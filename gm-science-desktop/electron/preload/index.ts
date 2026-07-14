@@ -16,7 +16,8 @@ const api: PpxClientApi = {
   saveConnectionSettings: (settings: ConnectionSettings) => ipcRenderer.invoke("ppx-client:save-connection-settings", settings),
   runRuntimeCommand: (command: RuntimeCommand) => ipcRenderer.invoke("ppx-client:runtime-command", command),
   listSessions: (agentId: string) => ipcRenderer.invoke("ppx-client:list-sessions", agentId),
-  createSession: (agentId: string) => ipcRenderer.invoke("ppx-client:create-session", agentId),
+  createSession: (agentId: string, projectId?: string) =>
+    ipcRenderer.invoke("ppx-client:create-session", agentId, projectId),
   loadSession: (sessionId: string) => ipcRenderer.invoke("ppx-client:load-session", sessionId),
   sendMessage: (input: SendMessageInput) => ipcRenderer.invoke("ppx-client:send-message", input),
   listGmScienceProjects: () => ipcRenderer.invoke("ppx-client:list-gm-science-projects"),

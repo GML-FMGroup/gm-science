@@ -22,6 +22,7 @@ function buildBootstrapPayload(): BootstrapPayload {
     {
       id: "session-a",
       agentId: "agent-1",
+      projectId: "proj-test",
       title: "Session A",
       updatedAt: "2026-04-02T10:00:00.000Z",
       lastMessagePreview: "Preview A should stay hidden",
@@ -29,6 +30,7 @@ function buildBootstrapPayload(): BootstrapPayload {
     {
       id: "session-b",
       agentId: "agent-1",
+      projectId: "proj-test",
       title: "Session B",
       updatedAt: "2026-04-02T09:00:00.000Z",
       lastMessagePreview: "Preview B should stay hidden",
@@ -109,7 +111,9 @@ function installClient(overrides: Partial<PpxClientApi> = {}): { client: PpxClie
     runRuntimeCommand: async () => buildBootstrapPayload().runtime,
     listSessions: async () => ({ sessions: buildBootstrapPayload().sessions }),
     createSession: async () => ({ session: buildBootstrapPayload().sessions[0] }),
-    loadSession: async () => ({ messages: [] }),
+    loadSession: async (sessionId) => ({
+      messages: buildBootstrapPayload().messages.filter((message) => message.sessionId === sessionId),
+    }),
     sendMessage: async () => new Promise<{ runId: string }>(() => undefined),
     listGmScienceProjects: async () => ({ projects: [buildProject()] }),
     createGmScienceProject: async (input) => ({
@@ -200,18 +204,21 @@ describe("App sending state", () => {
     });
 
     installClient({
-      loadSession: async () => ({
-        messages: [
-          {
-            id: "message-b",
-            sessionId: "session-b",
-            role: "assistant",
-            status: "completed",
-            createdAt: "2026-04-02T10:00:02.000Z",
-            parts: [{ type: "markdown", text: "Loaded Session B" }],
-          },
-        ],
-      }),
+      loadSession: async (sessionId) =>
+        sessionId === "session-b"
+          ? {
+              messages: [
+                {
+                  id: "message-b",
+                  sessionId: "session-b",
+                  role: "assistant",
+                  status: "completed",
+                  createdAt: "2026-04-02T10:00:02.000Z",
+                  parts: [{ type: "markdown", text: "Loaded Session B" }],
+                },
+              ],
+            }
+          : { messages: buildBootstrapPayload().messages },
     });
 
     render(<App />);
@@ -310,10 +317,11 @@ describe("App sending state", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("creates a session on startup when the selected agent has none", async () => {
+  it("does not create an orphan session on startup and creates one for the project on first send", async () => {
     const createdSession: SessionSummary = {
       id: "session-created",
       agentId: "agent-1",
+      projectId: "proj-test",
       title: "New local session",
       updatedAt: "2026-04-02T10:01:00.000Z",
       lastMessagePreview: "Start a task",
@@ -327,6 +335,7 @@ describe("App sending state", () => {
         messages: [],
         selectedSessionId: "",
       }),
+      listSessions: async () => ({ sessions: [] }),
       createSession,
       sendMessage,
     });
@@ -334,11 +343,8 @@ describe("App sending state", () => {
     render(<App />);
 
     await openDefaultProject();
-    await waitFor(() => {
-      expect(screen.getAllByText("New local session").length).toBeGreaterThan(0);
-    });
-
-    expect(createSession).toHaveBeenCalledWith("agent-1");
+    await screen.findByText("Test research project is ready");
+    expect(createSession).not.toHaveBeenCalled();
 
     fireEvent.change(screen.getByPlaceholderText("向本地 agent 发送任务..."), {
       target: { value: "first task" },
@@ -346,6 +352,7 @@ describe("App sending state", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     await waitFor(() => {
+      expect(createSession).toHaveBeenCalledWith("agent-1", "proj-test");
       expect(sendMessage).toHaveBeenCalledWith({
         agentId: "agent-1",
         sessionId: "session-created",
@@ -359,6 +366,7 @@ describe("App sending state", () => {
     const createdSession: SessionSummary = {
       id: "session-on-send",
       agentId: "agent-1",
+      projectId: "proj-test",
       title: "New local session",
       updatedAt: "2026-04-02T10:01:00.000Z",
       lastMessagePreview: "Start a task",
@@ -388,7 +396,7 @@ describe("App sending state", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     await waitFor(() => {
-      expect(createSession).toHaveBeenCalledWith("agent-1");
+      expect(createSession).toHaveBeenCalledWith("agent-1", "proj-test");
       expect(sendMessage).toHaveBeenCalledWith({
         agentId: "agent-1",
         sessionId: "session-on-send",
@@ -456,10 +464,39 @@ describe("App sending state", () => {
     expect(screen.queryByText("Preview B should stay hidden")).not.toBeInTheDocument();
   });
 
+  it("shows only sessions that belong to the selected project", async () => {
+    const otherProject = buildProject({ id: "proj-other", name: "Other research project", sessionsCount: 1 });
+    const otherSession: SessionSummary = {
+      id: "session-other",
+      agentId: "agent-1",
+      projectId: otherProject.id,
+      title: "Other project session",
+      updatedAt: "2026-04-02T11:00:00.000Z",
+      lastMessagePreview: "Other",
+    };
+    installClient({
+      listGmScienceProjects: async () => ({ projects: [buildProject(), otherProject] }),
+      listSessions: async () => ({ sessions: [...buildBootstrapPayload().sessions, otherSession] }),
+      loadSession: async () => ({ messages: [] }),
+    });
+
+    render(<App />);
+
+    await openDefaultProject();
+    await screen.findByRole("button", { name: /Session A/ });
+    expect(screen.queryByRole("button", { name: /Other project session/ })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Projects" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Other research project/ }));
+    await screen.findByRole("button", { name: /Other project session/ });
+    expect(screen.queryByRole("button", { name: /Session A/ })).not.toBeInTheDocument();
+  });
+
   it("uses the first user message as the visible session title", async () => {
     const createdSession: SessionSummary = {
       id: "session-created",
       agentId: "agent-1",
+      projectId: "proj-test",
       title: "新对话",
       updatedAt: "2026-04-02T10:01:00.000Z",
       lastMessagePreview: "",
@@ -472,6 +509,7 @@ describe("App sending state", () => {
         messages: [],
         selectedSessionId: "",
       }),
+      listSessions: async () => ({ sessions: [] }),
       createSession: async () => ({ session: createdSession }),
       sendMessage,
     });
@@ -479,9 +517,7 @@ describe("App sending state", () => {
     render(<App />);
 
     await openDefaultProject();
-    await waitFor(() => {
-      expect(screen.getAllByText("新对话").length).toBeGreaterThan(0);
-    });
+    await screen.findByText("Test research project is ready");
 
     fireEvent.change(screen.getByPlaceholderText("向本地 agent 发送任务..."), {
       target: { value: "帮我查一下深圳到青岛的火车和费用" },
@@ -522,6 +558,26 @@ describe("App sending state", () => {
           },
         ],
       }),
+      loadSession: async () => ({
+        messages: [
+          {
+            id: "message-a",
+            sessionId: "session-a",
+            role: "assistant",
+            status: "completed",
+            createdAt: "2026-04-02T10:00:01.000Z",
+            parts: [{ type: "markdown", text: "First chunk" }],
+          },
+          {
+            id: "message-b",
+            sessionId: "session-a",
+            role: "assistant",
+            status: "streaming",
+            createdAt: "2026-04-02T10:00:02.000Z",
+            parts: [{ type: "step_ref", stepId: "step-1", title: "exec", status: "running", detail: "command: pwd" }],
+          },
+        ],
+      }),
     });
 
     render(<App />);
@@ -534,10 +590,14 @@ describe("App sending state", () => {
   it("clears previous messages immediately when switching sessions", async () => {
     let resolveLoad: ((value: { messages: BootstrapPayload["messages"] }) => void) | null = null;
     installClient({
-      loadSession: async () =>
-        await new Promise<{ messages: BootstrapPayload["messages"] }>((resolve) => {
+      loadSession: async (sessionId) => {
+        if (sessionId === "session-a") {
+          return { messages: buildBootstrapPayload().messages };
+        }
+        return await new Promise<{ messages: BootstrapPayload["messages"] }>((resolve) => {
           resolveLoad = resolve;
-        }),
+        });
+      },
     });
 
     render(<App />);

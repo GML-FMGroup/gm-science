@@ -146,6 +146,7 @@ export function normalizeClientApiSession(payload: unknown): SessionSummary | nu
   return {
     id: asString(session.id),
     agentId: asString(session.agent_id ?? session.agentId),
+    projectId: asString(session.project_id ?? session.projectId) || undefined,
     title: asString(session.title, "Session"),
     updatedAt: asString(session.updated_at ?? session.updatedAt, new Date().toISOString()),
     lastMessagePreview: asString(session.last_message_preview ?? session.lastMessagePreview, ""),

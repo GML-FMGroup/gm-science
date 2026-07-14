@@ -130,6 +130,38 @@ def test_client_api_lists_and_creates_gm_science_projects(tmp_path: Path, monkey
     assert listed["data"]["items"] == [project]
 
 
+def test_client_api_associates_sessions_with_projects_and_reports_counts(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    project = coordinator.create_gm_science_project({"name": "Session project"})["data"]["project"]
+
+    created = coordinator.create_session(
+        GM_SCIENCE_DEFAULT_AGENT_NAME,
+        project_id=project["id"],
+    )
+
+    assert created["ok"] is True
+    session = created["data"]["session"]
+    assert session["project_id"] == project["id"]
+    listed_sessions = coordinator.list_sessions(GM_SCIENCE_DEFAULT_AGENT_NAME)
+    assert listed_sessions["data"]["items"][0]["project_id"] == project["id"]
+    listed_projects = coordinator.list_gm_science_projects()
+    assert listed_projects["data"]["items"][0]["sessions_count"] == 1
+
+
+def test_client_api_rejects_project_run_for_unassociated_session(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    project = coordinator.create_gm_science_project({"name": "Bound sessions"})["data"]["project"]
+
+    payload = coordinator.create_gm_science_project_run(project["id"], "orphan-session", "Do work.")
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "SESSION_NOT_IN_PROJECT"
+
+
 def test_client_api_project_explicit_empty_capabilities_override_defaults(
     tmp_path: Path,
     monkeypatch,
@@ -354,6 +386,11 @@ def test_client_api_project_run_injects_agent_context(tmp_path: Path, monkeypatc
             "agent_context": "Prefer reproducible scripts and cite sources.",
         }
     )["data"]["project"]
+    coordinator._gm_science_store.link_project_session(
+        project_id=project["id"],
+        session_id="session_1",
+        agent_id=GM_SCIENCE_DEFAULT_AGENT_NAME,
+    )
 
     payload = coordinator.create_gm_science_project_run(project["id"], "session_1", "Summarize the papers.")
 
@@ -411,6 +448,11 @@ def test_client_api_project_run_injects_machine_context_without_custom_context(t
     monkeypatch.setattr("openppx.runtime.client_api_service.subprocess.Popen", fake_popen)
     coordinator = ClientApiCoordinator(data_dir=tmp_path)
     project = coordinator.create_gm_science_project({"name": "No custom context"})["data"]["project"]
+    coordinator._gm_science_store.link_project_session(
+        project_id=project["id"],
+        session_id="session_2",
+        agent_id=GM_SCIENCE_DEFAULT_AGENT_NAME,
+    )
 
     payload = coordinator.create_gm_science_project_run(project["id"], "session_2", "Search papers.")
 

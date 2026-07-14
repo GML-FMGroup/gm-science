@@ -39,6 +39,11 @@ describe("preload API", () => {
   it("exposes gm-science project and artifact methods", () => {
     const { api, invoke } = loadPreloadApi();
 
+    expect(api.createSession("science-research", "proj-1")).toEqual({
+      channel: "ppx-client:create-session",
+      args: ["science-research", "proj-1"],
+    });
+
     expect(api.listGmScienceProjects()).toEqual({
       channel: "ppx-client:list-gm-science-projects",
       args: [],
@@ -76,6 +81,6 @@ describe("preload API", () => {
       channel: "ppx-client:create-gm-science-artifact",
       args: ["proj-1", { title: "note" }],
     });
-    expect(invoke).toHaveBeenCalledTimes(7);
+    expect(invoke).toHaveBeenCalledTimes(8);
   });
 });

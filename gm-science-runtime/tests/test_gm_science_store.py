@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from openppx.gm_science.paths import get_gm_science_data_dir
 from openppx.gm_science.store import GmScienceStore
 
@@ -55,6 +57,36 @@ def test_update_project_capabilities_persists_allowlists(tmp_path: Path) -> None
     assert updated.enabled_specialists == ["research_reviewer"]
     assert updated.updated_at >= project.updated_at
     assert store.get_project(project.id) == updated
+
+
+def test_project_session_association_counts_and_rejects_cross_project_relink(tmp_path: Path) -> None:
+    store = GmScienceStore(tmp_path)
+    project = store.create_project(name="Primary", description="", agent_context="")
+    other_project = store.create_project(name="Other", description="", agent_context="")
+
+    linked = store.link_project_session(
+        project_id=project.id,
+        session_id="session-1",
+        agent_id="science-research",
+    )
+    repeated = store.link_project_session(
+        project_id=project.id,
+        session_id="session-1",
+        agent_id="science-research",
+    )
+
+    assert linked.project_id == project.id
+    assert repeated.created_at == linked.created_at
+    assert store.get_project_session("session-1") == repeated
+    assert store.list_project_sessions(project.id) == [repeated]
+    assert store.count_project_sessions(project.id) == 1
+
+    with pytest.raises(ValueError, match="already belongs"):
+        store.link_project_session(
+            project_id=other_project.id,
+            session_id="session-1",
+            agent_id="science-research",
+        )
 
 
 def test_create_and_list_project_artifacts_round_trips_metadata(tmp_path: Path) -> None:

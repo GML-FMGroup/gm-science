@@ -26,6 +26,7 @@ describe("client api projection helpers", () => {
     const session = normalizeClientApiSession({
       id: "session_1",
       agent_id: "writer",
+      project_id: "proj_1",
       title: "Demo",
       updated_at: "2026-04-02T12:00:00+08:00",
       last_message_preview: "preview",
@@ -34,6 +35,7 @@ describe("client api projection helpers", () => {
     expect(session).toMatchObject({
       id: "session_1",
       agentId: "writer",
+      projectId: "proj_1",
       title: "Demo",
       lastMessagePreview: "preview",
     });

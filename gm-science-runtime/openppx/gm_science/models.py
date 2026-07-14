@@ -1,4 +1,4 @@
-"""Data models for gm-science projects and artifacts."""
+"""Data models for gm-science projects, sessions, and artifacts."""
 
 from __future__ import annotations
 
@@ -20,6 +20,17 @@ class ProjectRecord:
     enabled_skills: list[str] = field(default_factory=list)
     enabled_connectors: list[str] = field(default_factory=list)
     enabled_specialists: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectSessionRecord:
+    """A durable association between one Project and one ADK Session."""
+
+    project_id: str
+    session_id: str
+    agent_id: str
+    created_at: str
+    updated_at: str
 
 
 @dataclass(frozen=True, slots=True)

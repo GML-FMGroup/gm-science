@@ -87,7 +87,9 @@ app.whenReady().then(() => {
     adapter!.runRuntimeCommand(command),
   );
   ipcMain.handle("ppx-client:list-sessions", async (_event, agentId: string) => adapter!.listSessions(agentId));
-  ipcMain.handle("ppx-client:create-session", async (_event, agentId: string) => adapter!.createSession(agentId));
+  ipcMain.handle("ppx-client:create-session", async (_event, agentId: string, projectId?: string) =>
+    adapter!.createSession(agentId, projectId),
+  );
   ipcMain.handle("ppx-client:load-session", async (_event, sessionId: string) => adapter!.loadSession(sessionId));
   ipcMain.handle("ppx-client:send-message", async (_event, input: SendMessageInput) => adapter!.sendMessage(input));
   ipcMain.handle("ppx-client:list-gm-science-projects", async () => adapter!.listGmScienceProjects());

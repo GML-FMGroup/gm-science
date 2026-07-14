@@ -70,10 +70,11 @@ function mergeSessionSummary(existing: SessionSummary | undefined, incoming: Ses
   if (!existing) {
     return incoming;
   }
+  const merged = { ...incoming, projectId: incoming.projectId || existing.projectId };
   if (isGenericSessionTitle(incoming.title) && !isGenericSessionTitle(existing.title)) {
-    return { ...incoming, title: existing.title };
+    return { ...merged, title: existing.title };
   }
-  return incoming;
+  return merged;
 }
 
 function runtimeActionLabel(state: RuntimeState): string {
@@ -335,16 +336,24 @@ export function App() {
     () => agents.find((agent) => agent.id === selectedAgentId) ?? agents[0] ?? null,
     [agents, selectedAgentId],
   );
+  const projectSessions = useMemo(
+    () => sessions.filter((session) => session.projectId === selectedProjectId),
+    [sessions, selectedProjectId],
+  );
+  const recentSessions = useMemo(
+    () => sessions.filter((session) => session.projectId && projects.some((project) => project.id === session.projectId)),
+    [projects, sessions],
+  );
   const selectedSession = useMemo(
-    () => sessions.find((session) => session.id === selectedSessionId) ?? null,
-    [sessions, selectedSessionId],
+    () => projectSessions.find((session) => session.id === selectedSessionId) ?? null,
+    [projectSessions, selectedSessionId],
   );
   const selectedAgentBusy = useMemo(
     () =>
       Boolean(selectedAgentId) &&
       ((selectedSessionId && sendingSessionIds.includes(selectedSessionId)) ||
-        sessions.some((session) => session.agentId === selectedAgentId && sendingSessionIds.includes(session.id))),
-    [selectedAgentId, selectedSessionId, sendingSessionIds, sessions],
+        projectSessions.some((session) => session.agentId === selectedAgentId && sendingSessionIds.includes(session.id))),
+    [projectSessions, selectedAgentId, selectedSessionId, sendingSessionIds],
   );
   const visibleArtifacts = useMemo(() => {
     const query = artifactSearch.trim().toLowerCase();
@@ -404,15 +413,6 @@ export function App() {
         if (!mounted) {
           return;
         }
-        let nextSessions = payload.sessions;
-        let nextSelectedSessionId = payload.selectedSessionId;
-        let nextMessages = payload.messages;
-        if (payload.selectedAgentId && !nextSelectedSessionId) {
-          const created = await window.ppxClient.createSession(payload.selectedAgentId);
-          nextSessions = [created.session, ...nextSessions.filter((session) => session.id !== created.session.id)];
-          nextSelectedSessionId = created.session.id;
-          nextMessages = [];
-        }
         const projectPayload = await window.ppxClient.listGmScienceProjects().catch(() => ({ projects: [] }));
         const nextDiagnostics = await window.ppxClient.getDiagnostics().catch(() => null);
         if (!mounted) {
@@ -420,11 +420,11 @@ export function App() {
         }
         setRuntime(payload.runtime);
         setAgents(payload.agents);
-        setSessions(nextSessions);
+        setSessions(payload.sessions);
         nextScrollBehaviorRef.current = "auto";
-        setMessages(nextMessages);
+        setMessages([]);
         setSelectedAgentId(payload.selectedAgentId || payload.agents[0]?.id || "");
-        setSelectedSessionId(nextSelectedSessionId);
+        setSelectedSessionId("");
         setProjects(projectPayload.projects);
         setDiagnostics(nextDiagnostics);
         setConnectionForm(buildConnectionSettings(nextDiagnostics));
@@ -550,11 +550,34 @@ export function App() {
   }
 
   async function openProject(project: GmScienceProject): Promise<void> {
+    const requestId = ++switchRequestIdRef.current;
     setProjectError(null);
     selectedProjectIdRef.current = project.id;
     setSelectedProjectId(project.id);
     setArtifactSearch("");
+    setSelectedSessionId("");
+    setMessages([]);
     setView("workspace");
+    const agentId = selectedAgentId || agents[0]?.id || "";
+    let nextSessions = sessions;
+    if (agentId) {
+      try {
+        nextSessions = (await window.ppxClient.listSessions(agentId)).sessions;
+        setSessions(nextSessions);
+      } catch (error) {
+        setProjectError(error instanceof Error ? error.message : String(error));
+      }
+    }
+    const firstSession = nextSessions.find((session) => session.projectId === project.id);
+    if (firstSession && requestId === switchRequestIdRef.current) {
+      setSelectedAgentId(firstSession.agentId);
+      setSelectedSessionId(firstSession.id);
+      const loaded = await window.ppxClient.loadSession(firstSession.id);
+      if (requestId === switchRequestIdRef.current) {
+        nextScrollBehaviorRef.current = "auto";
+        setMessages(loaded.messages);
+      }
+    }
     await refreshArtifacts(project.id, true);
   }
 
@@ -599,24 +622,32 @@ export function App() {
 
   async function handleNewSession(): Promise<void> {
     const agentId = selectedAgentId || selectedAgent?.id;
-    if (!agentId) {
+    if (!agentId || !selectedProjectId) {
       return;
     }
     setSendError(null);
-    const created = await window.ppxClient.createSession(agentId);
+    const created = await window.ppxClient.createSession(agentId, selectedProjectId);
     setSessions((current) => [created.session, ...current.filter((item) => item.id !== created.session.id)]);
     setSelectedAgentId(agentId);
     setSelectedSessionId(created.session.id);
     setMessages([]);
+    void refreshProjects();
   }
 
-  async function ensureActiveSession(agentId: string, preferredSessionId: string): Promise<SessionSummary> {
-    const existing = sessions.find((session) => session.id === preferredSessionId && session.agentId === agentId);
+  async function ensureActiveSession(
+    agentId: string,
+    projectId: string,
+    preferredSessionId: string,
+  ): Promise<SessionSummary> {
+    const existing = sessions.find(
+      (session) =>
+        session.id === preferredSessionId && session.agentId === agentId && session.projectId === projectId,
+    );
     if (existing) {
       return existing;
     }
     const listed = await window.ppxClient.listSessions(agentId);
-    const firstSession = listed.sessions[0];
+    const firstSession = listed.sessions.find((session) => session.projectId === projectId);
     if (firstSession) {
       setSessions(listed.sessions);
       setSelectedSessionId(firstSession.id);
@@ -627,10 +658,11 @@ export function App() {
       }
       return firstSession;
     }
-    const created = await window.ppxClient.createSession(agentId);
+    const created = await window.ppxClient.createSession(agentId, projectId);
     setSessions((current) => [created.session, ...current.filter((item) => item.id !== created.session.id)]);
     setSelectedSessionId(created.session.id);
     setMessages([]);
+    void refreshProjects();
     return created.session;
   }
 
@@ -657,7 +689,7 @@ export function App() {
     setSendError(null);
     let session: SessionSummary;
     try {
-      session = await ensureActiveSession(agentId, selectedSessionId);
+      session = await ensureActiveSession(agentId, selectedProjectId, selectedSessionId);
     } catch (error) {
       setSendError(error instanceof Error ? error.message : String(error));
       return;
@@ -842,16 +874,17 @@ export function App() {
             <div className="recent-panel">
               <div className="section-title-row">
                 <h2>Recent sessions</h2>
-                <span>{sessions.length}</span>
+                <span>{recentSessions.length}</span>
               </div>
               <div className="recent-list">
-                {sessions.slice(0, 5).map((session) => (
+                {recentSessions.slice(0, 5).map((session) => (
                   <button
                     key={session.id}
                     className="recent-row"
                     onClick={() => {
-                      if (projects[0]) {
-                        void openProject(projects[0]).then(() => void switchSession(session));
+                      const project = projects.find((item) => item.id === session.projectId);
+                      if (project) {
+                        void openProject(project).then(() => void switchSession(session));
                       }
                     }}
                   >
@@ -887,7 +920,7 @@ export function App() {
                   </button>
                 </div>
                 <div className="list-stack">
-                  {sessions.map((session) => (
+                  {projectSessions.map((session) => (
                     <button
                       key={session.id}
                       className={session.id === selectedSessionId ? "list-item active" : "list-item"}

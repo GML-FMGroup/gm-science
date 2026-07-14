@@ -110,6 +110,7 @@ const state: StoreState = {
       {
         id: firstSessionId,
         agentId: "builder",
+        projectId: firstProjectId,
         title: "Build the first ppx-client shell",
         updatedAt: now(),
         lastMessagePreview: "Start from a local-first Electron desktop shell.",
@@ -272,10 +273,11 @@ export async function runRuntimeCommand(command: RuntimeCommand): Promise<Runtim
   return state.runtime;
 }
 
-export async function createSession(agentId: string): Promise<{ session: SessionSummary }> {
+export async function createSession(agentId: string, projectId?: string): Promise<{ session: SessionSummary }> {
   const session: SessionSummary = {
     id: `${agentId}-${crypto.randomUUID()}`,
     agentId,
+    projectId,
     title: "新对话",
     updatedAt: now(),
     lastMessagePreview: "",
@@ -284,6 +286,13 @@ export async function createSession(agentId: string): Promise<{ session: Session
   state.messagesBySession[session.id] = [];
   state.selectedAgentId = agentId;
   state.selectedSessionId = session.id;
+  if (projectId) {
+    state.projects = state.projects.map((project) =>
+      project.id === projectId
+        ? { ...project, sessionsCount: project.sessionsCount + 1, updatedAt: session.updatedAt }
+        : project,
+    );
+  }
   return { session };
 }
 

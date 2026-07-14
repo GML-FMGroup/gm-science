@@ -273,7 +273,12 @@ def _preview_value(value: Any, fallback: str) -> str:
     return dumped[:320] + ("..." if len(dumped) > 320 else "")
 
 
-def _gm_science_project_payload(project: ProjectRecord, *, artifacts_count: int = 0) -> dict[str, Any]:
+def _gm_science_project_payload(
+    project: ProjectRecord,
+    *,
+    sessions_count: int = 0,
+    artifacts_count: int = 0,
+) -> dict[str, Any]:
     """Project one gm-science project into a client API payload."""
 
     return {
@@ -287,7 +292,7 @@ def _gm_science_project_payload(project: ProjectRecord, *, artifacts_count: int 
         "enabled_skills": list(project.enabled_skills),
         "enabled_connectors": list(project.enabled_connectors),
         "enabled_specialists": list(project.enabled_specialists),
-        "sessions_count": 0,
+        "sessions_count": sessions_count,
         "artifacts_count": artifacts_count,
     }
 
@@ -360,6 +365,17 @@ def _strip_request_time_prefix(text: str) -> str:
     while body_lines and not body_lines[0].strip():
         body_lines = body_lines[1:]
     return "\n".join(body_lines).strip()
+
+
+def _visible_user_request(text: str) -> str:
+    """Extract the user-authored request from gm-science's internal context wrapper."""
+
+    if "<gm_science_context>" not in text:
+        return text
+    marker = "\nUser request:\n"
+    if marker not in text:
+        return text
+    return text.rsplit(marker, 1)[1].strip()
 
 
 def _step_ref_payload(*, step_id: str, title: str, status: str, detail: str) -> dict[str, Any]:
@@ -470,7 +486,7 @@ def _session_title_from_events(events: list[dict[str, Any]]) -> str:
     for event in events:
         if str(event.get("author") or "").strip().lower() != "user":
             continue
-        title = _compact_session_title(_event_preview_text(event))
+        title = _compact_session_title(_visible_user_request(_event_preview_text(event)))
         if title:
             return title
     return ""
@@ -513,6 +529,8 @@ def project_session_event(event: dict[str, Any], session_id: str) -> dict[str, A
         text = raw_part.get("text")
         if isinstance(text, str) and text.strip():
             normalized_text = _strip_request_time_prefix(text)
+            if role == "user":
+                normalized_text = _visible_user_request(normalized_text)
             if normalized_text.strip():
                 parts.append({"type": "markdown", "text": normalized_text})
         function_call = raw_part.get("function_call")
@@ -725,7 +743,7 @@ class ClientApiCoordinator:
         self._lock = threading.Lock()
         self._sessions_cache: dict[tuple[str, str], _TimedCacheEntry] = {}
         self._messages_cache: dict[tuple[str, str], _TimedCacheEntry] = {}
-        self._gm_science_store = GmScienceStore(self.data_dir if self._gm_science_mode else None)
+        self._gm_science_store = GmScienceStore(self.data_dir)
 
     def _ensure_requester_principal(self, user_id: str) -> ResolvedPrincipal:
         """Return a persisted requester principal for client-api operations."""
@@ -1128,6 +1146,7 @@ class ClientApiCoordinator:
         items = [
             _gm_science_project_payload(
                 project,
+                sessions_count=self._gm_science_store.count_project_sessions(project.id),
                 artifacts_count=len(self._gm_science_store.list_artifacts(project.id)),
             )
             for project in self._gm_science_store.list_projects()
@@ -1192,6 +1211,7 @@ class ClientApiCoordinator:
             {
                 "project": _gm_science_project_payload(
                     project,
+                    sessions_count=self._gm_science_store.count_project_sessions(project.id),
                     artifacts_count=len(self._gm_science_store.list_artifacts(project.id)),
                 )
             }
@@ -1260,6 +1280,7 @@ class ClientApiCoordinator:
             {
                 "project": _gm_science_project_payload(
                     updated,
+                    sessions_count=self._gm_science_store.count_project_sessions(updated.id),
                     artifacts_count=len(self._gm_science_store.list_artifacts(updated.id)),
                 ),
                 "capabilities": updated_catalog,
@@ -1319,6 +1340,17 @@ class ClientApiCoordinator:
         project = self._gm_science_store.get_project(project_id)
         if project is None:
             return _error("PROJECT_NOT_FOUND", f"Project '{project_id}' was not found.")
+        association = self._gm_science_store.get_project_session(session_id)
+        if association is None or association.project_id != project.id:
+            return _error(
+                "SESSION_NOT_IN_PROJECT",
+                f"Session '{session_id}' does not belong to Project '{project.id}'.",
+            )
+        if association.agent_id != agent_id:
+            return _error(
+                "SESSION_AGENT_MISMATCH",
+                f"Session '{session_id}' belongs to agent '{association.agent_id}', not '{agent_id}'.",
+            )
         literature_config = load_literature_config(agent_config_path(agent_id, self.data_dir))
         source_selection = select_literature_sources(
             literature_config,
@@ -1398,6 +1430,11 @@ class ClientApiCoordinator:
                 {
                     "id": session_id,
                     "agent_id": agent_id,
+                    "project_id": (
+                        association.project_id
+                        if (association := self._gm_science_store.get_project_session(session_id)) is not None
+                        else ""
+                    ),
                     "subject_principal_id": subject_principal_id,
                     "title": str(session.get("title") or "").strip() or f"Session {session_id[:8]}",
                     "updated_at": updated_at,
@@ -1409,10 +1446,19 @@ class ClientApiCoordinator:
         self._write_cache(self._sessions_cache, cache_key, items)
         return _ok({"items": items})
 
-    def create_session(self, agent_id: str, *, user_id: str = "ppx-client-user") -> dict[str, Any]:
-        """Create one session for the target agent."""
+    def create_session(
+        self,
+        agent_id: str,
+        *,
+        user_id: str = "ppx-client-user",
+        project_id: str = "",
+    ) -> dict[str, Any]:
+        """Create one session and optionally associate it with a gm-science Project."""
 
         requester = self._ensure_requester_principal(user_id)
+        normalized_project_id = str(project_id or "").strip()
+        if normalized_project_id and self._gm_science_store.get_project(normalized_project_id) is None:
+            return _error("PROJECT_NOT_FOUND", f"Project '{normalized_project_id}' was not found.")
         config_path = self._ensure_agent_access_state(agent_id)
         if config_path is None:
             return _error("AGENT_NOT_FOUND", f"Agent '{agent_id}' was not found.")
@@ -1449,6 +1495,15 @@ class ClientApiCoordinator:
             except Exception as fallback_exc:
                 return _error("RUNTIME_UNAVAILABLE", str(fallback_exc))
         session_id = str(session.get("id") or session_id)
+        if normalized_project_id:
+            try:
+                self._gm_science_store.link_project_session(
+                    project_id=normalized_project_id,
+                    session_id=session_id,
+                    agent_id=agent_id,
+                )
+            except ValueError as exc:
+                return _error("INVALID_REQUEST", str(exc))
         self._session_agents[session_id] = agent_id
         self._session_owners[session_id] = requester.principal_id
         self._invalidate_agent_cache(agent_id, user_id=requester.principal_id)
@@ -1463,6 +1518,7 @@ class ClientApiCoordinator:
                 "session": {
                     "id": session_id,
                     "agent_id": agent_id,
+                    "project_id": normalized_project_id,
                     "subject_principal_id": requester.principal_id,
                     "title": "新对话",
                     "updated_at": updated_at,
@@ -2713,16 +2769,19 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "keep-alive")
+            self.send_header("Connection", "close")
             self.end_headers()
-            while True:
-                item = subscriber.get()
-                if item is None:
-                    break
-                self.wfile.write(f"id: {item.event_id}\n".encode("utf-8"))
-                self.wfile.write(f"event: {item.event}\n".encode("utf-8"))
-                self.wfile.write(f"data: {json.dumps(item.payload, ensure_ascii=False)}\n\n".encode("utf-8"))
-                self.wfile.flush()
+            try:
+                while True:
+                    item = subscriber.get()
+                    if item is None:
+                        break
+                    self.wfile.write(f"id: {item.event_id}\n".encode("utf-8"))
+                    self.wfile.write(f"event: {item.event}\n".encode("utf-8"))
+                    self.wfile.write(f"data: {json.dumps(item.payload, ensure_ascii=False)}\n\n".encode("utf-8"))
+                    self.wfile.flush()
+            finally:
+                self.close_connection = True
             return
         self._send_json(404, _error("NOT_FOUND", f"Unknown path: {path}"))
 
@@ -2848,8 +2907,12 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
             return
         if len(segments) == 5 and segments[:3] == ["api", "v1", "agents"] and segments[4] == "sessions":
             user_id = str(body.get("user_id") or "ppx-client-user")
-            payload = self.coordinator.create_session(segments[3], user_id=user_id)
-            self._send_json(200 if payload.get("ok") else 404, payload)
+            project_id = str(body.get("project_id") or body.get("projectId") or "")
+            payload = self.coordinator.create_session(segments[3], user_id=user_id, project_id=project_id)
+            status = 200 if payload.get("ok") else 404
+            if not payload.get("ok") and payload.get("error", {}).get("code") == "INVALID_REQUEST":
+                status = 400
+            self._send_json(status, payload)
             return
         if len(segments) == 7 and segments[:3] == ["api", "v1", "agents"] and segments[4] == "sessions" and segments[6] == "runs":
             text = str(body.get("text") or "").strip()

@@ -478,7 +478,11 @@ def test_client_api_reads_sessions_directly_without_worker(tmp_path: Path, monke
                                 text=(
                                     "Current request time: 2026-06-10T16:32:17+08:00 (CST)\n"
                                     "Use this as the reference 'now' for relative time expressions in this message.\n\n"
-                                    "帮我查一下深圳到青岛的火车和费用"
+                                    "<gm_science_context>\n"
+                                    "<project_id>proj_test</project_id>\n"
+                                    "</gm_science_context>\n\n"
+                                    "Project context:\nKeep claims bounded.\n\n"
+                                    "User request:\n帮我查一下深圳到青岛的火车和费用"
                                 )
                             )
                         ],

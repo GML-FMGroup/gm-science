@@ -18,9 +18,10 @@ describe("mock client adapter", () => {
     expect(payload.messages.length).toBeGreaterThan(0);
   });
 
-  it("creates an empty session for the selected agent", async () => {
-    const created = await createSession("builder");
+  it("creates an empty session for the selected project", async () => {
+    const created = await createSession("builder", "proj_mock_research");
     expect(created.session.agentId).toBe("builder");
+    expect(created.session.projectId).toBe("proj_mock_research");
 
     const loaded = await loadSession(created.session.id);
     expect(loaded.messages).toHaveLength(0);

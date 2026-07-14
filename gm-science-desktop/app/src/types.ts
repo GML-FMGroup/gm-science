@@ -64,6 +64,7 @@ export interface AgentProfile {
 export interface SessionSummary {
   id: string;
   agentId: string;
+  projectId?: string;
   title: string;
   updatedAt: string;
   lastMessagePreview: string;
@@ -205,7 +206,7 @@ export interface PpxClientApi {
   saveConnectionSettings(settings: ConnectionSettings): Promise<ClientDiagnostics>;
   runRuntimeCommand(command: RuntimeCommand): Promise<RuntimeStatus>;
   listSessions(agentId: string): Promise<{ sessions: SessionSummary[] }>;
-  createSession(agentId: string): Promise<{ session: SessionSummary }>;
+  createSession(agentId: string, projectId?: string): Promise<{ session: SessionSummary }>;
   loadSession(sessionId: string): Promise<{ messages: ChatMessage[] }>;
   sendMessage(input: SendMessageInput): Promise<{ runId: string }>;
   listGmScienceProjects(): Promise<{ projects: GmScienceProject[] }>;

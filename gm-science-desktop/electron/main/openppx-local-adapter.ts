@@ -823,16 +823,16 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
     return { sessions };
   }
 
-  public async createSession(agentId: string): Promise<{ session: SessionSummary }> {
+  public async createSession(agentId: string, projectId?: string): Promise<{ session: SessionSummary }> {
     if (this.shouldUseMock()) {
-      return mockCreateSession(agentId);
+      return mockCreateSession(agentId, projectId);
     }
     if (!(await this.ensureClientApiAvailable())) {
       throw new Error(`Remote gateway is unavailable for target ${this.target.name}.`);
     }
     const payload = await this.fetchClientApiJson(`/api/v1/agents/${agentId}/sessions`, {
       method: "POST",
-      body: JSON.stringify({}),
+      body: JSON.stringify({ project_id: projectId ?? "" }),
     });
     const session = normalizeClientApiSession((payload.data as Record<string, unknown> | undefined)?.session);
     if (!session) {
@@ -901,6 +901,7 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
     const session = sessionPayload.sessions.find((item) => item.id === input.sessionId) ?? {
       id: input.sessionId,
       agentId: input.agentId,
+      projectId: input.projectId,
       title: "Local session",
       updatedAt: now(),
       lastMessagePreview: input.text,
@@ -922,6 +923,7 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
       let assistantMessage: ChatMessage | null = null;
       let finalText = "";
       let stepParts: StepPart[] = [];
+      let terminalEventReceived = false;
 
       const syncAssistant = (status: ChatMessage["status"]): void => {
         if (!assistantMessage) {
@@ -1020,10 +1022,12 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
             status: "completed",
             finalTextLength: finalText.length,
           });
+          terminalEventReceived = true;
           return;
         }
         if (eventName === "run.cancelled") {
           this.emit({ type: "run.finished", runId, sessionId: input.sessionId });
+          terminalEventReceived = true;
         }
       };
 
@@ -1052,6 +1056,12 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
               continue;
             }
             handleClientApiEvent(eventName, JSON.parse(dataLine) as Record<string, unknown>);
+            if (terminalEventReceived) {
+              clientDebugLog("send.client-api.stream-terminal", { runId, eventName });
+              void reader.cancel().catch(() => undefined);
+              resolve();
+              return;
+            }
           }
         }
         resolve();

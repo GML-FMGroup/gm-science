@@ -1,4 +1,4 @@
-"""SQLite-backed store for gm-science projects and artifacts."""
+"""SQLite-backed store for gm-science projects, sessions, and artifacts."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Iterator
 
-from .models import ArtifactRecord, ProjectRecord
+from .models import ArtifactRecord, ProjectRecord, ProjectSessionRecord
 from .paths import get_gm_science_data_dir
 
 
@@ -165,6 +165,92 @@ class GmScienceStore:
         if updated is None:
             raise RuntimeError(f"Project '{project_id}' disappeared during update.")
         return updated
+
+    def link_project_session(
+        self,
+        *,
+        project_id: str,
+        session_id: str,
+        agent_id: str,
+    ) -> ProjectSessionRecord:
+        """Attach one ADK Session to a Project without allowing cross-Project relinking."""
+
+        if self.get_project(project_id) is None:
+            raise ValueError(f"Project '{project_id}' was not found.")
+        normalized_session_id = str(session_id or "").strip()
+        normalized_agent_id = str(agent_id or "").strip()
+        if not normalized_session_id:
+            raise ValueError("Session id is required.")
+        if not normalized_agent_id:
+            raise ValueError("Agent id is required.")
+        existing = self.get_project_session(normalized_session_id)
+        if existing is not None and existing.project_id != project_id:
+            raise ValueError(
+                f"Session '{normalized_session_id}' already belongs to Project '{existing.project_id}'."
+            )
+        timestamp = _utc_now()
+        created_at = existing.created_at if existing is not None else timestamp
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO gm_science_project_sessions (
+                    session_id, project_id, agent_id, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    agent_id = excluded.agent_id,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    normalized_session_id,
+                    project_id,
+                    normalized_agent_id,
+                    created_at,
+                    timestamp,
+                ),
+            )
+            conn.execute(
+                "UPDATE gm_science_projects SET updated_at = ? WHERE id = ?",
+                (timestamp, project_id),
+            )
+        linked = self.get_project_session(normalized_session_id)
+        if linked is None:
+            raise RuntimeError(f"Session '{normalized_session_id}' was not linked to Project '{project_id}'.")
+        return linked
+
+    def get_project_session(self, session_id: str) -> ProjectSessionRecord | None:
+        """Return the Project association for one Session, if present."""
+
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM gm_science_project_sessions WHERE session_id = ?",
+                (str(session_id or "").strip(),),
+            ).fetchone()
+        return _project_session_from_row(row) if row is not None else None
+
+    def list_project_sessions(self, project_id: str) -> list[ProjectSessionRecord]:
+        """List Session associations for one Project in most-recent order."""
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM gm_science_project_sessions
+                WHERE project_id = ?
+                ORDER BY updated_at DESC, created_at DESC
+                """,
+                (project_id,),
+            ).fetchall()
+        return [_project_session_from_row(row) for row in rows]
+
+    def count_project_sessions(self, project_id: str) -> int:
+        """Return the number of Sessions associated with one Project."""
+
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS count FROM gm_science_project_sessions WHERE project_id = ?",
+                (project_id,),
+            ).fetchone()
+        return int(row["count"] if row is not None else 0)
 
     def create_artifact(
         self,
@@ -348,6 +434,18 @@ class GmScienceStore:
 
                 CREATE INDEX IF NOT EXISTS idx_gm_science_artifacts_project
                 ON gm_science_artifacts(project_id, created_at);
+
+                CREATE TABLE IF NOT EXISTS gm_science_project_sessions (
+                    session_id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(project_id) REFERENCES gm_science_projects(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_gm_science_project_sessions_project
+                ON gm_science_project_sessions(project_id, updated_at);
                 """
             )
 
@@ -382,6 +480,18 @@ def _artifact_from_row(row: sqlite3.Row) -> ArtifactRecord:
         mime_type=str(row["mime_type"]),
         metadata=_json_loads_dict(row["metadata"]),
         provenance=_json_loads_dict(row["provenance"]),
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
+    )
+
+
+def _project_session_from_row(row: sqlite3.Row) -> ProjectSessionRecord:
+    """Project one SQLite row into a ProjectSessionRecord."""
+
+    return ProjectSessionRecord(
+        project_id=str(row["project_id"]),
+        session_id=str(row["session_id"]),
+        agent_id=str(row["agent_id"]),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )
