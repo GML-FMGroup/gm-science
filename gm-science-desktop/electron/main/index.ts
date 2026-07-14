@@ -8,6 +8,7 @@ import type {
   CreateGmScienceProjectInput,
   RuntimeCommand,
   SendMessageInput,
+  UpdateGmScienceCapabilitiesInput,
 } from "../../app/src/types";
 import { OpenPpxLocalAdapter } from "./openppx-local-adapter";
 
@@ -95,6 +96,14 @@ app.whenReady().then(() => {
   );
   ipcMain.handle("ppx-client:get-gm-science-project", async (_event, projectId: string) =>
     adapter!.getGmScienceProject(projectId),
+  );
+  ipcMain.handle("ppx-client:list-gm-science-capabilities", async (_event, projectId?: string) =>
+    adapter!.listGmScienceCapabilities(projectId),
+  );
+  ipcMain.handle(
+    "ppx-client:update-gm-science-project-capabilities",
+    async (_event, projectId: string, input: UpdateGmScienceCapabilitiesInput) =>
+      adapter!.updateGmScienceProjectCapabilities(projectId, input),
   );
   ipcMain.handle("ppx-client:list-gm-science-artifacts", async (_event, projectId: string) =>
     adapter!.listGmScienceArtifacts(projectId),

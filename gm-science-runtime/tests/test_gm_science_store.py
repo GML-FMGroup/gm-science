@@ -32,6 +32,31 @@ def test_create_project_persists_context_and_workspace(tmp_path: Path) -> None:
     assert store.list_projects() == [project]
 
 
+def test_update_project_capabilities_persists_allowlists(tmp_path: Path) -> None:
+    store = GmScienceStore(tmp_path)
+    project = store.create_project(
+        name="Configurable project",
+        description="",
+        agent_context="",
+        enabled_skills=["literature-review"],
+        enabled_connectors=["arxiv", "pubmed"],
+        enabled_specialists=["paper_reader", "research_reviewer"],
+    )
+
+    updated = store.update_project_capabilities(
+        project.id,
+        enabled_skills=[],
+        enabled_connectors=["arxiv"],
+        enabled_specialists=["research_reviewer"],
+    )
+
+    assert updated.enabled_skills == []
+    assert updated.enabled_connectors == ["arxiv"]
+    assert updated.enabled_specialists == ["research_reviewer"]
+    assert updated.updated_at >= project.updated_at
+    assert store.get_project(project.id) == updated
+
+
 def test_create_and_list_project_artifacts_round_trips_metadata(tmp_path: Path) -> None:
     store = GmScienceStore(tmp_path)
     project = store.create_project(

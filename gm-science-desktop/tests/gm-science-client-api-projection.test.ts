@@ -1,5 +1,6 @@
 import {
   normalizeGmScienceArtifact,
+  normalizeGmScienceCapability,
   normalizeGmScienceProject,
 } from "../app/src/lib/client-api-projection";
 
@@ -63,6 +64,35 @@ describe("gm-science client-api projection", () => {
       provenance: { created_by: "science-research" },
       createdAt: "2026-07-10T10:00:00.000Z",
       updatedAt: "2026-07-10T11:00:00.000Z",
+    });
+  });
+
+  it("normalizes capability status without leaking unknown fields", () => {
+    expect(
+      normalizeGmScienceCapability({
+        id: "pubmed",
+        kind: "connector",
+        name: "PubMed",
+        description: "Biomedical literature",
+        available: true,
+        default_enabled: true,
+        project_enabled: false,
+        status: "needs_configuration",
+        status_detail: "Set science.literature.pubmed.email.",
+        metadata: { source: "built_in" },
+        api_key: "must-not-project",
+      }),
+    ).toEqual({
+      id: "pubmed",
+      kind: "connector",
+      name: "PubMed",
+      description: "Biomedical literature",
+      available: true,
+      defaultEnabled: true,
+      projectEnabled: false,
+      status: "needs_configuration",
+      statusDetail: "Set science.literature.pubmed.email.",
+      metadata: { source: "built_in" },
     });
   });
 });

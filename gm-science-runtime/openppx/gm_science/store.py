@@ -133,6 +133,39 @@ class GmScienceStore:
             ).fetchall()
         return [_project_from_row(row) for row in rows]
 
+    def update_project_capabilities(
+        self,
+        project_id: str,
+        *,
+        enabled_skills: list[str],
+        enabled_connectors: list[str],
+        enabled_specialists: list[str],
+    ) -> ProjectRecord:
+        """Replace one Project's capability allowlists and return the updated record."""
+
+        if self.get_project(project_id) is None:
+            raise ValueError(f"Project '{project_id}' was not found.")
+        timestamp = _utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE gm_science_projects
+                SET enabled_skills = ?, enabled_connectors = ?, enabled_specialists = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    _json_dumps(enabled_skills),
+                    _json_dumps(enabled_connectors),
+                    _json_dumps(enabled_specialists),
+                    timestamp,
+                    project_id,
+                ),
+            )
+        updated = self.get_project(project_id)
+        if updated is None:
+            raise RuntimeError(f"Project '{project_id}' disappeared during update.")
+        return updated
+
     def create_artifact(
         self,
         *,

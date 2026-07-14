@@ -12,6 +12,10 @@ const api = {
   listGmScienceProjects: () => ipcRenderer.invoke("ppx-client:list-gm-science-projects"),
   createGmScienceProject: (input) => ipcRenderer.invoke("ppx-client:create-gm-science-project", input),
   getGmScienceProject: (projectId) => ipcRenderer.invoke("ppx-client:get-gm-science-project", projectId),
+  listGmScienceCapabilities: (projectId) =>
+    ipcRenderer.invoke("ppx-client:list-gm-science-capabilities", projectId),
+  updateGmScienceProjectCapabilities: (projectId, input) =>
+    ipcRenderer.invoke("ppx-client:update-gm-science-project-capabilities", projectId, input),
   listGmScienceArtifacts: (projectId) => ipcRenderer.invoke("ppx-client:list-gm-science-artifacts", projectId),
   createGmScienceArtifact: (projectId, input) =>
     ipcRenderer.invoke("ppx-client:create-gm-science-artifact", projectId, input),

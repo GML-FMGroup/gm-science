@@ -19,6 +19,7 @@ from typing import Any
 from ..core.config import get_data_dir
 from ..core.logging_utils import debug_logging_enabled, emit_debug
 from ..gm_science.bootstrap import GM_SCIENCE_DEFAULT_AGENT_NAME, ensure_gm_science_initialized
+from ..gm_science.capabilities import build_capability_catalog, normalize_capability_selection
 from ..gm_science.literature.config import load_literature_config, select_literature_sources
 from ..gm_science.models import ArtifactRecord, ProjectRecord
 from ..gm_science.specialists.config import load_specialist_config
@@ -90,6 +91,16 @@ def _project_capability_values(
     if not isinstance(raw, list):
         raise ValueError(f"Field '{snake_case_key}' must be an array.")
     return [str(item).strip() for item in raw if str(item).strip()]
+
+
+def _default_capability_ids(kind: str, catalog: list[dict[str, Any]]) -> tuple[str, ...]:
+    """Return default-enabled capability IDs of one kind in catalog order."""
+
+    return tuple(
+        str(item["id"])
+        for item in catalog
+        if item.get("kind") == kind and item.get("default_enabled") is True
+    )
 
 
 _MUTATION_AUDIT_ACTIONS = (
@@ -1130,31 +1141,41 @@ class ClientApiCoordinator:
         if not name:
             return _error("INVALID_REQUEST", "Field 'name' is required.")
         try:
-            specialist_config = load_specialist_config(
-                agent_config_path(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir)
-            )
-            defaults = specialist_config.project_defaults
+            config_path = agent_config_path(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir)
+            catalog = build_capability_catalog(config_path=config_path)
             project = self._gm_science_store.create_project(
                 name=name,
                 description=str(body.get("description") or ""),
                 agent_context=str(body.get("agent_context") or body.get("agentContext") or ""),
-                enabled_skills=_project_capability_values(
-                    body,
-                    "enabled_skills",
-                    "enabledSkills",
-                    defaults.enabled_skills,
+                enabled_skills=normalize_capability_selection(
+                    kind="skill",
+                    values=_project_capability_values(
+                        body,
+                        "enabled_skills",
+                        "enabledSkills",
+                        _default_capability_ids("skill", catalog),
+                    ),
+                    catalog=catalog,
                 ),
-                enabled_connectors=_project_capability_values(
-                    body,
-                    "enabled_connectors",
-                    "enabledConnectors",
-                    defaults.enabled_connectors,
+                enabled_connectors=normalize_capability_selection(
+                    kind="connector",
+                    values=_project_capability_values(
+                        body,
+                        "enabled_connectors",
+                        "enabledConnectors",
+                        _default_capability_ids("connector", catalog),
+                    ),
+                    catalog=catalog,
                 ),
-                enabled_specialists=_project_capability_values(
-                    body,
-                    "enabled_specialists",
-                    "enabledSpecialists",
-                    defaults.enabled_specialists,
+                enabled_specialists=normalize_capability_selection(
+                    kind="specialist",
+                    values=_project_capability_values(
+                        body,
+                        "enabled_specialists",
+                        "enabledSpecialists",
+                        _default_capability_ids("specialist", catalog),
+                    ),
+                    catalog=catalog,
                 ),
             )
         except ValueError as exc:
@@ -1173,6 +1194,75 @@ class ClientApiCoordinator:
                     project,
                     artifacts_count=len(self._gm_science_store.list_artifacts(project.id)),
                 )
+            }
+        )
+
+    def list_gm_science_capabilities(self, project_id: str | None = None) -> dict[str, Any]:
+        """Return the public capability catalog for the system or one Project."""
+
+        project = None
+        if project_id:
+            project = self._gm_science_store.get_project(project_id)
+            if project is None:
+                return _error("PROJECT_NOT_FOUND", f"Project '{project_id}' was not found.")
+        config_path = agent_config_path(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir)
+        return _ok(
+            {
+                "project_id": project.id if project is not None else None,
+                "items": build_capability_catalog(config_path=config_path, project=project),
+            }
+        )
+
+    def update_gm_science_project_capabilities(
+        self,
+        project_id: str,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Validate and persist one Project's capability allowlists."""
+
+        project = self._gm_science_store.get_project(project_id)
+        if project is None:
+            return _error("PROJECT_NOT_FOUND", f"Project '{project_id}' was not found.")
+        config_path = agent_config_path(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir)
+        catalog = build_capability_catalog(config_path=config_path, project=project)
+        try:
+            skills = _project_capability_values(body, "enabled_skills", "enabledSkills", tuple(project.enabled_skills))
+            connectors = _project_capability_values(
+                body,
+                "enabled_connectors",
+                "enabledConnectors",
+                tuple(project.enabled_connectors),
+            )
+            specialists = _project_capability_values(
+                body,
+                "enabled_specialists",
+                "enabledSpecialists",
+                tuple(project.enabled_specialists),
+            )
+            updated = self._gm_science_store.update_project_capabilities(
+                project_id,
+                enabled_skills=normalize_capability_selection(kind="skill", values=skills, catalog=catalog),
+                enabled_connectors=normalize_capability_selection(
+                    kind="connector",
+                    values=connectors,
+                    catalog=catalog,
+                ),
+                enabled_specialists=normalize_capability_selection(
+                    kind="specialist",
+                    values=specialists,
+                    catalog=catalog,
+                ),
+            )
+        except ValueError as exc:
+            return _error("INVALID_REQUEST", str(exc))
+        updated_catalog = build_capability_catalog(config_path=config_path, project=updated)
+        return _ok(
+            {
+                "project": _gm_science_project_payload(
+                    updated,
+                    artifacts_count=len(self._gm_science_store.list_artifacts(updated.id)),
+                ),
+                "capabilities": updated_catalog,
             }
         )
 
@@ -2531,6 +2621,9 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
         if path == "/api/v1/runtime/status":
             self._send_json(200, self.coordinator.runtime_status())
             return
+        if segments == ["api", "v1", "gm-science", "capabilities"]:
+            self._send_json(200, self.coordinator.list_gm_science_capabilities())
+            return
         if segments == ["api", "v1", "gm-science", "projects"]:
             self._send_json(200, self.coordinator.list_gm_science_projects())
             return
@@ -2544,6 +2637,14 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
             and segments[5] == "artifacts"
         ):
             payload = self.coordinator.list_gm_science_artifacts(segments[4])
+            self._send_json(200 if payload.get("ok") else 404, payload)
+            return
+        if (
+            len(segments) == 6
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "capabilities"
+        ):
+            payload = self.coordinator.list_gm_science_capabilities(segments[4])
             self._send_json(200 if payload.get("ok") else 404, payload)
             return
         if len(segments) == 5 and segments[:3] == ["api", "v1", "agents"] and segments[4] == "sessions":
@@ -2622,6 +2723,22 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
                 self.wfile.write(f"event: {item.event}\n".encode("utf-8"))
                 self.wfile.write(f"data: {json.dumps(item.payload, ensure_ascii=False)}\n\n".encode("utf-8"))
                 self.wfile.flush()
+            return
+        self._send_json(404, _error("NOT_FOUND", f"Unknown path: {path}"))
+
+    def do_PATCH(self) -> None:  # noqa: N802
+        path, segments, _query = self._parse()
+        body = self._read_json_body()
+        if (
+            len(segments) == 6
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "capabilities"
+        ):
+            payload = self.coordinator.update_gm_science_project_capabilities(segments[4], body)
+            status = 200 if payload.get("ok") else 400
+            if not payload.get("ok") and payload.get("error", {}).get("code") == "PROJECT_NOT_FOUND":
+                status = 404
+            self._send_json(status, payload)
             return
         self._send_json(404, _error("NOT_FOUND", f"Unknown path: {path}"))
 

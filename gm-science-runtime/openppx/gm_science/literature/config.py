@@ -107,16 +107,16 @@ def select_literature_sources(
     config: LiteratureConfig,
     *,
     requested_sources: Sequence[str] | None = None,
-    enabled_connectors: Sequence[str] = (),
+    enabled_connectors: Sequence[str] | None = None,
 ) -> LiteratureSourceSelection:
     """Apply strict request validation and a Project connector allowlist."""
 
     requested = config.default_sources if requested_sources is None else _strict_sources(requested_sources)
     if not requested:
         raise ValueError("At least one literature source is required.")
-    configured_connectors = tuple(str(value).strip().lower() for value in enabled_connectors if str(value).strip())
-    if not configured_connectors:
+    if enabled_connectors is None:
         return LiteratureSourceSelection(requested=requested, allowed=requested, project_disabled=())
+    configured_connectors = tuple(str(value).strip().lower() for value in enabled_connectors if str(value).strip())
     project_enabled = set(configured_connectors).intersection(SUPPORTED_LITERATURE_SOURCES)
     allowed = tuple(source for source in requested if source in project_enabled)
     disabled = tuple(source for source in requested if source not in project_enabled)

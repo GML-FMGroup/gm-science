@@ -72,7 +72,12 @@ def test_science_list_sources_never_exposes_identity_or_keys(monkeypatch) -> Non
 def test_science_search_saves_and_reuses_project_paper_artifacts(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
     store = GmScienceStore(tmp_path)
-    project = store.create_project(name="Review", description="", agent_context="")
+    project = store.create_project(
+        name="Review",
+        description="",
+        agent_context="",
+        enabled_connectors=["arxiv", "pubmed", "openalex"],
+    )
     service = FakeSearchService(_search_result())
     monkeypatch.setattr(tools, "load_literature_config", lambda: _config())
     monkeypatch.setattr(tools, "_build_search_service", lambda _config: service)
@@ -100,7 +105,12 @@ def test_science_search_saves_and_reuses_project_paper_artifacts(tmp_path: Path,
 def test_science_search_can_skip_saving(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
     store = GmScienceStore(tmp_path)
-    project = store.create_project(name="Review", description="", agent_context="")
+    project = store.create_project(
+        name="Review",
+        description="",
+        agent_context="",
+        enabled_connectors=["arxiv", "pubmed", "openalex"],
+    )
     monkeypatch.setattr(tools, "load_literature_config", lambda: _config())
     monkeypatch.setattr(tools, "_build_search_service", lambda _config: FakeSearchService(_search_result()))
 

@@ -51,6 +51,23 @@ describe("preload API", () => {
       channel: "ppx-client:get-gm-science-project",
       args: ["proj-1"],
     });
+    expect(api.listGmScienceCapabilities("proj-1")).toEqual({
+      channel: "ppx-client:list-gm-science-capabilities",
+      args: ["proj-1"],
+    });
+    expect(
+      api.updateGmScienceProjectCapabilities("proj-1", {
+        enabledSkills: [],
+        enabledConnectors: ["arxiv"],
+        enabledSpecialists: [],
+      }),
+    ).toEqual({
+      channel: "ppx-client:update-gm-science-project-capabilities",
+      args: [
+        "proj-1",
+        { enabledSkills: [], enabledConnectors: ["arxiv"], enabledSpecialists: [] },
+      ],
+    });
     expect(api.listGmScienceArtifacts("proj-1")).toEqual({
       channel: "ppx-client:list-gm-science-artifacts",
       args: ["proj-1"],
@@ -59,6 +76,6 @@ describe("preload API", () => {
       channel: "ppx-client:create-gm-science-artifact",
       args: ["proj-1", { title: "note" }],
     });
-    expect(invoke).toHaveBeenCalledTimes(5);
+    expect(invoke).toHaveBeenCalledTimes(7);
   });
 });

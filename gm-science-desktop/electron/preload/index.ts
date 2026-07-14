@@ -7,6 +7,7 @@ import type {
   RunEvent,
   RuntimeCommand,
   SendMessageInput,
+  UpdateGmScienceCapabilitiesInput,
 } from "../../app/src/types";
 
 const api: PpxClientApi = {
@@ -22,6 +23,10 @@ const api: PpxClientApi = {
   createGmScienceProject: (input: CreateGmScienceProjectInput) =>
     ipcRenderer.invoke("ppx-client:create-gm-science-project", input),
   getGmScienceProject: (projectId: string) => ipcRenderer.invoke("ppx-client:get-gm-science-project", projectId),
+  listGmScienceCapabilities: (projectId?: string) =>
+    ipcRenderer.invoke("ppx-client:list-gm-science-capabilities", projectId),
+  updateGmScienceProjectCapabilities: (projectId: string, input: UpdateGmScienceCapabilitiesInput) =>
+    ipcRenderer.invoke("ppx-client:update-gm-science-project-capabilities", projectId, input),
   listGmScienceArtifacts: (projectId: string) => ipcRenderer.invoke("ppx-client:list-gm-science-artifacts", projectId),
   createGmScienceArtifact: (projectId: string, input: CreateGmScienceArtifactInput) =>
     ipcRenderer.invoke("ppx-client:create-gm-science-artifact", projectId, input),

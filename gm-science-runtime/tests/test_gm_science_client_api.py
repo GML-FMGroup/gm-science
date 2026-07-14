@@ -56,6 +56,32 @@ def test_handler_routes_expose_gm_science_project_and_artifact_api(tmp_path: Pat
     assert sent[-1][1]["data"]["items"] == [artifact["data"]["artifact"]]
 
 
+def test_handler_routes_expose_project_capability_api(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    project = coordinator.create_gm_science_project({"name": "Capabilities"})["data"]["project"]
+    handler, sent = _fake_handler(coordinator)
+
+    handler._parse = lambda: (
+        f"/api/v1/gm-science/projects/{project['id']}/capabilities",
+        ["api", "v1", "gm-science", "projects", project["id"], "capabilities"],
+        {},
+    )
+    _ClientApiHandler.do_GET(handler)
+    assert sent[-1][0] == 200
+    assert sent[-1][1]["data"]["project_id"] == project["id"]
+
+    handler._read_json_body = lambda: {
+        "enabled_skills": [],
+        "enabled_connectors": ["arxiv"],
+        "enabled_specialists": ["research_reviewer"],
+    }
+    _ClientApiHandler.do_PATCH(handler)
+    assert sent[-1][0] == 200
+    assert sent[-1][1]["data"]["project"]["enabled_connectors"] == ["arxiv"]
+
+
 def test_client_api_bootstraps_default_science_agent_in_gm_science_mode(
     tmp_path: Path,
     monkeypatch,
@@ -126,6 +152,133 @@ def test_client_api_project_explicit_empty_capabilities_override_defaults(
     assert project["enabled_skills"] == []
     assert project["enabled_connectors"] == []
     assert project["enabled_specialists"] == []
+
+
+def test_client_api_normalizes_capabilities_when_creating_project(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+
+    created = coordinator.create_gm_science_project(
+        {
+            "name": "Ordered project",
+            "enabled_skills": [],
+            "enabled_connectors": ["openalex", "arxiv", "openalex"],
+            "enabled_specialists": ["research_reviewer"],
+        }
+    )
+
+    assert created["ok"] is True
+    project = created["data"]["project"]
+    assert project["enabled_connectors"] == ["arxiv", "openalex"]
+    assert project["enabled_specialists"] == ["research_reviewer"]
+
+
+def test_client_api_rejects_unknown_capability_when_creating_project(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+
+    payload = coordinator.create_gm_science_project(
+        {
+            "name": "Invalid project",
+            "enabled_skills": ["unknown-skill"],
+        }
+    )
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "INVALID_REQUEST"
+    assert "unknown-skill" in payload["error"]["message"]
+
+
+def test_client_api_lists_capabilities_with_global_and_project_status(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    project = coordinator.create_gm_science_project({"name": "Catalog"})["data"]["project"]
+
+    payload = coordinator.list_gm_science_capabilities(project["id"])
+
+    assert payload["ok"] is True
+    assert payload["data"]["project_id"] == project["id"]
+    items = {item["id"]: item for item in payload["data"]["items"]}
+    assert list(items) == [
+        "literature-review",
+        "arxiv",
+        "pubmed",
+        "openalex",
+        "paper_reader",
+        "research_reviewer",
+    ]
+    assert items["literature-review"] == {
+        "id": "literature-review",
+        "kind": "skill",
+        "name": "Literature Review",
+        "description": "Search scholarly sources, synthesize evidence, and register a cited review.",
+        "available": True,
+        "default_enabled": True,
+        "project_enabled": True,
+        "status": "ready",
+        "status_detail": "",
+        "metadata": {"source": "built_in"},
+    }
+    assert items["arxiv"]["status"] == "ready"
+    assert items["pubmed"]["status"] == "needs_configuration"
+    assert items["pubmed"]["status_detail"] == "Set science.literature.pubmed.email."
+    assert items["openalex"]["status"] == "needs_configuration"
+    assert items["paper_reader"]["metadata"]["auto_dispatch"] is True
+    assert "api_key" not in json.dumps(payload)
+
+
+def test_client_api_updates_project_capabilities_in_catalog_order(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    project = coordinator.create_gm_science_project({"name": "Catalog"})["data"]["project"]
+
+    payload = coordinator.update_gm_science_project_capabilities(
+        project["id"],
+        {
+            "enabled_skills": [],
+            "enabled_connectors": ["openalex", "arxiv", "openalex"],
+            "enabled_specialists": ["research_reviewer"],
+        },
+    )
+
+    assert payload["ok"] is True
+    updated = payload["data"]["project"]
+    assert updated["enabled_skills"] == []
+    assert updated["enabled_connectors"] == ["arxiv", "openalex"]
+    assert updated["enabled_specialists"] == ["research_reviewer"]
+    statuses = {item["id"]: item for item in payload["data"]["capabilities"]}
+    assert statuses["pubmed"]["project_enabled"] is False
+    assert statuses["openalex"]["project_enabled"] is True
+
+
+def test_client_api_rejects_unknown_project_capability(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    project = coordinator.create_gm_science_project({"name": "Catalog"})["data"]["project"]
+
+    payload = coordinator.update_gm_science_project_capabilities(
+        project["id"],
+        {
+            "enabled_skills": ["unknown-skill"],
+            "enabled_connectors": [],
+            "enabled_specialists": [],
+        },
+    )
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "INVALID_REQUEST"
+    assert "unknown-skill" in payload["error"]["message"]
 
 
 def test_client_api_rejects_gm_science_project_without_name(tmp_path: Path, monkeypatch) -> None:

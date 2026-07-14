@@ -144,6 +144,16 @@ function installClient(overrides: Partial<PpxClientApi> = {}): { client: PpxClie
         updatedAt: "2026-04-02T10:00:00.000Z",
       },
     }),
+    listGmScienceCapabilities: async (projectId) => ({ projectId: projectId ?? "", items: [] }),
+    updateGmScienceProjectCapabilities: async (projectId, input) => ({
+      project: buildProject({
+        id: projectId,
+        enabledSkills: input.enabledSkills,
+        enabledConnectors: input.enabledConnectors,
+        enabledSpecialists: input.enabledSpecialists,
+      }),
+      capabilities: [],
+    }),
     listGmScienceArtifacts: async () => ({ artifacts: [] }),
     createGmScienceArtifact: async (projectId, input) => ({
       artifact: {
@@ -567,6 +577,7 @@ describe("App sending state", () => {
     await screen.findByText("gm-science");
 
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Runtime" }));
 
     await screen.findByText("Connection");
     expect(screen.getByText("http://127.0.0.1:8876")).toBeInTheDocument();
@@ -583,6 +594,7 @@ describe("App sending state", () => {
     render(<App />);
     await screen.findByText("gm-science");
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Runtime" }));
     fireEvent.click(await screen.findByRole("button", { name: "重启" }));
 
     await screen.findByText("Local gm-science client-api failed to start: address already in use");
@@ -598,6 +610,7 @@ describe("App sending state", () => {
     render(<App />);
     await screen.findByText("gm-science");
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Runtime" }));
     fireEvent.click(await screen.findByRole("button", { name: "Save connection" }));
 
     await screen.findByText("Unable to save local connection");
@@ -619,6 +632,7 @@ describe("App sending state", () => {
 
     await screen.findByText("gm-science");
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Runtime" }));
 
     await screen.findByText("Ops Gateway (remote)");
     expect(screen.getAllByText("remote").length).toBeGreaterThan(0);
@@ -649,6 +663,7 @@ describe("App sending state", () => {
 
     await screen.findByText("gm-science");
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Runtime" }));
 
     fireEvent.change(screen.getByDisplayValue("This Mac"), {
       target: { value: "Ops Gateway" },

@@ -93,6 +93,34 @@ export interface CreateGmScienceProjectInput {
   enabledSpecialists?: string[];
 }
 
+export type GmScienceCapabilityKind = "skill" | "connector" | "specialist";
+
+export type GmScienceCapabilityStatus = "ready" | "needs_configuration" | "disabled";
+
+export interface GmScienceCapability {
+  id: string;
+  kind: GmScienceCapabilityKind;
+  name: string;
+  description: string;
+  available: boolean;
+  defaultEnabled: boolean;
+  projectEnabled: boolean | null;
+  status: GmScienceCapabilityStatus;
+  statusDetail: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface GmScienceCapabilityCatalog {
+  projectId: string;
+  items: GmScienceCapability[];
+}
+
+export interface UpdateGmScienceCapabilitiesInput {
+  enabledSkills: string[];
+  enabledConnectors: string[];
+  enabledSpecialists: string[];
+}
+
 export interface GmScienceArtifact {
   id: string;
   projectId: string;
@@ -183,6 +211,11 @@ export interface PpxClientApi {
   listGmScienceProjects(): Promise<{ projects: GmScienceProject[] }>;
   createGmScienceProject(input: CreateGmScienceProjectInput): Promise<{ project: GmScienceProject }>;
   getGmScienceProject(projectId: string): Promise<{ project: GmScienceProject }>;
+  listGmScienceCapabilities(projectId?: string): Promise<GmScienceCapabilityCatalog>;
+  updateGmScienceProjectCapabilities(
+    projectId: string,
+    input: UpdateGmScienceCapabilitiesInput,
+  ): Promise<{ project: GmScienceProject; capabilities: GmScienceCapability[] }>;
   listGmScienceArtifacts(projectId: string): Promise<{ artifacts: GmScienceArtifact[] }>;
   createGmScienceArtifact(
     projectId: string,

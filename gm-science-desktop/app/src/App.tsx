@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { CapabilitiesPanel } from "./components/CapabilitiesPanel";
 import { MessageBubble } from "./components/MessageBubble";
 import type {
   AgentProfile,
@@ -7,6 +8,8 @@ import type {
   ClientDiagnostics,
   ConnectionSettings,
   GmScienceArtifact,
+  GmScienceCapability,
+  GmScienceCapabilityKind,
   GmScienceProject,
   RuntimeState,
   RuntimeStatus,
@@ -14,6 +17,7 @@ import type {
 } from "./types";
 
 type NavView = "projects" | "workspace" | "settings";
+type SettingsSection = GmScienceCapabilityKind | "runtime";
 
 interface ProjectFormState {
   name: string;
@@ -305,6 +309,12 @@ export function App() {
   const [sendError, setSendError] = useState<string | null>(null);
   const [projectError, setProjectError] = useState<string | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("skill");
+  const [capabilities, setCapabilities] = useState<GmScienceCapability[]>([]);
+  const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
+  const [capabilitiesSaving, setCapabilitiesSaving] = useState(false);
+  const [capabilitiesDirty, setCapabilitiesDirty] = useState(false);
+  const [capabilitiesError, setCapabilitiesError] = useState<string | null>(null);
   const [sendingSessionIds, setSendingSessionIds] = useState<string[]>([]);
   const [connectionForm, setConnectionForm] = useState<ConnectionSettings>(buildConnectionSettings(null));
   const [savingConnection, setSavingConnection] = useState(false);
@@ -439,6 +449,13 @@ export function App() {
   }, [composer]);
 
   useEffect(() => {
+    if (view !== "settings") {
+      return;
+    }
+    void refreshCapabilities();
+  }, [view, selectedProjectId]);
+
+  useEffect(() => {
     const stream = messageStreamRef.current;
     if (!stream) {
       return;
@@ -455,6 +472,65 @@ export function App() {
   async function refreshProjects(): Promise<void> {
     const listed = await window.ppxClient.listGmScienceProjects();
     setProjects(listed.projects);
+  }
+
+  async function refreshCapabilities(): Promise<void> {
+    setCapabilitiesLoading(true);
+    setCapabilitiesError(null);
+    try {
+      const catalog = await window.ppxClient.listGmScienceCapabilities(selectedProjectId || undefined);
+      setCapabilities(catalog.items);
+      setCapabilitiesDirty(false);
+    } catch (error) {
+      setCapabilitiesError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCapabilitiesLoading(false);
+    }
+  }
+
+  function openSettings(section: SettingsSection): void {
+    setSettingsSection(section);
+    setView("settings");
+  }
+
+  function toggleCapability(capabilityId: string): void {
+    setCapabilities((current) =>
+      current.map((item) =>
+        item.id === capabilityId
+          ? { ...item, projectEnabled: !(item.projectEnabled ?? item.defaultEnabled) }
+          : item,
+      ),
+    );
+    setCapabilitiesDirty(true);
+    setCapabilitiesError(null);
+  }
+
+  async function saveCapabilities(): Promise<void> {
+    if (!selectedProjectId) {
+      return;
+    }
+    setCapabilitiesSaving(true);
+    setCapabilitiesError(null);
+    try {
+      const response = await window.ppxClient.updateGmScienceProjectCapabilities(selectedProjectId, {
+        enabledSkills: capabilities.filter((item) => item.kind === "skill" && item.projectEnabled).map((item) => item.id),
+        enabledConnectors: capabilities
+          .filter((item) => item.kind === "connector" && item.projectEnabled)
+          .map((item) => item.id),
+        enabledSpecialists: capabilities
+          .filter((item) => item.kind === "specialist" && item.projectEnabled)
+          .map((item) => item.id),
+      });
+      setProjects((current) =>
+        current.map((project) => (project.id === response.project.id ? response.project : project)),
+      );
+      setCapabilities(response.capabilities);
+      setCapabilitiesDirty(false);
+    } catch (error) {
+      setCapabilitiesError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCapabilitiesSaving(false);
+    }
   }
 
   async function refreshArtifacts(projectId: string, clearOnError = false): Promise<void> {
@@ -711,7 +787,7 @@ export function App() {
           </button>
           <button
             className={view === "settings" ? "nav-item active" : "nav-item"}
-            onClick={() => setView("settings")}
+            onClick={() => openSettings("skill")}
             aria-label="设置"
             title="设置"
           >
@@ -799,6 +875,9 @@ export function App() {
               <div className="active-project-block">
                 <strong>{selectedProject.name}</strong>
                 <p>{selectedProject.description || "Personal research workspace"}</p>
+                <button className="project-customize" onClick={() => openSettings("skill")}>
+                  Customize
+                </button>
               </div>
               <div className="sidebar-section">
                 <div className="sidebar-section-header">
@@ -831,7 +910,7 @@ export function App() {
                 <strong>{selectedSession?.title ?? selectedProject.name}</strong>
                 <span>{selectedAgent?.name ?? "science-research"}</span>
               </div>
-              <button className="topbar-pill" onClick={() => setView("settings")}>
+              <button className="topbar-pill" onClick={() => openSettings("runtime")}>
                 <span className={`runtime-dot ${runtime.state}`} />
                 {runtime.state}
               </button>
@@ -901,89 +980,119 @@ export function App() {
           <header className="column-topbar workspace-topbar">
             <div className="topbar-copy">
               <strong>Settings</strong>
-              <span>gm-science local runtime</span>
+              <span>{selectedProject?.name ?? "gm-science local runtime"}</span>
             </div>
           </header>
           <section className="workspace-frame settings-frame">
-            <div className="settings-page">
-              {settingsError ? <p className="composer-error">{settingsError}</p> : null}
-              <section className="settings-card runtime-panel">
-                <h2>Runtime</h2>
-                <p>{runtime.summary}</p>
-                <small>{runtime.detail}</small>
-                <div className="runtime-actions">
-                  <button className="secondary" onClick={() => void handleRuntimeAction()}>
-                    {runtimeActionLabel(runtime.state)}
-                  </button>
-                  <button className="secondary" onClick={() => void refreshDiagnostics()}>
-                    Refresh
-                  </button>
-                </div>
-              </section>
-
-              <section className="settings-card">
-                <h2>Connection</h2>
-                <label className="settings-field">
-                  <span>Target type</span>
-                  <select
-                    value={connectionForm.targetType}
-                    onChange={(event) =>
-                      setConnectionForm((current) => ({
-                        ...current,
-                        targetType: event.target.value === "remote" ? "remote" : "local",
-                      }))
-                    }
-                  >
-                    <option value="local">local</option>
-                    <option value="remote">remote</option>
-                  </select>
-                </label>
-                <label className="settings-field">
-                  <span>Target name</span>
-                  <input
-                    value={connectionForm.targetName}
-                    onChange={(event) => setConnectionForm((current) => ({ ...current, targetName: event.target.value }))}
-                  />
-                </label>
-                <label className="settings-field">
-                  <span>Client API URL</span>
-                  <input
-                    value={connectionForm.clientApiBaseUrl}
-                    onChange={(event) =>
-                      setConnectionForm((current) => ({ ...current, clientApiBaseUrl: event.target.value }))
-                    }
-                  />
-                </label>
-                <button className="primary" disabled={savingConnection} onClick={() => void handleConnectionSave()}>
-                  {savingConnection ? "Saving..." : "Save connection"}
+            <div className="settings-layout">
+              <aside className="settings-menu" aria-label="Settings sections">
+                <span className="settings-menu-label">Capabilities</span>
+                <button className={settingsSection === "skill" ? "active" : ""} onClick={() => setSettingsSection("skill")}>
+                  Skills
                 </button>
-              </section>
+                <button
+                  className={settingsSection === "connector" ? "active" : ""}
+                  onClick={() => setSettingsSection("connector")}
+                >
+                  Connectors
+                </button>
+                <button
+                  className={settingsSection === "specialist" ? "active" : ""}
+                  onClick={() => setSettingsSection("specialist")}
+                >
+                  Specialists
+                </button>
+                <span className="settings-menu-label workspace-label">Workspace</span>
+                <button className={settingsSection === "runtime" ? "active" : ""} onClick={() => setSettingsSection("runtime")}>
+                  Runtime
+                </button>
+              </aside>
 
-              {diagnostics ? (
-                <section className="settings-card">
-                  <h2>Diagnostics</h2>
-                  <dl className="diagnostics-list">
-                    <div>
-                      <dt>Mode</dt>
-                      <dd>{diagnostics.mode}</dd>
-                    </div>
-                    <div>
-                      <dt>Target</dt>
-                      <dd>
-                        {diagnostics.target.name} ({diagnostics.target.type})
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Client API</dt>
-                      <dd>{diagnostics.clientApiBaseUrl}</dd>
-                    </div>
-                    <div>
-                      <dt>Data config</dt>
-                      <dd>{diagnostics.globalConfigPath}</dd>
-                    </div>
-                  </dl>
-                </section>
-              ) : null}
+              <div className="settings-content">
+                {settingsSection !== "runtime" ? (
+                  <CapabilitiesPanel
+                    kind={settingsSection}
+                    projectName={selectedProject?.name ?? ""}
+                    items={capabilities}
+                    loading={capabilitiesLoading}
+                    saving={capabilitiesSaving}
+                    dirty={capabilitiesDirty}
+                    error={capabilitiesError}
+                    onToggle={toggleCapability}
+                    onSave={() => void saveCapabilities()}
+                    onRefresh={() => void refreshCapabilities()}
+                  />
+                ) : (
+                  <div className="settings-page runtime-settings-page">
+                    {settingsError ? <p className="composer-error">{settingsError}</p> : null}
+                    <section className="settings-card runtime-panel">
+                      <h2>Runtime</h2>
+                      <p>{runtime.summary}</p>
+                      <small>{runtime.detail}</small>
+                      <div className="runtime-actions">
+                        <button className="secondary" onClick={() => void handleRuntimeAction()}>
+                          {runtimeActionLabel(runtime.state)}
+                        </button>
+                        <button className="secondary" onClick={() => void refreshDiagnostics()}>
+                          Refresh
+                        </button>
+                      </div>
+                    </section>
+
+                    <section className="settings-card">
+                      <h2>Connection</h2>
+                      <label className="settings-field">
+                        <span>Target type</span>
+                        <select
+                          value={connectionForm.targetType}
+                          onChange={(event) =>
+                            setConnectionForm((current) => ({
+                              ...current,
+                              targetType: event.target.value === "remote" ? "remote" : "local",
+                            }))
+                          }
+                        >
+                          <option value="local">local</option>
+                          <option value="remote">remote</option>
+                        </select>
+                      </label>
+                      <label className="settings-field">
+                        <span>Target name</span>
+                        <input
+                          value={connectionForm.targetName}
+                          onChange={(event) =>
+                            setConnectionForm((current) => ({ ...current, targetName: event.target.value }))
+                          }
+                        />
+                      </label>
+                      <label className="settings-field">
+                        <span>Client API URL</span>
+                        <input
+                          value={connectionForm.clientApiBaseUrl}
+                          onChange={(event) =>
+                            setConnectionForm((current) => ({ ...current, clientApiBaseUrl: event.target.value }))
+                          }
+                        />
+                      </label>
+                      <button className="primary" disabled={savingConnection} onClick={() => void handleConnectionSave()}>
+                        {savingConnection ? "Saving..." : "Save connection"}
+                      </button>
+                    </section>
+
+                    {diagnostics ? (
+                      <section className="settings-card">
+                        <h2>Diagnostics</h2>
+                        <dl className="diagnostics-list">
+                          <div><dt>Mode</dt><dd>{diagnostics.mode}</dd></div>
+                          <div><dt>Target</dt><dd>{diagnostics.target.name} ({diagnostics.target.type})</dd></div>
+                          <div><dt>Client API</dt><dd>{diagnostics.clientApiBaseUrl}</dd></div>
+                          <div><dt>Data config</dt><dd>{diagnostics.globalConfigPath}</dd></div>
+                        </dl>
+                      </section>
+                    ) : null}
+                  </div>
+                )}
+              </div>
             </div>
           </section>
         </main>

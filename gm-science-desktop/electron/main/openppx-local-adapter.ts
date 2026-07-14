@@ -9,12 +9,14 @@ import {
   createGmScienceProject as mockCreateGmScienceProject,
   createSession as mockCreateSession,
   getGmScienceProject as mockGetGmScienceProject,
+  listGmScienceCapabilities as mockListGmScienceCapabilities,
   listGmScienceArtifacts as mockListGmScienceArtifacts,
   listGmScienceProjects as mockListGmScienceProjects,
   listSessions as mockListSessions,
   loadSession as mockLoadSession,
   runRuntimeCommand as mockRunRuntimeCommand,
   sendMessage as mockSendMessage,
+  updateGmScienceProjectCapabilities as mockUpdateGmScienceProjectCapabilities,
   subscribe as subscribeMock,
 } from "../../app/src/lib/mock-client";
 import {
@@ -23,6 +25,7 @@ import {
   normalizeClientApiRuntime,
   normalizeClientApiSession,
   normalizeGmScienceArtifact,
+  normalizeGmScienceCapability,
   normalizeGmScienceProject,
 } from "../../app/src/lib/client-api-projection";
 import { mergeAssistantParts } from "../../app/src/lib/openppx-projection";
@@ -47,6 +50,8 @@ import type {
   CreateGmScienceArtifactInput,
   CreateGmScienceProjectInput,
   GmScienceArtifact,
+  GmScienceCapability,
+  GmScienceCapabilityCatalog,
   GmScienceProject,
   MessagePart,
   PpxClientApi,
@@ -55,6 +60,7 @@ import type {
   RuntimeStatus,
   SendMessageInput,
   SessionSummary,
+  UpdateGmScienceCapabilitiesInput,
 } from "../../app/src/types";
 
 type EventSink = (event: RunEvent) => void;
@@ -655,6 +661,60 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
       throw new Error("Client API returned an invalid project payload.");
     }
     return { project };
+  }
+
+  public async listGmScienceCapabilities(projectId?: string): Promise<GmScienceCapabilityCatalog> {
+    if (this.shouldUseMock()) {
+      return mockListGmScienceCapabilities(projectId);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const path = projectId
+      ? `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/capabilities`
+      : "/api/v1/gm-science/capabilities";
+    const payload = await this.fetchClientApiJson(path);
+    const data = (payload.data as Record<string, unknown> | undefined) ?? {};
+    const items = Array.isArray(data.items) ? data.items : [];
+    return {
+      projectId: String(data.project_id ?? ""),
+      items: items
+        .map((item) => normalizeGmScienceCapability(item))
+        .filter((item): item is GmScienceCapability => item !== null),
+    };
+  }
+
+  public async updateGmScienceProjectCapabilities(
+    projectId: string,
+    input: UpdateGmScienceCapabilitiesInput,
+  ): Promise<{ project: GmScienceProject; capabilities: GmScienceCapability[] }> {
+    if (this.shouldUseMock()) {
+      return mockUpdateGmScienceProjectCapabilities(projectId, input);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/capabilities`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          enabled_skills: input.enabledSkills,
+          enabled_connectors: input.enabledConnectors,
+          enabled_specialists: input.enabledSpecialists,
+        }),
+      },
+    );
+    const data = (payload.data as Record<string, unknown> | undefined) ?? {};
+    const project = normalizeGmScienceProject(data.project);
+    const rawCapabilities = Array.isArray(data.capabilities) ? data.capabilities : [];
+    const capabilities = rawCapabilities
+      .map((item) => normalizeGmScienceCapability(item))
+      .filter((item): item is GmScienceCapability => item !== null);
+    if (!project) {
+      throw new Error("Client API returned an invalid project capability payload.");
+    }
+    return { project, capabilities };
   }
 
   public async listGmScienceArtifacts(projectId: string): Promise<{ artifacts: GmScienceArtifact[] }> {

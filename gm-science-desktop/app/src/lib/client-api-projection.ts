@@ -1,5 +1,6 @@
 import type {
   ChatMessage,
+  GmScienceCapability,
   GmScienceArtifact,
   GmScienceProject,
   MessagePart,
@@ -188,6 +189,36 @@ export function normalizeGmScienceProject(payload: unknown): GmScienceProject | 
     enabledSpecialists: asStringList(project.enabled_specialists ?? project.enabledSpecialists),
     createdAt: asString(project.created_at ?? project.createdAt, new Date().toISOString()),
     updatedAt: asString(project.updated_at ?? project.updatedAt, new Date().toISOString()),
+  };
+}
+
+export function normalizeGmScienceCapability(payload: unknown): GmScienceCapability | null {
+  const capability = asRecord(payload);
+  if (!capability) {
+    return null;
+  }
+  const kind = asString(capability.kind);
+  const status = asString(capability.status);
+  if (kind !== "skill" && kind !== "connector" && kind !== "specialist") {
+    return null;
+  }
+  if (status !== "ready" && status !== "needs_configuration" && status !== "disabled") {
+    return null;
+  }
+  return {
+    id: asString(capability.id),
+    kind,
+    name: asString(capability.name),
+    description: asString(capability.description),
+    available: capability.available === true,
+    defaultEnabled: capability.default_enabled === true || capability.defaultEnabled === true,
+    projectEnabled:
+      typeof (capability.project_enabled ?? capability.projectEnabled) === "boolean"
+        ? Boolean(capability.project_enabled ?? capability.projectEnabled)
+        : null,
+    status,
+    statusDetail: asString(capability.status_detail ?? capability.statusDetail),
+    metadata: asLooseRecord(capability.metadata),
   };
 }
 

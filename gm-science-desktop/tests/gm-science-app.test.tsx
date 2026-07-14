@@ -5,6 +5,7 @@ import type {
   BootstrapPayload,
   ClientDiagnostics,
   GmScienceArtifact,
+  GmScienceCapability,
   GmScienceProject,
   PpxClientApi,
   RunEvent,
@@ -40,9 +41,9 @@ function project(overrides: Partial<GmScienceProject> = {}): GmScienceProject {
     workspacePath: "/tmp/gm-science/proj_123",
     sessionsCount: 0,
     artifactsCount: 0,
-    enabledSkills: ["Literature Review"],
-    enabledConnectors: ["OpenAlex"],
-    enabledSpecialists: ["Reviewer"],
+    enabledSkills: ["literature-review"],
+    enabledConnectors: ["arxiv", "pubmed", "openalex"],
+    enabledSpecialists: ["paper_reader", "research_reviewer"],
     createdAt: "2026-07-10T10:00:00.000Z",
     updatedAt: "2026-07-10T10:00:00.000Z",
     ...overrides,
@@ -89,6 +90,30 @@ function diagnostics(): ClientDiagnostics {
   };
 }
 
+function capabilities(projectValue: GmScienceProject = project()): GmScienceCapability[] {
+  const definitions: Array<Pick<GmScienceCapability, "id" | "kind" | "name" | "description" | "status">> = [
+    { id: "literature-review", kind: "skill", name: "Literature Review", description: "Review papers", status: "ready" },
+    { id: "arxiv", kind: "connector", name: "arXiv", description: "Search preprints", status: "ready" },
+    { id: "pubmed", kind: "connector", name: "PubMed", description: "Search biomedical papers", status: "needs_configuration" },
+    { id: "openalex", kind: "connector", name: "OpenAlex", description: "Search scholarly works", status: "needs_configuration" },
+    { id: "paper_reader", kind: "specialist", name: "Paper Reader", description: "Read papers", status: "ready" },
+    { id: "research_reviewer", kind: "specialist", name: "Research Reviewer", description: "Review reports", status: "ready" },
+  ];
+  return definitions.map((item) => ({
+    ...item,
+    available: true,
+    defaultEnabled: true,
+    projectEnabled:
+      item.kind === "skill"
+        ? projectValue.enabledSkills.includes(item.id)
+        : item.kind === "connector"
+          ? projectValue.enabledConnectors.includes(item.id)
+          : projectValue.enabledSpecialists.includes(item.id),
+    statusDetail: item.status === "needs_configuration" ? "Configuration required." : "",
+    metadata: item.kind === "specialist" ? { auto_dispatch: true } : {},
+  }));
+}
+
 function installClient(overrides: Partial<PpxClientApi> = {}): {
   client: PpxClientApi;
   emit: (event: RunEvent) => void;
@@ -106,6 +131,16 @@ function installClient(overrides: Partial<PpxClientApi> = {}): {
     listGmScienceProjects: async () => ({ projects: [project()] }),
     createGmScienceProject: async (input) => ({ project: project({ id: "proj_new", name: input.name }) }),
     getGmScienceProject: async (projectId) => ({ project: project({ id: projectId }) }),
+    listGmScienceCapabilities: async (projectId) => ({ projectId: projectId ?? "", items: capabilities() }),
+    updateGmScienceProjectCapabilities: async (projectId, input) => {
+      const updated = project({
+        id: projectId,
+        enabledSkills: input.enabledSkills,
+        enabledConnectors: input.enabledConnectors,
+        enabledSpecialists: input.enabledSpecialists,
+      });
+      return { project: updated, capabilities: capabilities(updated) };
+    },
     listGmScienceArtifacts: async () => ({ artifacts: [] }),
     createGmScienceArtifact: async (projectId, input) => ({
       artifact: {
@@ -217,6 +252,64 @@ describe("gm-science App", () => {
         text: "Summarize the new papers",
       });
     });
+  });
+
+  it("updates the selected Project connector allowlist from Customize", async () => {
+    const updateGmScienceProjectCapabilities = vi.fn(async (projectId, input) => {
+      const updated = project({
+        id: projectId,
+        enabledSkills: input.enabledSkills,
+        enabledConnectors: input.enabledConnectors,
+        enabledSpecialists: input.enabledSpecialists,
+      });
+      return { project: updated, capabilities: capabilities(updated) };
+    });
+    installClient({ updateGmScienceProjectCapabilities });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Customize" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Connectors" }));
+    const pubmedSwitch = await screen.findByRole("switch", { name: "Enable PubMed" });
+    expect(pubmedSwitch).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(pubmedSwitch);
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => {
+      expect(updateGmScienceProjectCapabilities).toHaveBeenCalledWith("proj_123", {
+        enabledSkills: ["literature-review"],
+        enabledConnectors: ["arxiv", "openalex"],
+        enabledSpecialists: ["paper_reader", "research_reviewer"],
+      });
+    });
+  });
+
+  it("does not allow an unavailable connector to be enabled", async () => {
+    const projectValue = project({ enabledConnectors: ["arxiv", "openalex"] });
+    const items = capabilities(projectValue).map((item) =>
+      item.id === "pubmed"
+        ? {
+            ...item,
+            available: false,
+            projectEnabled: false,
+            status: "disabled" as const,
+            statusDetail: "Disabled in global configuration.",
+          }
+        : item,
+    );
+    installClient({
+      listGmScienceProjects: async () => ({ projects: [projectValue] }),
+      listGmScienceCapabilities: async (projectId) => ({ projectId: projectId ?? "", items }),
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Customize" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Connectors" }));
+
+    expect(await screen.findByRole("switch", { name: "Enable PubMed" })).toBeDisabled();
   });
 
   it("renders research artifact details with metadata fallbacks", async () => {

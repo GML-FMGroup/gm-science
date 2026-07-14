@@ -7,6 +7,8 @@ import type {
   CreateGmScienceArtifactInput,
   CreateGmScienceProjectInput,
   GmScienceArtifact,
+  GmScienceCapability,
+  GmScienceCapabilityCatalog,
   GmScienceProject,
   MessagePart,
   RuntimeCommand,
@@ -14,6 +16,7 @@ import type {
   RunEvent,
   SendMessageInput,
   SessionSummary,
+  UpdateGmScienceCapabilitiesInput,
 } from "../types";
 
 interface StoreState {
@@ -92,9 +95,9 @@ const state: StoreState = {
       workspacePath: "~/.gm-science/workspaces/proj_mock_research",
       sessionsCount: 1,
       artifactsCount: 0,
-      enabledSkills: ["Literature Review"],
-      enabledConnectors: ["OpenAlex"],
-      enabledSpecialists: ["Reviewer"],
+      enabledSkills: ["literature-review"],
+      enabledConnectors: ["arxiv", "pubmed", "openalex"],
+      enabledSpecialists: ["paper_reader", "research_reviewer"],
       createdAt: now(),
       updatedAt: now(),
     },
@@ -348,6 +351,120 @@ export async function getGmScienceProject(projectId: string): Promise<{ project:
     throw new Error(`Project ${projectId} was not found.`);
   }
   return { project: { ...project } };
+}
+
+const capabilityDefinitions: Omit<GmScienceCapability, "projectEnabled">[] = [
+  {
+    id: "literature-review",
+    kind: "skill",
+    name: "Literature Review",
+    description: "Search scholarly sources, synthesize evidence, and register a cited review.",
+    available: true,
+    defaultEnabled: true,
+    status: "ready",
+    statusDetail: "",
+    metadata: { source: "built_in" },
+  },
+  {
+    id: "arxiv",
+    kind: "connector",
+    name: "arXiv",
+    description: "Search open-access preprints across scientific and technical fields.",
+    available: true,
+    defaultEnabled: true,
+    status: "ready",
+    statusDetail: "",
+    metadata: { source: "built_in" },
+  },
+  {
+    id: "pubmed",
+    kind: "connector",
+    name: "PubMed",
+    description: "Search biomedical literature indexed by the NCBI PubMed service.",
+    available: true,
+    defaultEnabled: true,
+    status: "needs_configuration",
+    statusDetail: "Set science.literature.pubmed.email.",
+    metadata: { source: "built_in" },
+  },
+  {
+    id: "openalex",
+    kind: "connector",
+    name: "OpenAlex",
+    description: "Search scholarly works and citation metadata from OpenAlex.",
+    available: true,
+    defaultEnabled: true,
+    status: "needs_configuration",
+    statusDetail: "Set science.literature.openalex.apiKey.",
+    metadata: { source: "built_in" },
+  },
+  {
+    id: "paper_reader",
+    kind: "specialist",
+    name: "Paper Reader",
+    description: "Analyze saved paper artifacts and compare evidence across papers.",
+    available: true,
+    defaultEnabled: true,
+    status: "ready",
+    statusDetail: "",
+    metadata: { source: "built_in", auto_dispatch: true, read_only: true },
+  },
+  {
+    id: "research_reviewer",
+    kind: "specialist",
+    name: "Research Reviewer",
+    description: "Review saved reports and reading notes with findings-first critique.",
+    available: true,
+    defaultEnabled: true,
+    status: "ready",
+    statusDetail: "",
+    metadata: { source: "built_in", auto_dispatch: true, read_only: true },
+  },
+];
+
+function projectCapabilityIds(project: GmScienceProject, kind: GmScienceCapability["kind"]): string[] {
+  if (kind === "skill") {
+    return project.enabledSkills;
+  }
+  if (kind === "connector") {
+    return project.enabledConnectors;
+  }
+  return project.enabledSpecialists;
+}
+
+export async function listGmScienceCapabilities(projectId?: string): Promise<GmScienceCapabilityCatalog> {
+  const project = projectId ? state.projects.find((item) => item.id === projectId) : undefined;
+  if (projectId && !project) {
+    throw new Error(`Project ${projectId} was not found.`);
+  }
+  return {
+    projectId: project?.id ?? "",
+    items: capabilityDefinitions.map((item) => ({
+      ...item,
+      metadata: { ...item.metadata },
+      projectEnabled: project ? projectCapabilityIds(project, item.kind).includes(item.id) : null,
+    })),
+  };
+}
+
+export async function updateGmScienceProjectCapabilities(
+  projectId: string,
+  input: UpdateGmScienceCapabilitiesInput,
+): Promise<{ project: GmScienceProject; capabilities: GmScienceCapability[] }> {
+  const projectIndex = state.projects.findIndex((item) => item.id === projectId);
+  if (projectIndex < 0) {
+    throw new Error(`Project ${projectId} was not found.`);
+  }
+  const project = {
+    ...state.projects[projectIndex],
+    enabledSkills: [...input.enabledSkills],
+    enabledConnectors: [...input.enabledConnectors],
+    enabledSpecialists: [...input.enabledSpecialists],
+    updatedAt: now(),
+  };
+  state.projects[projectIndex] = project;
+  const catalog = await listGmScienceCapabilities(projectId);
+  return { project: { ...project }, capabilities: catalog.items };
 }
 
 export async function listGmScienceArtifacts(projectId: string): Promise<{ artifacts: GmScienceArtifact[] }> {

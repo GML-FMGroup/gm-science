@@ -3,9 +3,11 @@ import {
   createGmScienceArtifact,
   createGmScienceProject,
   createSession,
+  listGmScienceCapabilities,
   listGmScienceArtifacts,
   listGmScienceProjects,
   loadSession,
+  updateGmScienceProjectCapabilities,
 } from "../app/src/lib/mock-client";
 
 describe("mock client adapter", () => {
@@ -47,5 +49,16 @@ describe("mock client adapter", () => {
     expect(artifact.artifact.projectId).toBe(created.project.id);
     const artifacts = await listGmScienceArtifacts(created.project.id);
     expect(artifacts.artifacts).toContainEqual(artifact.artifact);
+
+    const catalog = await listGmScienceCapabilities(created.project.id);
+    expect(catalog.items.some((item) => item.id === "pubmed" && item.projectEnabled)).toBe(true);
+
+    const updated = await updateGmScienceProjectCapabilities(created.project.id, {
+      enabledSkills: [],
+      enabledConnectors: ["arxiv"],
+      enabledSpecialists: ["research_reviewer"],
+    });
+    expect(updated.project.enabledConnectors).toEqual(["arxiv"]);
+    expect(updated.capabilities.find((item) => item.id === "pubmed")?.projectEnabled).toBe(false);
   });
 });

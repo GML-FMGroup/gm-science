@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from openppx.gm_science.literature.config import parse_literature_config
+from openppx.gm_science.literature.config import parse_literature_config, select_literature_sources
 
 
 def test_parse_literature_config_normalizes_sources_and_numeric_bounds() -> None:
@@ -80,3 +80,14 @@ def test_disabled_source_reports_disabled_before_configuration_requirements() ->
 
     assert statuses["pubmed"]["status"] == "disabled"
     assert statuses["openalex"]["status"] == "disabled"
+
+
+def test_project_empty_connector_allowlist_disables_all_sources() -> None:
+    config = parse_literature_config({})
+
+    unrestricted = select_literature_sources(config, enabled_connectors=None)
+    project_disabled = select_literature_sources(config, enabled_connectors=[])
+
+    assert unrestricted.allowed == ("arxiv", "pubmed", "openalex")
+    assert project_disabled.allowed == ()
+    assert project_disabled.project_disabled == ("arxiv", "pubmed", "openalex")
