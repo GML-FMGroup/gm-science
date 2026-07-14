@@ -146,6 +146,25 @@ function metadataList(metadata: Record<string, unknown>, key: string): string[] 
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && Boolean(item)) : [];
 }
 
+function metadataObjectList(metadata: Record<string, unknown>, key: string): Record<string, unknown>[] {
+  const value = metadata[key];
+  return Array.isArray(value)
+    ? value.filter(
+        (item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item),
+      )
+    : [];
+}
+
+function formatEvidenceScope(scope: string): string {
+  if (scope === "metadata_abstract") {
+    return "abstract metadata";
+  }
+  if (scope === "local_text") {
+    return "local text";
+  }
+  return scope.replaceAll("_", " ");
+}
+
 function artifactSearchText(artifact: GmScienceArtifact): string {
   return `${artifact.title} ${artifact.type} ${JSON.stringify(artifact.metadata)}`.toLowerCase();
 }
@@ -184,7 +203,39 @@ function ArtifactItem({ artifact }: { artifact: GmScienceArtifact }) {
   ]
     .filter(Boolean)
     .join(" · ");
-  const marker = type === "paper" ? "P" : type === "report" ? "R" : type === "citation" ? "C" : "A";
+  const readingSources = metadataList(metadata, "source_artifact_ids");
+  const evidenceScopes = metadataList(metadata, "evidence_scopes").map(formatEvidenceScope);
+  const readingDetails = [
+    `${readingSources.length} ${readingSources.length === 1 ? "source" : "sources"}`,
+    evidenceScopes.length > 0 && `Evidence: ${evidenceScopes.join(" + ")}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const confidenceNote = metadataText(metadata, "confidence_note");
+  const readingFocus = metadataText(metadata, "focus");
+  const verdict = metadataText(metadata, "verdict").toLowerCase();
+  const targetArtifactId = metadataText(metadata, "target_artifact_id");
+  const findings = metadataObjectList(metadata, "findings");
+  const severityOrder = ["blocking", "major", "minor"];
+  const severityDetails = severityOrder
+    .map((severity) => {
+      const count = findings.filter((finding) => metadataText(finding, "severity").toLowerCase() === severity).length;
+      return count > 0 ? `${count} ${severity}` : "";
+    })
+    .filter(Boolean)
+    .join(" · ");
+  const marker =
+    type === "paper"
+      ? "P"
+      : type === "report"
+        ? "R"
+        : type === "citation"
+          ? "C"
+          : type === "reading_note"
+            ? "N"
+            : type === "critique_report"
+              ? "Q"
+              : "A";
 
   return (
     <article className={`artifact-item artifact-${type}`}>
@@ -202,6 +253,30 @@ function ArtifactItem({ artifact }: { artifact: GmScienceArtifact }) {
       {type === "paper" && identifier ? <p className="artifact-identifier">{identifier}</p> : null}
       {type === "report" ? <p className="artifact-detail">{reportDetails}</p> : null}
       {type === "citation" ? <p className="artifact-detail">Linked to report</p> : null}
+      {type === "reading_note" ? <p className="artifact-detail">{readingDetails}</p> : null}
+      {type === "reading_note" && readingFocus ? <p className="artifact-note">Focus: {readingFocus}</p> : null}
+      {type === "reading_note" && confidenceNote ? <p className="artifact-note">{confidenceNote}</p> : null}
+      {type === "critique_report" ? (
+        <div className="artifact-critique-summary">
+          <div>
+            {verdict ? <span className={`artifact-verdict ${verdict}`}>{verdict}</span> : null}
+            {severityDetails ? <span className="artifact-severity-summary">{severityDetails}</span> : null}
+          </div>
+          {targetArtifactId ? <p className="artifact-target">Target: {targetArtifactId}</p> : null}
+          {findings.length > 0 ? (
+            <ul className="artifact-findings">
+              {findings.slice(0, 3).map((finding, index) => (
+                <li key={`${metadataText(finding, "severity")}-${index}`}>
+                  <span className={`finding-severity ${metadataText(finding, "severity").toLowerCase()}`}>
+                    {metadataText(finding, "severity") || "finding"}
+                  </span>
+                  <span>{metadataText(finding, "claim") || metadataText(finding, "category")}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
       {isWebUrl(artifact.pathOrUrl) ? (
         <a className="artifact-link" href={artifact.pathOrUrl} target="_blank" rel="noreferrer">
           Open
@@ -420,9 +495,6 @@ export function App() {
         name,
         description: projectForm.description,
         agentContext: projectForm.agentContext,
-        enabledSkills: ["literature-review"],
-        enabledConnectors: ["arxiv", "pubmed", "openalex"],
-        enabledSpecialists: [],
       });
       setProjects((current) => [created.project, ...current.filter((project) => project.id !== created.project.id)]);
       setProjectForm(EMPTY_PROJECT_FORM);

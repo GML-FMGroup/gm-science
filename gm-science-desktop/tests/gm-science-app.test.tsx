@@ -187,13 +187,11 @@ describe("gm-science App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => {
-      expect(createGmScienceProject).toHaveBeenCalledWith(
-        expect.objectContaining({
-          name: "Genome notes",
-          description: "Cell line literature",
-          agentContext: "Always use GRCh38.",
-        }),
-      );
+      expect(createGmScienceProject).toHaveBeenCalledWith({
+        name: "Genome notes",
+        description: "Cell line literature",
+        agentContext: "Always use GRCh38.",
+      });
     });
     await screen.findByText("Genome notes is ready");
   });
@@ -221,7 +219,7 @@ describe("gm-science App", () => {
     });
   });
 
-  it("renders paper, report, and citation artifact details with metadata fallbacks", async () => {
+  it("renders research artifact details with metadata fallbacks", async () => {
     installClient({
       listGmScienceArtifacts: async () => ({
         artifacts: [
@@ -251,6 +249,38 @@ describe("gm-science App", () => {
             metadata: { paper_artifact_id: "art-paper", report_artifact_id: "art-report" },
           }),
           artifact({ id: "art-malformed", title: "Metadata-free paper", metadata: {} }),
+          artifact({
+            id: "art-reading-note",
+            type: "reading_note",
+            title: "Folding reading note",
+            metadata: {
+              source_artifact_ids: ["art-paper"],
+              evidence_scopes: ["metadata_abstract"],
+              focus: "protein folding reliability",
+              confidence_note: "Limited to abstract metadata.",
+            },
+          }),
+          artifact({
+            id: "art-critique",
+            type: "critique_report",
+            title: "Folding critique",
+            metadata: {
+              verdict: "revise",
+              target_artifact_id: "art-report",
+              findings: [
+                {
+                  severity: "major",
+                  category: "evidence",
+                  claim: "The central claim needs stronger support.",
+                },
+                {
+                  severity: "minor",
+                  category: "clarity",
+                  claim: "Define the evaluation metric.",
+                },
+              ],
+            },
+          }),
         ],
       }),
     });
@@ -265,6 +295,13 @@ describe("gm-science App", () => {
     expect(screen.getByText(/folding\.md · 1 cited paper/)).toBeInTheDocument();
     expect(screen.getByText("Linked to report")).toBeInTheDocument();
     expect(screen.getByText("Metadata-free paper")).toBeInTheDocument();
+    expect(screen.getByText("1 source · Evidence: abstract metadata")).toBeInTheDocument();
+    expect(screen.getByText("Focus: protein folding reliability")).toBeInTheDocument();
+    expect(screen.getByText("Limited to abstract metadata.")).toBeInTheDocument();
+    expect(screen.getByText("revise")).toBeInTheDocument();
+    expect(screen.getByText("1 major · 1 minor")).toBeInTheDocument();
+    expect(screen.getByText("Target: art-report")).toBeInTheDocument();
+    expect(screen.getByText("The central claim needs stronger support.")).toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: "Open" })).toHaveLength(1);
     expect(screen.getByRole("link", { name: "Open" })).toHaveAttribute("href", "https://example.test/folding");
   });

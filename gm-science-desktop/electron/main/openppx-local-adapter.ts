@@ -28,6 +28,7 @@ import {
 import { mergeAssistantParts } from "../../app/src/lib/openppx-projection";
 import {
   appendClientApiLogTail,
+  buildCreateGmScienceProjectPayload,
   buildClientApiRunPath,
   buildClientApiSpawnEnv,
   formatClientApiStartupError,
@@ -632,14 +633,7 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
     }
     const payload = await this.fetchClientApiJson("/api/v1/gm-science/projects", {
       method: "POST",
-      body: JSON.stringify({
-        name: input.name,
-        description: input.description ?? "",
-        agent_context: input.agentContext ?? "",
-        enabled_skills: input.enabledSkills ?? [],
-        enabled_connectors: input.enabledConnectors ?? [],
-        enabled_specialists: input.enabledSpecialists ?? [],
-      }),
+      body: JSON.stringify(buildCreateGmScienceProjectPayload(input)),
     });
     const project = normalizeGmScienceProject((payload.data as Record<string, unknown> | undefined)?.project);
     if (!project) {

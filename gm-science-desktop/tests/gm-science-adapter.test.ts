@@ -1,6 +1,7 @@
 import {
   DEFAULT_GM_SCIENCE_CLIENT_API_PORT,
   appendClientApiLogTail,
+  buildCreateGmScienceProjectPayload,
   buildClientApiRunPath,
   buildClientApiSpawnEnv,
   formatClientApiStartupError,
@@ -79,6 +80,29 @@ describe("gm-science local adapter helpers", () => {
         text: "Summarize",
       }),
     ).toBe("/api/v1/gm-science/projects/proj_123/sessions/session-1/runs");
+  });
+
+  it("omits unspecified project capabilities so the runtime can apply config defaults", () => {
+    expect(buildCreateGmScienceProjectPayload({ name: "New study" })).toEqual({
+      name: "New study",
+      description: "",
+      agent_context: "",
+    });
+  });
+
+  it("preserves explicit empty project capability allowlists", () => {
+    expect(
+      buildCreateGmScienceProjectPayload({
+        name: "Minimal study",
+        enabledSkills: [],
+        enabledConnectors: [],
+        enabledSpecialists: [],
+      }),
+    ).toMatchObject({
+      enabled_skills: [],
+      enabled_connectors: [],
+      enabled_specialists: [],
+    });
   });
 
   it("keeps the original agent run endpoint when no project id is present", () => {

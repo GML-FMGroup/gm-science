@@ -1,4 +1,4 @@
-import type { SendMessageInput } from "../../app/src/types";
+import type { CreateGmScienceProjectInput, SendMessageInput } from "../../app/src/types";
 
 export const DEFAULT_GM_SCIENCE_CLIENT_API_PORT = 8876;
 
@@ -64,4 +64,17 @@ export function buildClientApiRunPath(input: SendMessageInput): string {
     return `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/sessions/${sessionId}/runs`;
   }
   return `/api/v1/agents/${encodeURIComponent(input.agentId)}/sessions/${sessionId}/runs`;
+}
+
+export function buildCreateGmScienceProjectPayload(
+  input: CreateGmScienceProjectInput,
+): Record<string, unknown> {
+  return {
+    name: input.name,
+    description: input.description ?? "",
+    agent_context: input.agentContext ?? "",
+    ...(input.enabledSkills !== undefined ? { enabled_skills: input.enabledSkills } : {}),
+    ...(input.enabledConnectors !== undefined ? { enabled_connectors: input.enabledConnectors } : {}),
+    ...(input.enabledSpecialists !== undefined ? { enabled_specialists: input.enabledSpecialists } : {}),
+  };
 }

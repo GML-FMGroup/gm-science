@@ -1639,7 +1639,13 @@ button.primary:disabled {
   padding: 0 20px;
   background: transparent;
   border-bottom: 1px solid rgba(24, 23, 22, 0.06);
+  color: #1d1d1f;
   text-align: left;
+}
+
+.recent-row strong {
+  color: #1d1d1f;
+  opacity: 1;
 }
 
 .science-app .sidebar-shell {
@@ -1798,6 +1804,16 @@ button.primary:disabled {
   color: #386789;
 }
 
+.artifact-reading_note .artifact-marker {
+  background: #eef5f2;
+  color: #356b5c;
+}
+
+.artifact-critique_report .artifact-marker {
+  background: #f5f0ea;
+  color: #7a5a35;
+}
+
 .artifact-byline,
 .artifact-detail,
 .artifact-identifier {
@@ -1805,6 +1821,94 @@ button.primary:disabled {
   color: rgba(24, 23, 22, 0.6);
   font-size: 0.78rem;
   line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.artifact-note {
+  margin: 0 0 0 33px;
+  color: rgba(24, 23, 22, 0.72);
+  font-size: 0.76rem;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.artifact-critique-summary {
+  display: grid;
+  gap: 8px;
+  margin-left: 33px;
+}
+
+.artifact-critique-summary > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.artifact-verdict,
+.finding-severity {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(24, 23, 22, 0.07);
+  color: rgba(24, 23, 22, 0.72);
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.artifact-verdict.clean {
+  background: #e8f2eb;
+  color: #2f6a42;
+}
+
+.artifact-verdict.revise,
+.artifact-verdict.flagged,
+.finding-severity.blocking,
+.finding-severity.major {
+  background: #f7eceb;
+  color: #8a3f43;
+}
+
+.finding-severity.minor {
+  background: #f5f0e8;
+  color: #78613d;
+}
+
+.artifact-severity-summary {
+  color: rgba(24, 23, 22, 0.56);
+  font-size: 0.72rem;
+}
+
+.artifact-target {
+  margin: 0;
+  color: rgba(24, 23, 22, 0.54);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.68rem;
+  overflow-wrap: anywhere;
+}
+
+.artifact-findings {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.artifact-findings li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 7px;
+  color: rgba(24, 23, 22, 0.7);
+  font-size: 0.73rem;
+  line-height: 1.36;
+}
+
+.artifact-findings li > span:last-child {
   overflow-wrap: anywhere;
 }
 

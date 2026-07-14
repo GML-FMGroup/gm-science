@@ -331,9 +331,9 @@ export async function createGmScienceProject(
     workspacePath: `~/.gm-science/workspaces/proj_${crypto.randomUUID()}`,
     sessionsCount: 0,
     artifactsCount: 0,
-    enabledSkills: input.enabledSkills ?? ["Literature Review"],
-    enabledConnectors: input.enabledConnectors ?? ["OpenAlex"],
-    enabledSpecialists: input.enabledSpecialists ?? ["Reviewer"],
+    enabledSkills: input.enabledSkills ?? ["literature-review"],
+    enabledConnectors: input.enabledConnectors ?? ["arxiv", "pubmed", "openalex"],
+    enabledSpecialists: input.enabledSpecialists ?? ["paper_reader", "research_reviewer"],
     createdAt: now(),
     updatedAt: now(),
   };

@@ -63,6 +63,51 @@ gm-science 原生支持 arXiv、PubMed 和 OpenAlex。配置统一位于：
 
 配置文件可能包含密钥，不要提交到 Git 仓库。
 
+## 专家智能体
+
+`science-research` 是唯一直接与用户对话的主智能体。它可以按需调用两个受限专家：
+
+- `paper_reader`：读取已保存的 paper artifacts，生成结构化 `reading_note`。
+- `research_reviewer`：检查 `report` 或 `reading_note` 及其关联论文，生成 findings-first 的 `critique_report`。
+
+专家只获得当前 Project 的显式 artifact IDs，不继承主对话内容，也没有 shell、网络或通用写文件工具。网络论文链接不会自动下载；没有 Project 内本地文本时，阅读结果必须标记为 `metadata_abstract`。
+
+配置仍位于 `~/.gm-science/science-research/config.json`：
+
+```json
+{
+  "science": {
+    "projectDefaults": {
+      "enabledSkills": ["literature-review"],
+      "enabledConnectors": ["arxiv", "pubmed", "openalex"],
+      "enabledSpecialists": ["paper_reader", "research_reviewer"]
+    },
+    "specialists": {
+      "enabled": true,
+      "model": "",
+      "paperReader": {
+        "enabled": true,
+        "autoDispatch": true,
+        "maxPapers": 6,
+        "maxSourceChars": 30000
+      },
+      "reviewer": {
+        "enabled": true,
+        "autoDispatch": true,
+        "reviewGate": "annotate",
+        "maxFindings": 20,
+        "maxSourceChars": 60000
+      }
+    }
+  }
+}
+```
+
+- `model` 为空时继承主模型；非空时沿用当前 provider 和凭据，只覆盖模型名。
+- `reviewGate` 支持 `off` 和 `annotate`。`annotate` 只评审本轮最新的新 report，失败不会覆盖主回答，也不会自动修改报告或递归复审。
+- Project 创建请求未显式传入能力列表时使用 `projectDefaults`；显式空数组会按请求保存，不会被默认值覆盖。connectors 空列表仍沿用 `science.literature.defaultSources` 的现有解析语义。
+- 自动调度适用于论文阅读、比较和明确的评审请求；普通问答和单次来源状态查询不会触发 reviewer gate。
+
 ## 一键启动
 
 macOS 用户可以直接双击：
