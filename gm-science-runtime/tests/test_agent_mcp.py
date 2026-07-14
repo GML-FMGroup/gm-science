@@ -31,6 +31,9 @@ class AgentMcpTests(unittest.TestCase):
         self.assertNotIn("science_list_sources", names)
         self.assertNotIn("science_search", names)
         self.assertNotIn("science_register_review", names)
+        self.assertNotIn("science_list_specialists", names)
+        self.assertNotIn("paper_reader", names)
+        self.assertNotIn("research_reviewer", names)
 
     def test_build_tools_adds_science_tools_only_in_gm_science_mode(self) -> None:
         from openppx import agent
@@ -46,6 +49,19 @@ class AgentMcpTests(unittest.TestCase):
         self.assertIn("science_list_sources", names)
         self.assertIn("science_search", names)
         self.assertIn("science_register_review", names)
+        self.assertIn("science_list_specialists", names)
+        self.assertIn("paper_reader", names)
+        self.assertIn("research_reviewer", names)
+
+    def test_dynamic_instruction_adds_specialist_dispatch_policy_in_gm_science_mode(self) -> None:
+        from openppx import agent
+
+        with patch.dict(os.environ, {"GM_SCIENCE_MODE": "1"}, clear=False):
+            text = agent._build_dynamic_instruction()
+
+        self.assertIn("paper_reader", text)
+        self.assertIn("research_reviewer", text)
+        self.assertIn("evidence_scope", text)
 
     def test_build_tools_appends_mcp_toolsets(self) -> None:
         from openppx import agent

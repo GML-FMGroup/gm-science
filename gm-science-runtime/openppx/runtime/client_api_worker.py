@@ -7,8 +7,24 @@ import asyncio
 import datetime as dt
 import json
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+
+from openppx.gm_science.specialists.config import load_specialist_config
+from openppx.gm_science.store import GmScienceStore
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewGateResult:
+    """Outcome of one optional annotate-only report review."""
+
+    status: str
+    verdict: str = ""
+    target_artifact_id: str = ""
+    critique_artifact_id: str = ""
+    message: str = ""
 
 
 def _emit(payload: dict[str, Any]) -> None:
@@ -25,7 +41,113 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--session-id", default="")
     parser.add_argument("--message", default="")
     parser.add_argument("--user-id", default="ppx-client-user")
+    parser.add_argument("--project-id", default="")
     return parser.parse_args()
+
+
+async def run_report_review_gate(
+    *,
+    project_id: str,
+    session_id: str,
+    user_id: str,
+    app_name: str,
+    before_artifact_ids: set[str],
+    reviewer_tool: Any,
+) -> ReviewGateResult:
+    """Review at most the latest unreviewed report created by the current run."""
+
+    config = load_specialist_config()
+    if (
+        not config.enabled
+        or not config.reviewer.enabled
+        or config.reviewer.review_gate != "annotate"
+    ):
+        return ReviewGateResult(status="skipped")
+    store = GmScienceStore()
+    project = store.get_project(project_id)
+    if project is None or "research_reviewer" not in project.enabled_specialists:
+        return ReviewGateResult(status="skipped")
+
+    artifacts = store.list_artifacts(project.id)
+    reviewed_targets = {
+        str(artifact.metadata.get("target_artifact_id") or "")
+        for artifact in artifacts
+        if artifact.type == "critique_report"
+    }
+    candidates = [
+        artifact
+        for artifact in artifacts
+        if artifact.type == "report"
+        and artifact.id not in before_artifact_ids
+        and artifact.id not in reviewed_targets
+        and artifact.session_id == session_id
+    ]
+    if not candidates:
+        return ReviewGateResult(status="skipped")
+    target = max(candidates, key=lambda artifact: (artifact.created_at, artifact.id))
+    if reviewer_tool is None:
+        return ReviewGateResult(
+            status="failed",
+            target_artifact_id=target.id,
+            message="research_reviewer tool is unavailable",
+        )
+
+    invocation_context = SimpleNamespace(
+        user_id=user_id,
+        app_name=app_name,
+        credential_service=None,
+    )
+    try:
+        result = await reviewer_tool.run_async(
+            args={
+                "project_id": project.id,
+                "session_id": session_id,
+                "target_artifact_id": target.id,
+                "review_focus": (
+                    "Check evidence support, citation integrity, reasoning, and reproducibility."
+                ),
+                "trigger": "gate",
+            },
+            tool_context=SimpleNamespace(_invocation_context=invocation_context),
+        )
+    except Exception as exc:
+        return ReviewGateResult(
+            status="failed",
+            target_artifact_id=target.id,
+            message=str(exc),
+        )
+    output = result.get("output") if isinstance(result, dict) else None
+    artifact = result.get("artifact") if isinstance(result, dict) else None
+    verdict = str(output.get("verdict") or "") if isinstance(output, dict) else ""
+    critique_id = str(artifact.get("id") or "") if isinstance(artifact, dict) else ""
+    return ReviewGateResult(
+        status="completed",
+        verdict=verdict,
+        target_artifact_id=target.id,
+        critique_artifact_id=critique_id,
+    )
+
+
+def append_review_gate_note(text: str, gate: ReviewGateResult) -> str:
+    """Append a non-blocking reviewer annotation to the main result."""
+
+    if gate.status == "completed":
+        note = f"Reviewer gate: {gate.verdict or 'completed'}."
+        if gate.critique_artifact_id:
+            note += f" Critique artifact: {gate.critique_artifact_id}."
+        return f"{text.rstrip()}\n\n{note}".strip()
+    if gate.status == "failed":
+        return f"{text.rstrip()}\n\nReviewer gate: review could not be completed.".strip()
+    return text
+
+
+def _find_reviewer_tool(root_agent: Any) -> Any | None:
+    """Return the configured research-reviewer AgentTool from the root agent."""
+
+    return next(
+        (tool for tool in getattr(root_agent, "tools", []) if getattr(tool, "name", "") == "research_reviewer"),
+        None,
+    )
 
 
 def _event_preview_text(event: object) -> str:
@@ -74,10 +196,21 @@ def _session_title(events: list[object]) -> str:
     for event in events:
         if str(getattr(event, "author", "") or "").strip().lower() != "user":
             continue
-        title = _compact_session_title(_event_preview_text(event))
+        title = _compact_session_title(_visible_user_request(_event_preview_text(event)))
         if title:
             return title
     return ""
+
+
+def _visible_user_request(text: str) -> str:
+    """Remove gm-science machine context from a client-facing session title."""
+
+    if "<gm_science_context>" not in text:
+        return text
+    marker = "\nUser request:\n"
+    if marker not in text:
+        return text
+    return text.rsplit(marker, 1)[1].strip()
 
 
 async def _run() -> int:
@@ -186,6 +319,11 @@ async def _run() -> int:
     prompt = inject_request_time(args.message, received_at=dt.datetime.now().astimezone())
     request = types.UserContent(parts=[types.Part.from_text(text=prompt)])
     runner, _service = create_runner(agent=root_agent, app_name=app_name, session_service=session_service)
+    before_artifact_ids: set[str] = set()
+    if args.project_id:
+        before_artifact_ids = {
+            artifact.id for artifact in GmScienceStore().list_artifacts(args.project_id)
+        }
 
     def _emit_raw_event(event: Any) -> None:
         payload = event.model_dump(mode="json")
@@ -202,6 +340,17 @@ async def _run() -> int:
         session_id=args.session_id,
         new_message=request,
     )
+
+    if args.project_id:
+        gate = await run_report_review_gate(
+            project_id=args.project_id,
+            session_id=args.session_id,
+            user_id=args.user_id,
+            app_name=app_name,
+            before_artifact_ids=before_artifact_ids,
+            reviewer_tool=_find_reviewer_tool(root_agent),
+        )
+        final_text = append_review_gate_note(final_text, gate)
 
     _emit({"type": "final", "text": final_text})
     return 0

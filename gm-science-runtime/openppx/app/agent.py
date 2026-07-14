@@ -16,6 +16,8 @@ from ..core.env_utils import env_enabled
 from ..core.mcp_registry import build_mcp_toolsets_from_env
 from ..core.provider import build_adk_model_from_env
 from ..gm_science.literature.tools import science_list_sources, science_register_review, science_search
+from ..gm_science.specialists.agents import build_specialist_tools, specialist_dispatch_guidance
+from ..gm_science.specialists.registry import science_list_specialists
 from ..tooling.skills_adapter import list_skills, read_skill
 from ..tooling.registry import (
     browser,
@@ -164,7 +166,10 @@ def _build_static_instruction() -> str:
 
 def _build_dynamic_instruction() -> str:
     """Build startup/runtime context for ADK dynamic ``instruction``."""
-    return build_startup_runtime_context()
+    instruction = build_startup_runtime_context()
+    if env_enabled("GM_SCIENCE_MODE", default=False):
+        instruction += "\n" + specialist_dispatch_guidance()
+    return instruction
 
 
 def _build_tools() -> list[Any]:
@@ -234,7 +239,15 @@ def _build_tools() -> list[Any]:
     if _gui_builtin_tools_enabled():
         base_tools.extend([start_gui_task, computer_task, computer_use])
     if env_enabled("GM_SCIENCE_MODE", default=False):
-        base_tools.extend([science_list_sources, science_search, science_register_review])
+        base_tools.extend(
+            [
+                science_list_sources,
+                science_search,
+                science_register_review,
+                science_list_specialists,
+                *build_specialist_tools(),
+            ]
+        )
 
     privilege_level = _agent_privilege_level()
     if privilege_level == "low":
