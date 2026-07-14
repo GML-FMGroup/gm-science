@@ -572,6 +572,28 @@ def default_config() -> dict[str, Any]:
             },
         },
         "science": {
+            "projectDefaults": {
+                "enabledSkills": ["literature-review"],
+                "enabledConnectors": ["arxiv", "pubmed", "openalex"],
+                "enabledSpecialists": ["paper_reader", "research_reviewer"],
+            },
+            "specialists": {
+                "enabled": True,
+                "model": "",
+                "paperReader": {
+                    "enabled": True,
+                    "autoDispatch": True,
+                    "maxPapers": 6,
+                    "maxSourceChars": 30000,
+                },
+                "reviewer": {
+                    "enabled": True,
+                    "autoDispatch": True,
+                    "reviewGate": "annotate",
+                    "maxFindings": 20,
+                    "maxSourceChars": 60000,
+                },
+            },
             "literature": {
                 "defaultSources": ["arxiv", "pubmed", "openalex"],
                 "maxResultsPerSource": 10,

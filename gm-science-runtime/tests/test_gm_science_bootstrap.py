@@ -47,6 +47,15 @@ def test_bootstrap_creates_default_science_agent_with_openai_codex_provider(tmp_
     assert literature["pubmed"]["tool"] == "gm-science"
     assert literature["pubmed"]["email"] == ""
     assert literature["openalex"]["apiKey"] == ""
+    project_defaults = config["science"]["projectDefaults"]
+    assert project_defaults["enabledSkills"] == ["literature-review"]
+    assert project_defaults["enabledConnectors"] == ["arxiv", "pubmed", "openalex"]
+    assert project_defaults["enabledSpecialists"] == ["paper_reader", "research_reviewer"]
+    specialists = config["science"]["specialists"]
+    assert specialists["enabled"] is True
+    assert specialists["model"] == ""
+    assert specialists["paperReader"]["maxPapers"] == 6
+    assert specialists["reviewer"]["reviewGate"] == "annotate"
 
     runtime_config = json.loads(result.runtime_config_path.read_text(encoding="utf-8"))
     assert isinstance(runtime_config["env"], dict)
@@ -65,7 +74,7 @@ def test_bootstrap_is_idempotent_and_does_not_overwrite_existing_agent_config(tm
     assert second == first
 
 
-def test_bootstrap_persists_missing_literature_defaults_into_existing_config(tmp_path: Path) -> None:
+def test_bootstrap_persists_missing_science_defaults_into_existing_config(tmp_path: Path) -> None:
     first = ensure_gm_science_initialized(root_dir=tmp_path)
     config = json.loads(first.config_path.read_text(encoding="utf-8"))
     config.pop("science")
@@ -77,3 +86,8 @@ def test_bootstrap_persists_missing_literature_defaults_into_existing_config(tmp
     assert saved["science"]["literature"]["defaultSources"] == ["arxiv", "pubmed", "openalex"]
     assert saved["science"]["literature"]["pubmed"]["email"] == ""
     assert saved["science"]["literature"]["openalex"]["apiKey"] == ""
+    assert saved["science"]["projectDefaults"]["enabledSpecialists"] == [
+        "paper_reader",
+        "research_reviewer",
+    ]
+    assert saved["science"]["specialists"]["reviewer"]["reviewGate"] == "annotate"

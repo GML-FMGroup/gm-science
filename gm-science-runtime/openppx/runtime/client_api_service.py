@@ -18,9 +18,10 @@ from typing import Any
 
 from ..core.config import get_data_dir
 from ..core.logging_utils import debug_logging_enabled, emit_debug
-from ..gm_science.bootstrap import ensure_gm_science_initialized
+from ..gm_science.bootstrap import GM_SCIENCE_DEFAULT_AGENT_NAME, ensure_gm_science_initialized
 from ..gm_science.literature.config import load_literature_config, select_literature_sources
 from ..gm_science.models import ArtifactRecord, ProjectRecord
+from ..gm_science.specialists.config import load_specialist_config
 from ..gm_science.store import GmScienceStore
 from .access_policy import AccessPolicy
 from .agent_access_runtime import ensure_access_principal
@@ -70,6 +71,25 @@ def _normalize_agent_name(value: str) -> str:
 
     normalized = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in value.strip().lower())
     return normalized.strip("-_")
+
+
+def _project_capability_values(
+    body: dict[str, Any],
+    snake_case_key: str,
+    camel_case_key: str,
+    defaults: tuple[str, ...],
+) -> list[str]:
+    """Resolve one optional Project allowlist, preserving explicit empty lists."""
+
+    if snake_case_key in body:
+        raw = body[snake_case_key]
+    elif camel_case_key in body:
+        raw = body[camel_case_key]
+    else:
+        return list(defaults)
+    if not isinstance(raw, list):
+        raise ValueError(f"Field '{snake_case_key}' must be an array.")
+    return [str(item).strip() for item in raw if str(item).strip()]
 
 
 _MUTATION_AUDIT_ACTIONS = (
@@ -285,18 +305,21 @@ def _gm_science_project_context_message(
     *,
     session_id: str,
     source_statuses: dict[str, str],
+    specialist_statuses: dict[str, str],
 ) -> str:
     """Build a run message with project context prepended."""
 
     context = project.agent_context.strip()
     user_text = str(text or "").strip()
     sources = ", ".join(f"{name}:{status}" for name, status in source_statuses.items())
+    specialists = ", ".join(f"{name}:{status}" for name, status in specialist_statuses.items())
     machine_context = (
         "<gm_science_context>\n"
         f"<project_id>{project.id}</project_id>\n"
         f"<session_id>{session_id}</session_id>\n"
         f"<workspace>{project.workspace_path}</workspace>\n"
         f"<literature_sources>{sources}</literature_sources>\n"
+        f"<specialists>{specialists}</specialists>\n"
         "</gm_science_context>\n\n"
     )
     project_context = f"Project context:\n{context}\n\n" if context else ""
@@ -1107,19 +1130,32 @@ class ClientApiCoordinator:
         if not name:
             return _error("INVALID_REQUEST", "Field 'name' is required.")
         try:
+            specialist_config = load_specialist_config(
+                agent_config_path(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir)
+            )
+            defaults = specialist_config.project_defaults
             project = self._gm_science_store.create_project(
                 name=name,
                 description=str(body.get("description") or ""),
                 agent_context=str(body.get("agent_context") or body.get("agentContext") or ""),
-                enabled_skills=[str(item) for item in body.get("enabled_skills", []) if str(item).strip()]
-                if isinstance(body.get("enabled_skills"), list)
-                else None,
-                enabled_connectors=[str(item) for item in body.get("enabled_connectors", []) if str(item).strip()]
-                if isinstance(body.get("enabled_connectors"), list)
-                else None,
-                enabled_specialists=[str(item) for item in body.get("enabled_specialists", []) if str(item).strip()]
-                if isinstance(body.get("enabled_specialists"), list)
-                else None,
+                enabled_skills=_project_capability_values(
+                    body,
+                    "enabled_skills",
+                    "enabledSkills",
+                    defaults.enabled_skills,
+                ),
+                enabled_connectors=_project_capability_values(
+                    body,
+                    "enabled_connectors",
+                    "enabledConnectors",
+                    defaults.enabled_connectors,
+                ),
+                enabled_specialists=_project_capability_values(
+                    body,
+                    "enabled_specialists",
+                    "enabledSpecialists",
+                    defaults.enabled_specialists,
+                ),
             )
         except ValueError as exc:
             return _error("INVALID_REQUEST", str(exc))
@@ -1206,13 +1242,29 @@ class ClientApiCoordinator:
             )
             for name, status in literature_config.public_source_statuses().items()
         }
+        specialist_config = load_specialist_config(agent_config_path(agent_id, self.data_dir))
+        specialist_statuses = {
+            name: (
+                "ok"
+                if status["enabled"] and name in project.enabled_specialists
+                else "disabled"
+            )
+            for name, status in specialist_config.public_statuses().items()
+        }
         message = _gm_science_project_context_message(
             project,
             text,
             session_id=session_id,
             source_statuses=source_statuses,
+            specialist_statuses=specialist_statuses,
         )
-        return self.create_run(agent_id, session_id, message, user_id=user_id)
+        return self.create_run(
+            agent_id,
+            session_id,
+            message,
+            user_id=user_id,
+            project_id=project.id,
+        )
 
     def list_sessions(self, agent_id: str, *, user_id: str = "ppx-client-user") -> dict[str, Any]:
         """Return projected session summaries for one agent."""
@@ -1869,7 +1921,15 @@ class ClientApiCoordinator:
             }
         )
 
-    def create_run(self, agent_id: str, session_id: str, text: str, *, user_id: str = "ppx-client-user") -> dict[str, Any]:
+    def create_run(
+        self,
+        agent_id: str,
+        session_id: str,
+        text: str,
+        *,
+        user_id: str = "ppx-client-user",
+        project_id: str = "",
+    ) -> dict[str, Any]:
         """Create one streaming run and start consuming worker events in background."""
 
         requester = self._ensure_requester_principal(user_id)
@@ -1912,6 +1972,8 @@ class ClientApiCoordinator:
             "--user-id",
             requester.principal_id,
         ]
+        if project_id:
+            cmd.extend(["--project-id", project_id])
         process = subprocess.Popen(
             cmd,
             cwd=str(config_path.parent),

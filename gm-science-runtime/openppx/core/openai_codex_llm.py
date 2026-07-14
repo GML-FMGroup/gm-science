@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Iterable
 
@@ -20,6 +22,7 @@ from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.genai import types
 from loguru import logger
+from pydantic import TypeAdapter
 
 DEFAULT_CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
 DEFAULT_ORIGINATOR = "openppx"
@@ -73,7 +76,7 @@ class OpenAICodexLlm(BaseLlm):
                 "stream": True,
                 "instructions": instructions,
                 "input": input_items,
-                "text": {"verbosity": "medium"},
+                "text": _codex_text_config(llm_request),
                 "include": ["reasoning.encrypted_content"],
                 "prompt_cache_key": _prompt_cache_key(llm_request),
                 "tool_choice": "auto",
@@ -186,6 +189,73 @@ def _prompt_cache_key(llm_request: LlmRequest) -> str:
     }
     raw = json.dumps(payload, ensure_ascii=True, sort_keys=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _codex_text_config(llm_request: LlmRequest) -> dict[str, Any]:
+    """Build Responses API text settings, including ADK structured output."""
+
+    text_config: dict[str, Any] = {"verbosity": "medium"}
+    config = llm_request.config
+    if config is None:
+        return text_config
+    raw_schema = config.response_json_schema or config.response_schema
+    if raw_schema is None:
+        return text_config
+
+    schema = _json_schema(raw_schema)
+    if not schema:
+        return text_config
+    schema = _strict_json_schema(schema)
+    raw_name = schema.get("title") or getattr(raw_schema, "__name__", "") or "structured_output"
+    name = re.sub(r"[^A-Za-z0-9_-]", "_", str(raw_name)).strip("_")[:64] or "structured_output"
+    text_config["format"] = {
+        "type": "json_schema",
+        "name": name,
+        "schema": schema,
+        "strict": True,
+    }
+    return text_config
+
+
+def _json_schema(value: Any) -> dict[str, Any]:
+    """Convert ADK/Pydantic response schema forms into plain JSON Schema."""
+
+    if isinstance(value, dict):
+        return deepcopy(value)
+    model_json_schema = getattr(value, "model_json_schema", None)
+    if callable(model_json_schema):
+        candidate = model_json_schema()
+        return candidate if isinstance(candidate, dict) else {}
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        candidate = model_dump(exclude_none=True, mode="json", by_alias=True)
+        return candidate if isinstance(candidate, dict) else {}
+    try:
+        candidate = TypeAdapter(value).json_schema()
+    except Exception:
+        return {}
+    return candidate if isinstance(candidate, dict) else {}
+
+
+def _strict_json_schema(value: Any) -> Any:
+    """Normalize object schemas for OpenAI strict structured outputs."""
+
+    if isinstance(value, list):
+        return [_strict_json_schema(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    normalized = {key: _strict_json_schema(item) for key, item in value.items()}
+    raw_type = normalized.get("type")
+    if isinstance(raw_type, str):
+        normalized["type"] = raw_type.lower()
+    if normalized.get("type") == "object" or isinstance(normalized.get("properties"), dict):
+        properties = normalized.get("properties")
+        if not isinstance(properties, dict):
+            properties = {}
+            normalized["properties"] = properties
+        normalized["required"] = list(properties)
+        normalized["additionalProperties"] = False
+    return normalized
 
 
 def _normalize_content_role(raw_role: str | None) -> str:

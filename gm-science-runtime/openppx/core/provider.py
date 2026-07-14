@@ -126,10 +126,10 @@ def validate_provider_runtime(provider: str) -> str | None:
     return None
 
 
-def build_adk_model_from_env() -> Any:
-    """Build ADK model object/string based on selected provider."""
+def build_adk_model_from_env(model_override: str | None = None) -> Any:
+    """Build an ADK model using the selected provider and optional model override."""
     provider = normalize_provider_name(os.getenv("OPENPPX_PROVIDER"))
-    model_name = normalize_model_name(provider, os.getenv("OPENPPX_MODEL"))
+    model_name = normalize_model_name(provider, model_override or os.getenv("OPENPPX_MODEL"))
     strict_tool_calls = os.getenv("OPENPPX_PROVIDER_STRICT_TOOL_CALLS", "").strip().lower() in {
         "1",
         "true",

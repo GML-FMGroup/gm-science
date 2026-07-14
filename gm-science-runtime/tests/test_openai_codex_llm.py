@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 from google.adk.models.llm_request import LlmRequest
 from google.genai import types
+from pydantic import BaseModel
 
 from openppx.core.openai_codex_llm import (
     OpenAICodexLlm,
@@ -18,6 +19,41 @@ from openppx.core.openai_codex_llm import (
 
 
 class OpenAICodexLlmTests(unittest.TestCase):
+    def test_generate_content_async_maps_response_schema_to_codex_text_format(self) -> None:
+        """ADK structured output should use the Responses API JSON schema field."""
+
+        class ReviewResult(BaseModel):
+            verdict: str
+            findings: list[str]
+
+        llm = OpenAICodexLlm(model="openai-codex/gpt-5.5")
+        llm_request = LlmRequest(
+            model="openai-codex/gpt-5.5",
+            contents=[types.Content(role="user", parts=[types.Part.from_text(text="Review this")])],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=ReviewResult,
+            ),
+        )
+        fake_token = type("Token", (), {"account_id": "acc_1", "access": "tok_1"})()
+        request_mock = AsyncMock(return_value=('{"verdict":"clean","findings":[]}', [], types.FinishReason.STOP))
+
+        with patch("openppx.core.openai_codex_llm._get_codex_token", return_value=fake_token):
+            with patch("openppx.core.openai_codex_llm._request_codex", new=request_mock):
+                async def _collect():
+                    return [event async for event in llm.generate_content_async(llm_request, stream=False)]
+
+                asyncio.run(_collect())
+
+        text_config = request_mock.await_args.kwargs["body"]["text"]
+        self.assertEqual(text_config["verbosity"], "medium")
+        self.assertEqual(text_config["format"]["type"], "json_schema")
+        self.assertEqual(text_config["format"]["name"], "ReviewResult")
+        self.assertTrue(text_config["format"]["strict"])
+        schema = text_config["format"]["schema"]
+        self.assertEqual(schema["required"], ["verdict", "findings"])
+        self.assertFalse(schema["additionalProperties"])
+
     def test_convert_llm_request_with_tools_and_tool_outputs(self) -> None:
         """Adapter should map ADK content stream into Codex input items."""
         assistant_call = types.Part.from_function_call(name="search_docs", args={"q": "oauth"})

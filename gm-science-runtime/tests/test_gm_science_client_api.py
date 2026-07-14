@@ -73,7 +73,8 @@ def test_client_api_bootstraps_default_science_agent_in_gm_science_mode(
 
 
 def test_client_api_lists_and_creates_gm_science_projects(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path / "gm-science"))
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
 
     coordinator = ClientApiCoordinator(data_dir=tmp_path)
     before = coordinator.list_gm_science_projects()
@@ -93,11 +94,38 @@ def test_client_api_lists_and_creates_gm_science_projects(tmp_path: Path, monkey
     assert project["name"] == "Protein design"
     assert project["description"] == "Shown in the project list."
     assert project["agent_context"] == "Always keep citations attached to claims."
+    assert project["enabled_skills"] == ["literature-review"]
+    assert project["enabled_connectors"] == ["arxiv", "pubmed", "openalex"]
+    assert project["enabled_specialists"] == ["paper_reader", "research_reviewer"]
     assert project["sessions_count"] == 0
     assert project["artifacts_count"] == 0
 
     listed = coordinator.list_gm_science_projects()
     assert listed["data"]["items"] == [project]
+
+
+def test_client_api_project_explicit_empty_capabilities_override_defaults(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+
+    created = coordinator.create_gm_science_project(
+        {
+            "name": "Minimal project",
+            "enabled_skills": [],
+            "enabled_connectors": [],
+            "enabled_specialists": [],
+        }
+    )
+
+    assert created["ok"] is True
+    project = created["data"]["project"]
+    assert project["enabled_skills"] == []
+    assert project["enabled_connectors"] == []
+    assert project["enabled_specialists"] == []
 
 
 def test_client_api_rejects_gm_science_project_without_name(tmp_path: Path, monkeypatch) -> None:
@@ -186,10 +214,14 @@ def test_client_api_project_run_injects_agent_context(tmp_path: Path, monkeypatc
     assert "arxiv:ok" in message
     assert "pubmed:needs_configuration" in message
     assert "openalex:needs_configuration" in message
+    assert "paper_reader:ok" in message
+    assert "research_reviewer:ok" in message
     assert "Project context:" in message
     assert "Prefer reproducible scripts and cite sources." in message
     assert "User request:" in message
     assert "Summarize the papers." in message
+    project_index = observed_cmd.index("--project-id") + 1
+    assert observed_cmd[project_index] == project["id"]
 
 
 def test_client_api_project_run_injects_machine_context_without_custom_context(tmp_path: Path, monkeypatch) -> None:
