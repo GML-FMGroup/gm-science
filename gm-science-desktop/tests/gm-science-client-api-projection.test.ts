@@ -2,6 +2,7 @@ import {
   normalizeGmScienceArtifact,
   normalizeGmScienceCapability,
   normalizeGmScienceProject,
+  normalizeGmScienceRun,
 } from "../app/src/lib/client-api-projection";
 
 describe("gm-science client-api projection", () => {
@@ -93,6 +94,52 @@ describe("gm-science client-api projection", () => {
       status: "needs_configuration",
       statusDetail: "Set science.literature.pubmed.email.",
       metadata: { source: "built_in" },
+    });
+  });
+
+  it("normalizes Project run controls and artifact links", () => {
+    expect(
+      normalizeGmScienceRun({
+        task_id: "task-1",
+        project_id: "proj-1",
+        session_id: "session-1",
+        parent_task_id: "",
+        kind: "local_python",
+        title: "Analyze",
+        status: "running",
+        progress_summary: "Loading data",
+        terminal_summary: "",
+        last_error: "",
+        created_at: "2026-07-14T10:00:00Z",
+        updated_at: "2026-07-14T10:00:01Z",
+        created_at_ms: 10,
+        updated_at_ms: 20,
+        ended_at_ms: null,
+        controls: { can_cancel: true },
+        can_retry: false,
+        log_preview: "[stdout] Loading data",
+        artifact_ids: ["art-code"],
+      }),
+    ).toEqual({
+      taskId: "task-1",
+      projectId: "proj-1",
+      sessionId: "session-1",
+      parentTaskId: "",
+      kind: "local_python",
+      title: "Analyze",
+      status: "running",
+      progressSummary: "Loading data",
+      terminalSummary: "",
+      lastError: "",
+      createdAt: "2026-07-14T10:00:00Z",
+      updatedAt: "2026-07-14T10:00:01Z",
+      createdAtMs: 10,
+      updatedAtMs: 20,
+      endedAtMs: null,
+      canCancel: true,
+      canRetry: false,
+      logPreview: "[stdout] Loading data",
+      artifactIds: ["art-code"],
     });
   });
 });

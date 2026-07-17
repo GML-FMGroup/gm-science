@@ -3,6 +3,8 @@ import type {
   GmScienceCapability,
   GmScienceArtifact,
   GmScienceProject,
+  GmScienceRun,
+  GmScienceRunStatus,
   MessagePart,
   MessageRole,
   MessageStatus,
@@ -240,5 +242,53 @@ export function normalizeGmScienceArtifact(payload: unknown): GmScienceArtifact 
     provenance: asLooseRecord(artifact.provenance),
     createdAt: asString(artifact.created_at ?? artifact.createdAt, new Date().toISOString()),
     updatedAt: asString(artifact.updated_at ?? artifact.updatedAt, new Date().toISOString()),
+  };
+}
+
+const GM_SCIENCE_RUN_STATUSES = new Set<GmScienceRunStatus>([
+  "queued",
+  "running",
+  "paused",
+  "waiting_user",
+  "waiting_approval",
+  "interrupted",
+  "stale",
+  "completed",
+  "failed",
+  "cancelled",
+  "lost",
+]);
+
+export function normalizeGmScienceRun(payload: unknown): GmScienceRun | null {
+  const run = asRecord(payload);
+  if (!run) {
+    return null;
+  }
+  const status = asString(run.status) as GmScienceRunStatus;
+  if (!GM_SCIENCE_RUN_STATUSES.has(status)) {
+    return null;
+  }
+  const controls = asRecord(run.controls) ?? {};
+  const endedAt = run.ended_at_ms ?? run.endedAtMs;
+  return {
+    taskId: asString(run.task_id ?? run.taskId),
+    projectId: asString(run.project_id ?? run.projectId),
+    sessionId: asString(run.session_id ?? run.sessionId),
+    parentTaskId: asString(run.parent_task_id ?? run.parentTaskId),
+    kind: asString(run.kind),
+    title: asString(run.title),
+    status,
+    progressSummary: asString(run.progress_summary ?? run.progressSummary),
+    terminalSummary: asString(run.terminal_summary ?? run.terminalSummary),
+    lastError: asString(run.last_error ?? run.lastError),
+    createdAt: asString(run.created_at ?? run.createdAt, new Date().toISOString()),
+    updatedAt: asString(run.updated_at ?? run.updatedAt, new Date().toISOString()),
+    createdAtMs: asNumber(run.created_at_ms ?? run.createdAtMs),
+    updatedAtMs: asNumber(run.updated_at_ms ?? run.updatedAtMs),
+    endedAtMs: typeof endedAt === "number" && Number.isFinite(endedAt) ? endedAt : null,
+    canCancel: controls.can_cancel === true || controls.canCancel === true,
+    canRetry: run.can_retry === true || run.canRetry === true,
+    logPreview: asString(run.log_preview ?? run.logPreview),
+    artifactIds: asStringList(run.artifact_ids ?? run.artifactIds),
   };
 }

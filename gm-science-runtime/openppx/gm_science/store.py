@@ -1,4 +1,4 @@
-"""SQLite-backed store for gm-science projects, sessions, and artifacts."""
+"""SQLite-backed store for gm-science projects, sessions, runs, and artifacts."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Iterator
 
-from .models import ArtifactRecord, ProjectRecord, ProjectSessionRecord
+from .models import ArtifactRecord, ProjectRecord, ProjectSessionRecord, ScienceRunRecord
 from .paths import get_gm_science_data_dir
 
 
@@ -252,6 +252,102 @@ class GmScienceStore:
             ).fetchone()
         return int(row["count"] if row is not None else 0)
 
+    def create_science_run(
+        self,
+        *,
+        task_id: str,
+        project_id: str,
+        kind: str,
+        title: str,
+        source_path: str,
+        working_directory: str,
+        session_id: str | None = None,
+        parent_task_id: str | None = None,
+        input_payload: dict[str, Any] | None = None,
+    ) -> ScienceRunRecord:
+        """Associate one openppx TaskRun with immutable Project execution intent."""
+
+        if self.get_project(project_id) is None:
+            raise ValueError(f"Project '{project_id}' was not found.")
+        normalized_task_id = str(task_id or "").strip()
+        normalized_kind = str(kind or "").strip()
+        if not normalized_task_id:
+            raise ValueError("Task id is required.")
+        if not normalized_kind:
+            raise ValueError("Science run kind is required.")
+        normalized_session_id = str(session_id or "").strip() or None
+        if normalized_session_id:
+            association = self.get_project_session(normalized_session_id)
+            if association is None or association.project_id != project_id:
+                raise ValueError(
+                    f"Session '{normalized_session_id}' does not belong to Project '{project_id}'."
+                )
+        timestamp = _utc_now()
+        record = ScienceRunRecord(
+            task_id=normalized_task_id,
+            project_id=project_id,
+            session_id=normalized_session_id,
+            parent_task_id=str(parent_task_id or "").strip() or None,
+            kind=normalized_kind,
+            title=str(title or "").strip() or normalized_kind,
+            source_path=str(source_path or ""),
+            working_directory=str(working_directory or ""),
+            input_payload=dict(input_payload or {}),
+            created_at=timestamp,
+            updated_at=timestamp,
+        )
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO gm_science_runs (
+                    task_id, project_id, session_id, parent_task_id, kind, title,
+                    source_path, working_directory, input_payload, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.task_id,
+                    record.project_id,
+                    record.session_id,
+                    record.parent_task_id,
+                    record.kind,
+                    record.title,
+                    record.source_path,
+                    record.working_directory,
+                    _json_dumps(record.input_payload),
+                    record.created_at,
+                    record.updated_at,
+                ),
+            )
+            conn.execute(
+                "UPDATE gm_science_projects SET updated_at = ? WHERE id = ?",
+                (timestamp, project_id),
+            )
+        return record
+
+    def get_science_run(self, task_id: str) -> ScienceRunRecord | None:
+        """Return one Project-facing science run association by TaskRun id."""
+
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM gm_science_runs WHERE task_id = ?",
+                (str(task_id or "").strip(),),
+            ).fetchone()
+        return _science_run_from_row(row) if row is not None else None
+
+    def list_science_runs(self, project_id: str) -> list[ScienceRunRecord]:
+        """List science run associations for one Project in newest-first order."""
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM gm_science_runs
+                WHERE project_id = ?
+                ORDER BY created_at DESC, task_id DESC
+                """,
+                (project_id,),
+            ).fetchall()
+        return [_science_run_from_row(row) for row in rows]
+
     def create_artifact(
         self,
         *,
@@ -446,6 +542,25 @@ class GmScienceStore:
 
                 CREATE INDEX IF NOT EXISTS idx_gm_science_project_sessions_project
                 ON gm_science_project_sessions(project_id, updated_at);
+
+                CREATE TABLE IF NOT EXISTS gm_science_runs (
+                    task_id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    session_id TEXT,
+                    parent_task_id TEXT,
+                    kind TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    source_path TEXT NOT NULL,
+                    working_directory TEXT NOT NULL,
+                    input_payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(project_id) REFERENCES gm_science_projects(id) ON DELETE CASCADE,
+                    FOREIGN KEY(session_id) REFERENCES gm_science_project_sessions(session_id) ON DELETE SET NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_gm_science_runs_project
+                ON gm_science_runs(project_id, created_at);
                 """
             )
 
@@ -492,6 +607,24 @@ def _project_session_from_row(row: sqlite3.Row) -> ProjectSessionRecord:
         project_id=str(row["project_id"]),
         session_id=str(row["session_id"]),
         agent_id=str(row["agent_id"]),
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
+    )
+
+
+def _science_run_from_row(row: sqlite3.Row) -> ScienceRunRecord:
+    """Project one SQLite row into a ScienceRunRecord."""
+
+    return ScienceRunRecord(
+        task_id=str(row["task_id"]),
+        project_id=str(row["project_id"]),
+        session_id=str(row["session_id"]) if row["session_id"] is not None else None,
+        parent_task_id=str(row["parent_task_id"]) if row["parent_task_id"] is not None else None,
+        kind=str(row["kind"]),
+        title=str(row["title"]),
+        source_path=str(row["source_path"]),
+        working_directory=str(row["working_directory"]),
+        input_payload=_json_loads_dict(row["input_payload"]),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )

@@ -2,12 +2,15 @@ import {
   bootstrap,
   createGmScienceArtifact,
   createGmScienceProject,
+  createGmSciencePythonRun,
   createSession,
   listGmScienceCapabilities,
   listGmScienceArtifacts,
   listGmScienceProjects,
+  listGmScienceRuns,
   loadSession,
   updateGmScienceProjectCapabilities,
+  retryGmScienceRun,
 } from "../app/src/lib/mock-client";
 
 describe("mock client adapter", () => {
@@ -61,5 +64,20 @@ describe("mock client adapter", () => {
     });
     expect(updated.project.enabledConnectors).toEqual(["arxiv"]);
     expect(updated.capabilities.find((item) => item.id === "pubmed")?.projectEnabled).toBe(false);
+  });
+
+  it("supports gm-science local run APIs", async () => {
+    const created = await createGmSciencePythonRun("proj_mock_research", {
+      title: "Mock analysis",
+      source: "print('ok')",
+      sessionId: "builder-session-1",
+    });
+
+    expect(created.run.status).toBe("completed");
+    const runs = await listGmScienceRuns("proj_mock_research");
+    expect(runs.runs).toContainEqual(created.run);
+
+    const retried = await retryGmScienceRun("proj_mock_research", created.run.taskId);
+    expect(retried.run.parentTaskId).toBe(created.run.taskId);
   });
 });

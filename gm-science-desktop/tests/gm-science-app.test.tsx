@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { vi } from "vitest";
 import { App } from "../app/src/App";
 import type {
@@ -7,6 +7,7 @@ import type {
   GmScienceArtifact,
   GmScienceCapability,
   GmScienceProject,
+  GmScienceRun,
   PpxClientApi,
   RunEvent,
   RuntimeStatus,
@@ -46,6 +47,31 @@ function project(overrides: Partial<GmScienceProject> = {}): GmScienceProject {
     enabledSpecialists: ["paper_reader", "research_reviewer"],
     createdAt: "2026-07-10T10:00:00.000Z",
     updatedAt: "2026-07-10T10:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function scienceRun(overrides: Partial<GmScienceRun> = {}): GmScienceRun {
+  return {
+    taskId: "task-test",
+    projectId: "proj_123",
+    sessionId: "session-a",
+    parentTaskId: "",
+    kind: "local_python",
+    title: "Python run",
+    status: "completed",
+    progressSummary: "Completed.",
+    terminalSummary: "Completed.",
+    lastError: "",
+    createdAt: "2026-07-10T10:00:00.000Z",
+    updatedAt: "2026-07-10T10:00:00.000Z",
+    createdAtMs: 1,
+    updatedAtMs: 2,
+    endedAtMs: 2,
+    canCancel: false,
+    canRetry: true,
+    logPreview: "",
+    artifactIds: [],
     ...overrides,
   };
 }
@@ -156,6 +182,17 @@ function installClient(overrides: Partial<PpxClientApi> = {}): {
         createdAt: "2026-07-10T10:00:00.000Z",
         updatedAt: "2026-07-10T10:00:00.000Z",
       },
+    }),
+    listGmScienceRuns: async () => ({ runs: [] }),
+    getGmScienceRun: async (projectId, taskId) => ({ run: scienceRun({ projectId, taskId }) }),
+    createGmSciencePythonRun: async (projectId, input) => ({
+      run: scienceRun({ projectId, sessionId: input.sessionId ?? "", title: input.title }),
+    }),
+    cancelGmScienceRun: async (projectId, taskId) => ({
+      run: scienceRun({ projectId, taskId, status: "cancelled" }),
+    }),
+    retryGmScienceRun: async (projectId, taskId) => ({
+      run: scienceRun({ projectId, taskId: "task-retry", parentTaskId: taskId }),
     }),
     onRunEvent: (next) => {
       listener = next;
@@ -417,6 +454,144 @@ describe("gm-science App", () => {
 
     expect(screen.queryByText("Protein atlas")).not.toBeInTheDocument();
     expect(screen.getByText("Genome review")).toBeInTheDocument();
+  });
+
+  it("creates a Project-scoped local Python run from the Runs panel", async () => {
+    const createGmSciencePythonRun = vi.fn(async (projectId, input) => ({
+      run: scienceRun({
+        taskId: "task-created",
+        projectId,
+        sessionId: input.sessionId ?? "",
+        title: input.title,
+        status: "running",
+        canCancel: true,
+        canRetry: false,
+      }),
+    }));
+    installClient({ createGmSciencePythonRun });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    fireEvent.click(await screen.findByRole("tab", { name: "Runs" }));
+    fireEvent.click(screen.getByRole("button", { name: "New Python run" }));
+
+    fireEvent.change(screen.getByPlaceholderText("Run title"), { target: { value: "Analyze measurements" } });
+    fireEvent.change(screen.getByLabelText("Python source"), { target: { value: "print('analysis')" } });
+    fireEvent.change(screen.getByLabelText("Input JSON"), { target: { value: '{"argv":["--fast"]}' } });
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+
+    await waitFor(() => {
+      expect(createGmSciencePythonRun).toHaveBeenCalledWith("proj_123", {
+        title: "Analyze measurements",
+        source: "print('analysis')",
+        sessionId: undefined,
+        input: { argv: ["--fast"] },
+      });
+    });
+    expect(await screen.findByText("Analyze measurements")).toBeInTheDocument();
+    expect(screen.getByText("running")).toBeInTheDocument();
+  });
+
+  it("keeps the default Python source syntactically intact", async () => {
+    const createGmSciencePythonRun = vi.fn(async (projectId, input) => ({
+      run: scienceRun({ taskId: "task-default", projectId, title: input.title, status: "queued" }),
+    }));
+    installClient({ createGmSciencePythonRun });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    fireEvent.click(await screen.findByRole("tab", { name: "Runs" }));
+    fireEvent.click(screen.getByRole("button", { name: "New Python run" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+
+    await waitFor(() => expect(createGmSciencePythonRun).toHaveBeenCalledTimes(1));
+    const source = createGmSciencePythonRun.mock.calls[0][1].source;
+    expect(source).toContain('"gm-science local Python run completed.\\n"');
+    expect(source).not.toContain('"gm-science local Python run completed.\n"');
+  });
+
+  it("refreshes Artifacts when a Python run completes before polling starts", async () => {
+    const listGmScienceArtifacts = vi.fn(async () => ({ artifacts: [] }));
+    installClient({
+      listGmScienceArtifacts,
+      createGmSciencePythonRun: async (projectId, input) => ({
+        run: scienceRun({
+          taskId: "task-fast",
+          projectId,
+          title: input.title,
+          status: "completed",
+          canRetry: true,
+        }),
+      }),
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    await waitFor(() => expect(listGmScienceArtifacts).toHaveBeenCalledTimes(1));
+    fireEvent.click(await screen.findByRole("tab", { name: "Runs" }));
+    fireEvent.click(screen.getByRole("button", { name: "New Python run" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+
+    await waitFor(() => expect(listGmScienceArtifacts).toHaveBeenCalledTimes(2));
+  });
+
+  it("shows durable run output and exposes cancel and retry controls", async () => {
+    const cancelGmScienceRun = vi.fn(async (projectId, taskId) => ({
+      run: scienceRun({ projectId, taskId, title: "Long analysis", status: "cancelled" }),
+    }));
+    const retryGmScienceRun = vi.fn(async (projectId, taskId) => ({
+      run: scienceRun({
+        taskId: "task-retried",
+        projectId,
+        parentTaskId: taskId,
+        title: "Failed analysis",
+        status: "queued",
+        canCancel: true,
+        canRetry: false,
+      }),
+    }));
+    installClient({
+      listGmScienceRuns: async () => ({
+        runs: [
+          scienceRun({
+            taskId: "task-running",
+            title: "Long analysis",
+            status: "running",
+            canCancel: true,
+            canRetry: false,
+            progressSummary: "Processing batch 1",
+            logPreview: "loaded 12 rows",
+          }),
+          scienceRun({
+            taskId: "task-failed",
+            title: "Failed analysis",
+            status: "failed",
+            canCancel: false,
+            canRetry: true,
+            lastError: "ValueError: invalid column",
+          }),
+        ],
+      }),
+      cancelGmScienceRun,
+      retryGmScienceRun,
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    fireEvent.click(await screen.findByRole("tab", { name: "Runs" }));
+
+    expect(await screen.findByText("Long analysis")).toBeInTheDocument();
+    expect(screen.getByText("ValueError: invalid column")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Log output"));
+    expect(screen.getByText("loaded 12 rows")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(cancelGmScienceRun).toHaveBeenCalledWith("proj_123", "task-running"));
+    const failedRun = screen.getByText("Failed analysis").closest("article");
+    expect(failedRun).not.toBeNull();
+    fireEvent.click(within(failedRun as HTMLElement).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(retryGmScienceRun).toHaveBeenCalledWith("proj_123", "task-failed"));
+    expect(await screen.findByText("queued")).toBeInTheDocument();
   });
 
   it("refreshes artifacts when a run finishes", async () => {

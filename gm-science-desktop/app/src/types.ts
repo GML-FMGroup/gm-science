@@ -146,6 +146,48 @@ export interface CreateGmScienceArtifactInput {
   provenance?: Record<string, unknown>;
 }
 
+export type GmScienceRunStatus =
+  | "queued"
+  | "running"
+  | "paused"
+  | "waiting_user"
+  | "waiting_approval"
+  | "interrupted"
+  | "stale"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "lost";
+
+export interface GmScienceRun {
+  taskId: string;
+  projectId: string;
+  sessionId: string;
+  parentTaskId: string;
+  kind: string;
+  title: string;
+  status: GmScienceRunStatus;
+  progressSummary: string;
+  terminalSummary: string;
+  lastError: string;
+  createdAt: string;
+  updatedAt: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+  endedAtMs: number | null;
+  canCancel: boolean;
+  canRetry: boolean;
+  logPreview: string;
+  artifactIds: string[];
+}
+
+export interface CreateGmSciencePythonRunInput {
+  title: string;
+  source: string;
+  sessionId?: string;
+  input?: Record<string, unknown>;
+}
+
 export interface ChatMessage {
   id: string;
   sessionId: string;
@@ -222,5 +264,13 @@ export interface PpxClientApi {
     projectId: string,
     input: CreateGmScienceArtifactInput,
   ): Promise<{ artifact: GmScienceArtifact }>;
+  listGmScienceRuns(projectId: string): Promise<{ runs: GmScienceRun[] }>;
+  getGmScienceRun(projectId: string, taskId: string): Promise<{ run: GmScienceRun }>;
+  createGmSciencePythonRun(
+    projectId: string,
+    input: CreateGmSciencePythonRunInput,
+  ): Promise<{ run: GmScienceRun }>;
+  cancelGmScienceRun(projectId: string, taskId: string): Promise<{ run: GmScienceRun }>;
+  retryGmScienceRun(projectId: string, taskId: string): Promise<{ run: GmScienceRun }>;
   onRunEvent(listener: (event: RunEvent) => void): () => void;
 }

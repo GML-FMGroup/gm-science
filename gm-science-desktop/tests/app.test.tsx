@@ -5,6 +5,7 @@ import type {
   BootstrapPayload,
   ClientDiagnostics,
   GmScienceProject,
+  GmScienceRun,
   PpxClientApi,
   RunEvent,
   RuntimeStatus,
@@ -102,6 +103,31 @@ function buildProject(overrides: Partial<GmScienceProject> = {}): GmScienceProje
   };
 }
 
+function buildScienceRun(overrides: Partial<GmScienceRun> = {}): GmScienceRun {
+  return {
+    taskId: "task-test",
+    projectId: "proj-test",
+    sessionId: "session-a",
+    parentTaskId: "",
+    kind: "local_python",
+    title: "Python run",
+    status: "completed",
+    progressSummary: "Completed.",
+    terminalSummary: "Completed.",
+    lastError: "",
+    createdAt: "2026-04-02T10:00:00.000Z",
+    updatedAt: "2026-04-02T10:00:00.000Z",
+    createdAtMs: 1,
+    updatedAtMs: 2,
+    endedAtMs: 2,
+    canCancel: false,
+    canRetry: true,
+    logPreview: "",
+    artifactIds: [],
+    ...overrides,
+  };
+}
+
 function installClient(overrides: Partial<PpxClientApi> = {}): { client: PpxClientApi; emit: (event: RunEvent) => void } {
   let listener: ((event: RunEvent) => void) | null = null;
   const client: PpxClientApi = {
@@ -173,6 +199,17 @@ function installClient(overrides: Partial<PpxClientApi> = {}): { client: PpxClie
         createdAt: "2026-04-02T10:00:00.000Z",
         updatedAt: "2026-04-02T10:00:00.000Z",
       },
+    }),
+    listGmScienceRuns: async () => ({ runs: [] }),
+    getGmScienceRun: async (projectId, taskId) => ({ run: buildScienceRun({ projectId, taskId }) }),
+    createGmSciencePythonRun: async (projectId, input) => ({
+      run: buildScienceRun({ projectId, sessionId: input.sessionId ?? "", title: input.title }),
+    }),
+    cancelGmScienceRun: async (projectId, taskId) => ({
+      run: buildScienceRun({ projectId, taskId, status: "cancelled" }),
+    }),
+    retryGmScienceRun: async (projectId, taskId) => ({
+      run: buildScienceRun({ projectId, taskId: "task-retry", parentTaskId: taskId }),
     }),
     onRunEvent: (next) => {
       listener = next;

@@ -81,6 +81,26 @@ describe("preload API", () => {
       channel: "ppx-client:create-gm-science-artifact",
       args: ["proj-1", { title: "note" }],
     });
-    expect(invoke).toHaveBeenCalledTimes(8);
+    expect(api.listGmScienceRuns("proj-1")).toEqual({
+      channel: "ppx-client:list-gm-science-runs",
+      args: ["proj-1"],
+    });
+    expect(api.getGmScienceRun("proj-1", "task-1")).toEqual({
+      channel: "ppx-client:get-gm-science-run",
+      args: ["proj-1", "task-1"],
+    });
+    expect(api.createGmSciencePythonRun("proj-1", { title: "Run", source: "print(1)" })).toEqual({
+      channel: "ppx-client:create-gm-science-python-run",
+      args: ["proj-1", { title: "Run", source: "print(1)" }],
+    });
+    expect(api.cancelGmScienceRun("proj-1", "task-1")).toEqual({
+      channel: "ppx-client:cancel-gm-science-run",
+      args: ["proj-1", "task-1"],
+    });
+    expect(api.retryGmScienceRun("proj-1", "task-1")).toEqual({
+      channel: "ppx-client:retry-gm-science-run",
+      args: ["proj-1", "task-1"],
+    });
+    expect(invoke).toHaveBeenCalledTimes(13);
   });
 });

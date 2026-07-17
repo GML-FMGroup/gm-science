@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   ConnectionSettings,
   CreateGmScienceArtifactInput,
+  CreateGmSciencePythonRunInput,
   CreateGmScienceProjectInput,
   PpxClientApi,
   RunEvent,
@@ -31,6 +32,15 @@ const api: PpxClientApi = {
   listGmScienceArtifacts: (projectId: string) => ipcRenderer.invoke("ppx-client:list-gm-science-artifacts", projectId),
   createGmScienceArtifact: (projectId: string, input: CreateGmScienceArtifactInput) =>
     ipcRenderer.invoke("ppx-client:create-gm-science-artifact", projectId, input),
+  listGmScienceRuns: (projectId: string) => ipcRenderer.invoke("ppx-client:list-gm-science-runs", projectId),
+  getGmScienceRun: (projectId: string, taskId: string) =>
+    ipcRenderer.invoke("ppx-client:get-gm-science-run", projectId, taskId),
+  createGmSciencePythonRun: (projectId: string, input: CreateGmSciencePythonRunInput) =>
+    ipcRenderer.invoke("ppx-client:create-gm-science-python-run", projectId, input),
+  cancelGmScienceRun: (projectId: string, taskId: string) =>
+    ipcRenderer.invoke("ppx-client:cancel-gm-science-run", projectId, taskId),
+  retryGmScienceRun: (projectId: string, taskId: string) =>
+    ipcRenderer.invoke("ppx-client:retry-gm-science-run", projectId, taskId),
   onRunEvent: (listener: (event: RunEvent) => void) => {
     const wrapped = (_event: unknown, payload: RunEvent) => listener(payload);
     ipcRenderer.on("ppx-client:run-event", wrapped);

@@ -11,6 +11,7 @@ import type {
   GmScienceCapability,
   GmScienceCapabilityKind,
   GmScienceProject,
+  GmScienceRun,
   RuntimeState,
   RuntimeStatus,
   SessionSummary,
@@ -18,6 +19,7 @@ import type {
 
 type NavView = "projects" | "workspace" | "settings";
 type SettingsSection = GmScienceCapabilityKind | "runtime";
+type WorkspacePanel = "artifacts" | "runs";
 
 interface ProjectFormState {
   name: string;
@@ -25,11 +27,49 @@ interface ProjectFormState {
   agentContext: string;
 }
 
+interface PythonRunFormState {
+  title: string;
+  source: string;
+  inputJson: string;
+}
+
 const EMPTY_PROJECT_FORM: ProjectFormState = {
   name: "",
   description: "",
   agentContext: "",
 };
+
+const DEFAULT_PYTHON_SOURCE = `import json
+import os
+from pathlib import Path
+
+input_path = Path(os.environ["GM_SCIENCE_INPUT_PATH"])
+output_dir = Path(os.environ["GM_SCIENCE_OUTPUT_DIR"])
+payload = json.loads(input_path.read_text(encoding="utf-8"))
+
+print("Run started", payload)
+(output_dir / "result.txt").write_text(
+    "gm-science local Python run completed.\\n",
+    encoding="utf-8",
+)
+print("Run completed")
+`;
+
+const DEFAULT_PYTHON_RUN_FORM: PythonRunFormState = {
+  title: "Python experiment",
+  source: DEFAULT_PYTHON_SOURCE,
+  inputJson: "{}",
+};
+
+const ACTIVE_RUN_STATUSES = new Set<GmScienceRun["status"]>([
+  "queued",
+  "running",
+  "paused",
+  "waiting_user",
+  "waiting_approval",
+  "interrupted",
+  "stale",
+]);
 
 function mergeMessages(current: ChatMessage[], incoming: ChatMessage): ChatMessage[] {
   return current.some((item) => item.id === incoming.id) ? current : [...current, incoming];
@@ -174,6 +214,21 @@ function artifactSearchText(artifact: GmScienceArtifact): string {
   return `${artifact.title} ${artifact.type} ${JSON.stringify(artifact.metadata)}`.toLowerCase();
 }
 
+function isActiveRun(run: GmScienceRun): boolean {
+  return ACTIVE_RUN_STATUSES.has(run.status);
+}
+
+function formatRunStatus(status: GmScienceRun["status"]): string {
+  return status.replaceAll("_", " ");
+}
+
+function formatRunTime(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? ""
+    : date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
 function isWebUrl(value: string): boolean {
   return /^https?:\/\//i.test(value.trim());
 }
@@ -291,6 +346,53 @@ function ArtifactItem({ artifact }: { artifact: GmScienceArtifact }) {
   );
 }
 
+function RunItem({
+  run,
+  actionPending,
+  onCancel,
+  onRetry,
+}: {
+  run: GmScienceRun;
+  actionPending: boolean;
+  onCancel: (run: GmScienceRun) => void;
+  onRetry: (run: GmScienceRun) => void;
+}) {
+  const summary = run.lastError || run.terminalSummary || run.progressSummary;
+  return (
+    <article className="science-run-item">
+      <div className="science-run-title-row">
+        <div>
+          <strong>{run.title}</strong>
+          <time>{formatRunTime(run.createdAt)}</time>
+        </div>
+        <span className={`science-run-status ${run.status}`}>{formatRunStatus(run.status)}</span>
+      </div>
+      {summary ? <p className={run.lastError ? "science-run-summary error" : "science-run-summary"}>{summary}</p> : null}
+      {run.logPreview ? (
+        <details className="science-run-log">
+          <summary>Log output</summary>
+          <pre>{run.logPreview}</pre>
+        </details>
+      ) : null}
+      {run.artifactIds.length ? <small>{run.artifactIds.length} artifacts</small> : null}
+      {run.canCancel || run.canRetry ? (
+        <div className="science-run-actions">
+          {run.canCancel ? (
+            <button className="secondary small" disabled={actionPending} onClick={() => onCancel(run)}>
+              Cancel
+            </button>
+          ) : null}
+          {run.canRetry ? (
+            <button className="secondary small" disabled={actionPending} onClick={() => onRetry(run)}>
+              Retry
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
 export function App() {
   const [view, setView] = useState<NavView>("projects");
   const [ready, setReady] = useState(false);
@@ -300,7 +402,9 @@ export function App() {
   const [agents, setAgents] = useState<AgentProfile[]>([]);
   const [projects, setProjects] = useState<GmScienceProject[]>([]);
   const [artifacts, setArtifacts] = useState<GmScienceArtifact[]>([]);
+  const [runs, setRuns] = useState<GmScienceRun[]>([]);
   const [artifactSearch, setArtifactSearch] = useState("");
+  const [workspacePanel, setWorkspacePanel] = useState<WorkspacePanel>("artifacts");
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState("");
@@ -322,11 +426,17 @@ export function App() {
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [projectForm, setProjectForm] = useState<ProjectFormState>(EMPTY_PROJECT_FORM);
   const [creatingProject, setCreatingProject] = useState(false);
+  const [pythonRunModalOpen, setPythonRunModalOpen] = useState(false);
+  const [pythonRunForm, setPythonRunForm] = useState<PythonRunFormState>(DEFAULT_PYTHON_RUN_FORM);
+  const [runError, setRunError] = useState<string | null>(null);
+  const [submittingRun, setSubmittingRun] = useState(false);
+  const [runActionTaskId, setRunActionTaskId] = useState("");
   const switchRequestIdRef = useRef(0);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const messageStreamRef = useRef<HTMLElement | null>(null);
   const nextScrollBehaviorRef = useRef<ScrollBehavior>("auto");
   const selectedProjectIdRef = useRef("");
+  const runsRef = useRef<GmScienceRun[]>([]);
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === selectedProjectId) ?? null,
@@ -456,6 +566,20 @@ export function App() {
   }, [view, selectedProjectId]);
 
   useEffect(() => {
+    runsRef.current = runs;
+  }, [runs]);
+
+  useEffect(() => {
+    if (view !== "workspace" || !selectedProjectId || !runs.some(isActiveRun)) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void refreshRuns(selectedProjectId);
+    }, 1200);
+    return () => window.clearInterval(timer);
+  }, [runs, selectedProjectId, view]);
+
+  useEffect(() => {
     const stream = messageStreamRef.current;
     if (!stream) {
       return;
@@ -549,12 +673,45 @@ export function App() {
     }
   }
 
+  async function refreshRuns(projectId: string, clearOnError = false): Promise<void> {
+    if (!projectId) {
+      return;
+    }
+    try {
+      const payload = await window.ppxClient.listGmScienceRuns(projectId);
+      if (selectedProjectIdRef.current !== projectId) {
+        return;
+      }
+      const previous = new Map(runsRef.current.map((run) => [run.taskId, run]));
+      const becameTerminal = payload.runs.some((run) => {
+        const prior = previous.get(run.taskId);
+        return Boolean(prior && isActiveRun(prior) && !isActiveRun(run));
+      });
+      runsRef.current = payload.runs;
+      setRuns(payload.runs);
+      if (becameTerminal) {
+        await Promise.all([refreshArtifacts(projectId), refreshProjects()]);
+      }
+    } catch (error) {
+      if (clearOnError && selectedProjectIdRef.current === projectId) {
+        runsRef.current = [];
+        setRuns([]);
+      }
+      if (workspacePanel === "runs" && selectedProjectIdRef.current === projectId) {
+        setRunError(error instanceof Error ? error.message : String(error));
+      }
+    }
+  }
+
   async function openProject(project: GmScienceProject): Promise<void> {
     const requestId = ++switchRequestIdRef.current;
     setProjectError(null);
     selectedProjectIdRef.current = project.id;
     setSelectedProjectId(project.id);
     setArtifactSearch("");
+    setRunError(null);
+    runsRef.current = [];
+    setRuns([]);
     setSelectedSessionId("");
     setMessages([]);
     setView("workspace");
@@ -578,7 +735,88 @@ export function App() {
         setMessages(loaded.messages);
       }
     }
-    await refreshArtifacts(project.id, true);
+    await Promise.all([refreshArtifacts(project.id, true), refreshRuns(project.id, true)]);
+  }
+
+  function openPythonRunDialog(): void {
+    setPythonRunForm(DEFAULT_PYTHON_RUN_FORM);
+    setRunError(null);
+    setPythonRunModalOpen(true);
+  }
+
+  async function createPythonRun(): Promise<void> {
+    const title = pythonRunForm.title.trim();
+    const source = pythonRunForm.source;
+    if (!selectedProjectId || !title || !source.trim()) {
+      setRunError("Run title and Python source are required.");
+      return;
+    }
+    let input: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(pythonRunForm.inputJson || "{}");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("Input must be a JSON object.");
+      }
+      input = parsed as Record<string, unknown>;
+    } catch (error) {
+      setRunError(error instanceof Error ? error.message : String(error));
+      return;
+    }
+    setSubmittingRun(true);
+    setRunError(null);
+    try {
+      const created = await window.ppxClient.createGmSciencePythonRun(selectedProjectId, {
+        title,
+        source,
+        sessionId: selectedSessionId || undefined,
+        input,
+      });
+      runsRef.current = [created.run, ...runsRef.current.filter((run) => run.taskId !== created.run.taskId)];
+      setRuns(runsRef.current);
+      setWorkspacePanel("runs");
+      setPythonRunModalOpen(false);
+      if (!isActiveRun(created.run)) {
+        await Promise.all([refreshArtifacts(selectedProjectId), refreshProjects()]);
+      }
+    } catch (error) {
+      setRunError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSubmittingRun(false);
+    }
+  }
+
+  async function cancelPythonRun(run: GmScienceRun): Promise<void> {
+    setRunActionTaskId(run.taskId);
+    setRunError(null);
+    try {
+      const cancelled = await window.ppxClient.cancelGmScienceRun(run.projectId, run.taskId);
+      runsRef.current = runsRef.current.map((item) =>
+        item.taskId === cancelled.run.taskId ? cancelled.run : item,
+      );
+      setRuns(runsRef.current);
+      await Promise.all([refreshArtifacts(run.projectId), refreshProjects()]);
+    } catch (error) {
+      setRunError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRunActionTaskId("");
+    }
+  }
+
+  async function retryPythonRun(run: GmScienceRun): Promise<void> {
+    setRunActionTaskId(run.taskId);
+    setRunError(null);
+    try {
+      const retried = await window.ppxClient.retryGmScienceRun(run.projectId, run.taskId);
+      runsRef.current = [retried.run, ...runsRef.current.filter((item) => item.taskId !== retried.run.taskId)];
+      setRuns(runsRef.current);
+      if (!isActiveRun(retried.run)) {
+        await Promise.all([refreshArtifacts(run.projectId), refreshProjects()]);
+      }
+    } catch (error) {
+      setRunError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRunActionTaskId("");
+    }
   }
 
   async function createProject(): Promise<void> {
@@ -985,25 +1223,68 @@ export function App() {
 
           <aside className="artifacts-shell">
             <header className="artifacts-header">
-              <strong>Artifacts</strong>
-              <span>{artifacts.length}</span>
+              <div className="workspace-panel-tabs" role="tablist" aria-label="Project workspace panel">
+                <button
+                  className={workspacePanel === "artifacts" ? "active" : ""}
+                  role="tab"
+                  aria-selected={workspacePanel === "artifacts"}
+                  onClick={() => setWorkspacePanel("artifacts")}
+                >
+                  Artifacts
+                </button>
+                <button
+                  className={workspacePanel === "runs" ? "active" : ""}
+                  role="tab"
+                  aria-selected={workspacePanel === "runs"}
+                  onClick={() => setWorkspacePanel("runs")}
+                >
+                  Runs
+                </button>
+              </div>
+              <span>{workspacePanel === "artifacts" ? artifacts.length : runs.length}</span>
             </header>
-            <input
-              className="artifact-search"
-              value={artifactSearch}
-              placeholder="Search artifacts..."
-              aria-label="Search artifacts"
-              onChange={(event) => setArtifactSearch(event.target.value)}
-            />
-            <div className="artifact-list">
-              {visibleArtifacts.map((artifact) => (
-                <ArtifactItem key={artifact.id} artifact={artifact} />
-              ))}
-              {artifacts.length === 0 ? <div className="artifact-empty">No artifacts yet</div> : null}
-              {artifacts.length > 0 && visibleArtifacts.length === 0 ? (
-                <div className="artifact-empty">No matching artifacts</div>
-              ) : null}
-            </div>
+            {workspacePanel === "artifacts" ? (
+              <>
+                <input
+                  className="artifact-search"
+                  value={artifactSearch}
+                  placeholder="Search artifacts..."
+                  aria-label="Search artifacts"
+                  onChange={(event) => setArtifactSearch(event.target.value)}
+                />
+                <div className="artifact-list">
+                  {visibleArtifacts.map((artifact) => (
+                    <ArtifactItem key={artifact.id} artifact={artifact} />
+                  ))}
+                  {artifacts.length === 0 ? <div className="artifact-empty">No artifacts yet</div> : null}
+                  {artifacts.length > 0 && visibleArtifacts.length === 0 ? (
+                    <div className="artifact-empty">No matching artifacts</div>
+                  ) : null}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="science-runs-toolbar">
+                  <span>{runs.some(isActiveRun) ? "Execution in progress" : "Local Python"}</span>
+                  <button className="secondary small" onClick={openPythonRunDialog} aria-label="New Python run">
+                    + New run
+                  </button>
+                </div>
+                <div className="science-run-list">
+                  {runError ? <p className="science-runs-error">{runError}</p> : null}
+                  {runs.map((run) => (
+                    <RunItem
+                      key={run.taskId}
+                      run={run}
+                      actionPending={runActionTaskId === run.taskId}
+                      onCancel={(item) => void cancelPythonRun(item)}
+                      onRetry={(item) => void retryPythonRun(item)}
+                    />
+                  ))}
+                  {runs.length === 0 ? <div className="artifact-empty">No runs yet</div> : null}
+                </div>
+              </>
+            )}
           </aside>
         </>
       ) : null}
@@ -1172,6 +1453,67 @@ export function App() {
               </button>
               <button className="primary" disabled={creatingProject || !projectForm.name.trim()} onClick={() => void createProject()}>
                 {creatingProject ? "Creating..." : "Create"}
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
+
+      {pythonRunModalOpen ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="project-modal python-run-modal" role="dialog" aria-modal="true" aria-labelledby="new-run-title">
+            <header>
+              <div>
+                <h2 id="new-run-title">New Python Run</h2>
+                <p>Runs locally in this Project workspace.</p>
+              </div>
+              <button className="icon-button" onClick={() => setPythonRunModalOpen(false)} aria-label="Close Python run dialog">
+                ×
+              </button>
+            </header>
+            <div className="python-run-form-body">
+              <label className="settings-field">
+                <span>Title</span>
+                <input
+                  autoFocus
+                  value={pythonRunForm.title}
+                  placeholder="Run title"
+                  onChange={(event) => setPythonRunForm((current) => ({ ...current, title: event.target.value }))}
+                />
+              </label>
+              <label className="settings-field">
+                <span>Python source</span>
+                <textarea
+                  className="python-source-editor"
+                  value={pythonRunForm.source}
+                  spellCheck={false}
+                  aria-label="Python source"
+                  onChange={(event) => setPythonRunForm((current) => ({ ...current, source: event.target.value }))}
+                />
+              </label>
+              <label className="settings-field">
+                <span>Input JSON</span>
+                <textarea
+                  className="python-input-editor"
+                  value={pythonRunForm.inputJson}
+                  spellCheck={false}
+                  aria-label="Input JSON"
+                  onChange={(event) => setPythonRunForm((current) => ({ ...current, inputJson: event.target.value }))}
+                />
+                <small>Available from the GM_SCIENCE_INPUT_PATH environment variable. Use an argv array for command-line arguments.</small>
+              </label>
+              {runError ? <p className="composer-error">{runError}</p> : null}
+            </div>
+            <footer>
+              <button className="secondary" onClick={() => setPythonRunModalOpen(false)}>
+                Cancel
+              </button>
+              <button
+                className="primary"
+                disabled={submittingRun || !pythonRunForm.title.trim() || !pythonRunForm.source.trim()}
+                onClick={() => void createPythonRun()}
+              >
+                {submittingRun ? "Starting..." : "Run"}
               </button>
             </footer>
           </section>

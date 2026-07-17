@@ -1,4 +1,4 @@
-"""Data models for gm-science projects, sessions, and artifacts."""
+"""Data models for gm-science projects, sessions, runs, and artifacts."""
 
 from __future__ import annotations
 
@@ -29,6 +29,23 @@ class ProjectSessionRecord:
     project_id: str
     session_id: str
     agent_id: str
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class ScienceRunRecord:
+    """A Project-facing association for one openppx TaskRun."""
+
+    task_id: str
+    project_id: str
+    session_id: str | None
+    parent_task_id: str | None
+    kind: str
+    title: str
+    source_path: str
+    working_directory: str
+    input_payload: dict[str, Any]
     created_at: str
     updated_at: str
 

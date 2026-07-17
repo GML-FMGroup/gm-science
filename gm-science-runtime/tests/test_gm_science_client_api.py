@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -54,6 +55,72 @@ def test_handler_routes_expose_gm_science_project_and_artifact_api(tmp_path: Pat
 
     _ClientApiHandler.do_GET(handler)
     assert sent[-1][1]["data"]["items"] == [artifact["data"]["artifact"]]
+
+
+def test_handler_routes_expose_project_python_runs(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    project = coordinator.create_gm_science_project({"name": "Run API"})["data"]["project"]
+    session = coordinator.create_session(
+        GM_SCIENCE_DEFAULT_AGENT_NAME,
+        project_id=project["id"],
+    )["data"]["session"]
+    handler, sent = _fake_handler(coordinator)
+    handler._parse = lambda: (
+        f"/api/v1/gm-science/projects/{project['id']}/runs",
+        ["api", "v1", "gm-science", "projects", project["id"], "runs"],
+        {},
+    )
+    handler._read_json_body = lambda: {
+        "title": "HTTP Python",
+        "session_id": session["id"],
+        "source": "print('http python')",
+        "input": {"argv": []},
+    }
+
+    _ClientApiHandler.do_POST(handler)
+    assert sent[-1][0] == 200
+    created = sent[-1][1]["data"]["run"]
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        payload = coordinator.get_gm_science_run(project["id"], created["task_id"])
+        if payload["data"]["run"]["status"] in {"completed", "failed"}:
+            break
+        time.sleep(0.05)
+    assert payload["data"]["run"]["status"] == "completed"
+
+    _ClientApiHandler.do_GET(handler)
+    assert sent[-1][0] == 200
+    assert sent[-1][1]["data"]["items"][0]["task_id"] == created["task_id"]
+
+    handler._parse = lambda: (
+        f"/api/v1/gm-science/projects/{project['id']}/runs/{created['task_id']}",
+        ["api", "v1", "gm-science", "projects", project["id"], "runs", created["task_id"]],
+        {},
+    )
+    _ClientApiHandler.do_GET(handler)
+    assert sent[-1][0] == 200
+    assert "http python" in sent[-1][1]["data"]["run"]["log_preview"]
+
+    handler._parse = lambda: (
+        f"/api/v1/gm-science/projects/{project['id']}/runs/{created['task_id']}/retry",
+        [
+            "api",
+            "v1",
+            "gm-science",
+            "projects",
+            project["id"],
+            "runs",
+            created["task_id"],
+            "retry",
+        ],
+        {},
+    )
+    handler._read_json_body = lambda: {}
+    _ClientApiHandler.do_POST(handler)
+    assert sent[-1][0] == 200
+    assert sent[-1][1]["data"]["run"]["parent_task_id"] == created["task_id"]
 
 
 def test_handler_routes_expose_project_capability_api(tmp_path: Path, monkeypatch) -> None:

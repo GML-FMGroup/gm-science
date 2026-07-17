@@ -572,6 +572,14 @@ def default_config() -> dict[str, Any]:
             },
         },
         "science": {
+            "execution": {
+                "enabled": True,
+                "pythonExecutable": "",
+                "maxConcurrentRuns": 1,
+                "defaultTimeoutSeconds": 900,
+                "maxSourceChars": 200000,
+                "maxLogPreviewChars": 6000,
+            },
             "projectDefaults": {
                 "enabledSkills": ["literature-review"],
                 "enabledConnectors": ["arxiv", "pubmed", "openalex"],

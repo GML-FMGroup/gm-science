@@ -148,6 +148,7 @@ class ExecutionRecipe:
     terminate_callback: Callable[[], None] | None = None
     task_kind: str = "skill_api"
     runner_payload: dict[str, Any] = field(default_factory=dict)
+    always_task: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -849,6 +850,71 @@ class ProcessExecutionSupervisor:
             self.tool_call_store.settle(idempotency_key, status="failed", error=str(exc))
             return ExecutionResult(mode="error", status="failed", error=str(exc))
 
+    def invoke_process(
+        self,
+        *,
+        title: str,
+        argv: list[str],
+        cwd: Path,
+        env: dict[str, str] | None = None,
+        context: TaskInvocationContext | None = None,
+        scope_key: str | None = None,
+        task_kind: str = "local_process",
+        runner_payload: dict[str, Any] | None = None,
+        always_task: bool = True,
+    ) -> ExecutionResult:
+        """Run one explicit argv through the shared supervised process envelope."""
+
+        normalized_argv = [str(item) for item in argv if str(item)]
+        if not normalized_argv:
+            return ExecutionResult(mode="error", status="failed", error="process argv is empty")
+        ctx = context or TaskInvocationContext()
+        args_hash = _stable_hash(
+            {
+                "title": title,
+                "argv": normalized_argv,
+                "cwd": str(cwd),
+                "task_kind": task_kind,
+                "runner_payload": runner_payload or {},
+            }
+        )
+        idempotency_key = _idempotency_key(
+            context=ctx,
+            tool_name="invoke_process",
+            args_hash=args_hash,
+        )
+        record, created = self.tool_call_store.create_or_get(
+            idempotency_key=idempotency_key,
+            tool_name="invoke_process",
+            args_hash=args_hash,
+        )
+        if not created and record.task_id:
+            task = self.task_store.get_task(record.task_id)
+            if task is not None:
+                return ExecutionResult(mode="task", status=task.status, task=task, replayed=True)
+        recipe = ExecutionRecipe(
+            title=str(title or "Local process").strip() or "Local process",
+            command=shlex.join(normalized_argv),
+            argv=normalized_argv,
+            cwd=Path(cwd),
+            env=dict(env or os.environ),
+            scope_key=scope_key,
+            task_kind=str(task_kind or "local_process"),
+            runner_payload=dict(runner_payload or {}),
+            always_task=always_task,
+        )
+        try:
+            return self._run_process_recipe(
+                recipe=recipe,
+                inline_budget_ms=0 if always_task else None,
+                context=ctx,
+                idempotency_key=idempotency_key,
+                dedupe_key=f"process:{task_kind}:{args_hash}",
+            )
+        except Exception as exc:
+            self.tool_call_store.settle(idempotency_key, status="failed", error=str(exc))
+            return ExecutionResult(mode="error", status="failed", error=str(exc))
+
     def _run_process_recipe(
         self,
         *,
@@ -883,7 +949,7 @@ class ProcessExecutionSupervisor:
             self.tool_call_store.settle(idempotency_key, status="failed", error="failed to poll process")
             return ExecutionResult(mode="error", status="failed", error="failed to poll process")
 
-        if bool(polled.get("exited")):
+        if bool(polled.get("exited")) and not recipe.always_task:
             output = _format_process_output(polled, warnings=warnings)
             exit_code = polled.get("exit_code") if isinstance(polled.get("exit_code"), int) else None
             status = "completed" if exit_code == 0 else "failed"
@@ -907,9 +973,18 @@ class ProcessExecutionSupervisor:
             },
         }
         runner_payload.update(recipe.runner_payload)
+        exited = bool(polled.get("exited"))
+        exit_code = polled.get("exit_code") if isinstance(polled.get("exit_code"), int) else None
+        status = "completed" if exited and exit_code == 0 else "failed" if exited else "running"
+        terminal_output = _format_process_output(polled, warnings=warnings) if exited else ""
+        terminal_summary = (
+            terminal_output
+            if len(terminal_output) <= MAX_TERMINAL_SUMMARY_CHARS
+            else terminal_output[-MAX_TERMINAL_SUMMARY_CHARS:]
+        )
         task = self.task_store.create_task(
             kind=recipe.task_kind,
-            status="running",
+            status=status,
             title=recipe.title,
             owner_key=context.owner_key or context.user_id,
             user_id=context.user_id,
@@ -927,15 +1002,29 @@ class ProcessExecutionSupervisor:
             stop_policy="interrupt_task",
             cancel_policy="kill_process",
             progress_summary=progress,
+            terminal_summary=terminal_summary,
+            last_error="" if status != "failed" else terminal_summary[-1000:],
         )
         self.event_store.append_event(
             task.task_id,
-            "task.started",
-            message=progress,
-            payload={"session_id": session.session_id, "pid": session.process.pid, "warnings": warnings},
+            f"task.{status}" if exited else "task.started",
+            message=terminal_summary or progress,
+            payload={
+                "session_id": session.session_id,
+                "pid": session.process.pid,
+                "warnings": warnings,
+                "exit_code": exit_code,
+            },
         )
-        self.tool_call_store.link_task(idempotency_key, task.task_id, status="running")
-        return ExecutionResult(mode="task", status="running", task=task)
+        self.tool_call_store.link_task(idempotency_key, task.task_id, status=status)
+        if exited:
+            self.tool_call_store.settle(
+                idempotency_key,
+                status=status,
+                result={"mode": "task", "status": status, "task_id": task.task_id, "exit_code": exit_code},
+                error=terminal_summary[-1000:] if status == "failed" else "",
+            )
+        return ExecutionResult(mode="task", status=status, task=task, exit_code=exit_code)
 
 
 class TaskRunnerAdapter:

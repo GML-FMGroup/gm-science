@@ -19,6 +19,7 @@
 **/.benchmarks/
 **/.openppx/
 **/workspace/
+/messages/
 
 # Local planning scratch files
 /task_plan.md

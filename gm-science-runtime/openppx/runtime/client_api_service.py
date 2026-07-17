@@ -20,6 +20,7 @@ from ..core.config import get_data_dir
 from ..core.logging_utils import debug_logging_enabled, emit_debug
 from ..gm_science.bootstrap import GM_SCIENCE_DEFAULT_AGENT_NAME, ensure_gm_science_initialized
 from ..gm_science.capabilities import build_capability_catalog, normalize_capability_selection
+from ..gm_science.execution import ScienceExecutionService
 from ..gm_science.literature.config import load_literature_config, select_literature_sources
 from ..gm_science.models import ArtifactRecord, ProjectRecord
 from ..gm_science.specialists.config import load_specialist_config
@@ -744,6 +745,11 @@ class ClientApiCoordinator:
         self._sessions_cache: dict[tuple[str, str], _TimedCacheEntry] = {}
         self._messages_cache: dict[tuple[str, str], _TimedCacheEntry] = {}
         self._gm_science_store = GmScienceStore(self.data_dir)
+        self._science_execution = ScienceExecutionService(
+            data_dir=self.data_dir,
+            store=self._gm_science_store,
+            config_path=agent_config_path(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir),
+        )
 
     def _ensure_requester_principal(self, user_id: str) -> ResolvedPrincipal:
         """Return a persisted requester principal for client-api operations."""
@@ -1325,6 +1331,84 @@ class ClientApiCoordinator:
         except ValueError as exc:
             return _error("INVALID_REQUEST", str(exc))
         return _ok({"artifact": _gm_science_artifact_payload(artifact)})
+
+    def list_gm_science_runs(self, project_id: str) -> dict[str, Any]:
+        """Return synchronized local execution runs for one gm-science Project."""
+
+        try:
+            return _ok({"items": self._science_execution.list_runs(project_id)})
+        except ValueError as exc:
+            return _error("PROJECT_NOT_FOUND", str(exc))
+        except RuntimeError as exc:
+            return _error("EXECUTION_UNAVAILABLE", str(exc))
+
+    def get_gm_science_run(self, project_id: str, task_id: str) -> dict[str, Any]:
+        """Return one synchronized local execution run."""
+
+        try:
+            return _ok({"run": self._science_execution.get_run(project_id, task_id)})
+        except ValueError as exc:
+            return _error("RUN_NOT_FOUND", str(exc))
+        except RuntimeError as exc:
+            return _error("EXECUTION_UNAVAILABLE", str(exc))
+
+    def create_gm_science_python_run(self, project_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Submit one Project-scoped local Python TaskRun."""
+
+        source = str(body.get("source") or "")
+        if not source.strip():
+            return _error("INVALID_REQUEST", "Field 'source' is required.")
+        raw_input = body.get("input") if "input" in body else body.get("input_payload")
+        if raw_input is not None and not isinstance(raw_input, dict):
+            return _error("INVALID_REQUEST", "Field 'input' must be a JSON object.")
+        try:
+            run = self._science_execution.submit_python_run(
+                project_id=project_id,
+                session_id=str(body.get("session_id") or body.get("sessionId") or "") or None,
+                title=str(body.get("title") or "Python run"),
+                source=source,
+                input_payload=raw_input if isinstance(raw_input, dict) else {},
+                user_id=str(body.get("user_id") or "ppx-client-user"),
+            )
+        except ValueError as exc:
+            return _error("INVALID_REQUEST", str(exc))
+        except RuntimeError as exc:
+            return _error("EXECUTION_UNAVAILABLE", str(exc))
+        return _ok({"run": run})
+
+    def cancel_gm_science_run(self, project_id: str, task_id: str) -> dict[str, Any]:
+        """Cancel one active Project-scoped local execution run."""
+
+        try:
+            return _ok({"run": self._science_execution.cancel_run(project_id, task_id)})
+        except ValueError as exc:
+            return _error("RUN_NOT_FOUND", str(exc))
+        except RuntimeError as exc:
+            return _error("EXECUTION_UNAVAILABLE", str(exc))
+
+    def retry_gm_science_run(
+        self,
+        project_id: str,
+        task_id: str,
+        *,
+        user_id: str = "ppx-client-user",
+    ) -> dict[str, Any]:
+        """Create a new local execution run from one terminal run's saved intent."""
+
+        try:
+            return _ok(
+                {
+                    "run": self._science_execution.retry_run(
+                        project_id,
+                        task_id,
+                        user_id=user_id,
+                    )
+                }
+            )
+        except ValueError as exc:
+            return _error("INVALID_REQUEST", str(exc))
+        except RuntimeError as exc:
+            return _error("EXECUTION_UNAVAILABLE", str(exc))
 
     def create_gm_science_project_run(
         self,
@@ -2698,6 +2782,22 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
         if (
             len(segments) == 6
             and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "runs"
+        ):
+            payload = self.coordinator.list_gm_science_runs(segments[4])
+            self._send_json(200 if payload.get("ok") else 404, payload)
+            return
+        if (
+            len(segments) == 7
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "runs"
+        ):
+            payload = self.coordinator.get_gm_science_run(segments[4], segments[6])
+            self._send_json(200 if payload.get("ok") else 404, payload)
+            return
+        if (
+            len(segments) == 6
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
             and segments[5] == "capabilities"
         ):
             payload = self.coordinator.list_gm_science_capabilities(segments[4])
@@ -2817,6 +2917,38 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
             status = 200 if payload.get("ok") else 400
             if not payload.get("ok") and payload.get("error", {}).get("code") == "PROJECT_NOT_FOUND":
                 status = 404
+            self._send_json(status, payload)
+            return
+        if (
+            len(segments) == 6
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "runs"
+        ):
+            payload = self.coordinator.create_gm_science_python_run(segments[4], body)
+            status = 200 if payload.get("ok") else 400
+            if not payload.get("ok") and payload.get("error", {}).get("code") == "EXECUTION_UNAVAILABLE":
+                status = 503
+            self._send_json(status, payload)
+            return
+        if (
+            len(segments) == 8
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "runs"
+            and segments[7] in {"cancel", "retry"}
+        ):
+            if segments[7] == "cancel":
+                payload = self.coordinator.cancel_gm_science_run(segments[4], segments[6])
+            else:
+                payload = self.coordinator.retry_gm_science_run(
+                    segments[4],
+                    segments[6],
+                    user_id=str(body.get("user_id") or "ppx-client-user"),
+                )
+            status = 200 if payload.get("ok") else 400
+            if not payload.get("ok") and payload.get("error", {}).get("code") == "RUN_NOT_FOUND":
+                status = 404
+            if not payload.get("ok") and payload.get("error", {}).get("code") == "EXECUTION_UNAVAILABLE":
+                status = 503
             self._send_json(status, payload)
             return
         if (

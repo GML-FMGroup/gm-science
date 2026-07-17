@@ -5,11 +5,13 @@ import type {
   ClientDiagnostics,
   ConnectionSettings,
   CreateGmScienceArtifactInput,
+  CreateGmSciencePythonRunInput,
   CreateGmScienceProjectInput,
   GmScienceArtifact,
   GmScienceCapability,
   GmScienceCapabilityCatalog,
   GmScienceProject,
+  GmScienceRun,
   MessagePart,
   RuntimeCommand,
   RuntimeStatus,
@@ -24,6 +26,7 @@ interface StoreState {
   agents: AgentProfile[];
   projects: GmScienceProject[];
   artifactsByProject: Record<string, GmScienceArtifact[]>;
+  runsByProject: Record<string, GmScienceRun[]>;
   sessionsByAgent: Record<string, SessionSummary[]>;
   messagesBySession: Record<string, ChatMessage[]>;
   selectedAgentId: string;
@@ -103,6 +106,9 @@ const state: StoreState = {
     },
   ],
   artifactsByProject: {
+    [firstProjectId]: [],
+  },
+  runsByProject: {
     [firstProjectId]: [],
   },
   sessionsByAgent: {
@@ -509,6 +515,71 @@ export async function createGmScienceArtifact(
       : project,
   );
   return { artifact };
+}
+
+export async function listGmScienceRuns(projectId: string): Promise<{ runs: GmScienceRun[] }> {
+  return { runs: (state.runsByProject[projectId] ?? []).map((run) => ({ ...run })) };
+}
+
+export async function getGmScienceRun(projectId: string, taskId: string): Promise<{ run: GmScienceRun }> {
+  const run = (state.runsByProject[projectId] ?? []).find((item) => item.taskId === taskId);
+  if (!run) {
+    throw new Error(`Run ${taskId} was not found.`);
+  }
+  return { run: { ...run } };
+}
+
+export async function createGmSciencePythonRun(
+  projectId: string,
+  input: CreateGmSciencePythonRunInput,
+): Promise<{ run: GmScienceRun }> {
+  const timestamp = now();
+  const run: GmScienceRun = {
+    taskId: `task_${crypto.randomUUID()}`,
+    projectId,
+    sessionId: input.sessionId ?? "",
+    parentTaskId: "",
+    kind: "local_python",
+    title: input.title || "Python run",
+    status: "completed",
+    progressSummary: "Mock Python run completed.",
+    terminalSummary: "Mock Python run completed.",
+    lastError: "",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    createdAtMs: Date.now(),
+    updatedAtMs: Date.now(),
+    endedAtMs: Date.now(),
+    canCancel: false,
+    canRetry: true,
+    logPreview: "[stdout] Mock Python run completed.\n",
+    artifactIds: [],
+  };
+  state.runsByProject[projectId] = [run, ...(state.runsByProject[projectId] ?? [])];
+  return { run: { ...run } };
+}
+
+export async function cancelGmScienceRun(projectId: string, taskId: string): Promise<{ run: GmScienceRun }> {
+  const payload = await getGmScienceRun(projectId, taskId);
+  const run = { ...payload.run, status: "cancelled" as const, canCancel: false, canRetry: true, endedAtMs: Date.now() };
+  state.runsByProject[projectId] = (state.runsByProject[projectId] ?? []).map((item) =>
+    item.taskId === taskId ? run : item,
+  );
+  return { run };
+}
+
+export async function retryGmScienceRun(projectId: string, taskId: string): Promise<{ run: GmScienceRun }> {
+  const previous = (await getGmScienceRun(projectId, taskId)).run;
+  const created = await createGmSciencePythonRun(projectId, {
+    title: previous.title,
+    source: "print('mock retry')",
+    sessionId: previous.sessionId,
+  });
+  const run = { ...created.run, parentTaskId: taskId };
+  state.runsByProject[projectId] = (state.runsByProject[projectId] ?? []).map((item) =>
+    item.taskId === run.taskId ? run : item,
+  );
+  return { run };
 }
 
 export function subscribe(listener: EventSink): () => void {

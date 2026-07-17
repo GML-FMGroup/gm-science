@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type {
   ConnectionSettings,
   CreateGmScienceArtifactInput,
+  CreateGmSciencePythonRunInput,
   CreateGmScienceProjectInput,
   RuntimeCommand,
   SendMessageInput,
@@ -114,6 +115,23 @@ app.whenReady().then(() => {
     "ppx-client:create-gm-science-artifact",
     async (_event, projectId: string, input: CreateGmScienceArtifactInput) =>
       adapter!.createGmScienceArtifact(projectId, input),
+  );
+  ipcMain.handle("ppx-client:list-gm-science-runs", async (_event, projectId: string) =>
+    adapter!.listGmScienceRuns(projectId),
+  );
+  ipcMain.handle("ppx-client:get-gm-science-run", async (_event, projectId: string, taskId: string) =>
+    adapter!.getGmScienceRun(projectId, taskId),
+  );
+  ipcMain.handle(
+    "ppx-client:create-gm-science-python-run",
+    async (_event, projectId: string, input: CreateGmSciencePythonRunInput) =>
+      adapter!.createGmSciencePythonRun(projectId, input),
+  );
+  ipcMain.handle("ppx-client:cancel-gm-science-run", async (_event, projectId: string, taskId: string) =>
+    adapter!.cancelGmScienceRun(projectId, taskId),
+  );
+  ipcMain.handle("ppx-client:retry-gm-science-run", async (_event, projectId: string, taskId: string) =>
+    adapter!.retryGmScienceRun(projectId, taskId),
   );
 
   createWindow();

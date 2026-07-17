@@ -117,6 +117,58 @@ def test_create_and_list_project_artifacts_round_trips_metadata(tmp_path: Path) 
     assert store.list_artifacts(project.id) == [artifact]
 
 
+def test_science_run_association_round_trips_without_task_status(tmp_path: Path) -> None:
+    store = GmScienceStore(tmp_path)
+    project = store.create_project(name="Python research", description="", agent_context="")
+    store.link_project_session(
+        project_id=project.id,
+        session_id="session-1",
+        agent_id="science-research",
+    )
+
+    run = store.create_science_run(
+        task_id="task-1",
+        project_id=project.id,
+        session_id="session-1",
+        parent_task_id=None,
+        kind="local_python",
+        title="Check environment",
+        source_path="runs/run-1/main.py",
+        working_directory="runs/run-1",
+        input_payload={"argv": ["--quick"]},
+    )
+
+    assert run.task_id == "task-1"
+    assert run.project_id == project.id
+    assert run.session_id == "session-1"
+    assert run.input_payload == {"argv": ["--quick"]}
+    assert not hasattr(run, "status")
+    assert store.get_science_run("task-1") == run
+    assert store.list_science_runs(project.id) == [run]
+
+
+def test_science_run_rejects_session_from_another_project(tmp_path: Path) -> None:
+    store = GmScienceStore(tmp_path)
+    project = store.create_project(name="Primary", description="", agent_context="")
+    other = store.create_project(name="Other", description="", agent_context="")
+    store.link_project_session(
+        project_id=other.id,
+        session_id="session-other",
+        agent_id="science-research",
+    )
+
+    with pytest.raises(ValueError, match="does not belong"):
+        store.create_science_run(
+            task_id="task-cross-project",
+            project_id=project.id,
+            session_id="session-other",
+            kind="local_python",
+            title="Invalid",
+            source_path="main.py",
+            working_directory="runs/run-invalid",
+        )
+
+
 def test_find_project_paper_and_artifact_by_id(tmp_path: Path) -> None:
     store = GmScienceStore(tmp_path)
     project = store.create_project(name="Review", description="", agent_context="")

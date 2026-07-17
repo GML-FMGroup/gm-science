@@ -19,6 +19,15 @@ const api = {
   listGmScienceArtifacts: (projectId) => ipcRenderer.invoke("ppx-client:list-gm-science-artifacts", projectId),
   createGmScienceArtifact: (projectId, input) =>
     ipcRenderer.invoke("ppx-client:create-gm-science-artifact", projectId, input),
+  listGmScienceRuns: (projectId) => ipcRenderer.invoke("ppx-client:list-gm-science-runs", projectId),
+  getGmScienceRun: (projectId, taskId) =>
+    ipcRenderer.invoke("ppx-client:get-gm-science-run", projectId, taskId),
+  createGmSciencePythonRun: (projectId, input) =>
+    ipcRenderer.invoke("ppx-client:create-gm-science-python-run", projectId, input),
+  cancelGmScienceRun: (projectId, taskId) =>
+    ipcRenderer.invoke("ppx-client:cancel-gm-science-run", projectId, taskId),
+  retryGmScienceRun: (projectId, taskId) =>
+    ipcRenderer.invoke("ppx-client:retry-gm-science-run", projectId, taskId),
   onRunEvent: (listener) => {
     const wrapped = (_event, payload) => listener(payload);
     ipcRenderer.on("ppx-client:run-event", wrapped);
