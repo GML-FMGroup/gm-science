@@ -210,10 +210,14 @@ export function normalizeGmScienceCapability(payload: unknown): GmScienceCapabil
   }
   const kind = asString(capability.kind);
   const status = asString(capability.status);
+  const source = asString(capability.source);
   if (kind !== "skill" && kind !== "connector" && kind !== "specialist") {
     return null;
   }
   if (status !== "ready" && status !== "needs_configuration" && status !== "disabled") {
+    return null;
+  }
+  if (source !== "built_in" && source !== "local" && source !== "external") {
     return null;
   }
   return {
@@ -221,6 +225,10 @@ export function normalizeGmScienceCapability(payload: unknown): GmScienceCapabil
     kind,
     name: asString(capability.name),
     description: asString(capability.description),
+    source,
+    version: asString(capability.version),
+    license: asString(capability.license),
+    files: asStringList(capability.files),
     available: capability.available === true,
     defaultEnabled: capability.default_enabled === true || capability.defaultEnabled === true,
     projectEnabled:

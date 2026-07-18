@@ -98,11 +98,17 @@ export type GmScienceCapabilityKind = "skill" | "connector" | "specialist";
 
 export type GmScienceCapabilityStatus = "ready" | "needs_configuration" | "disabled";
 
+export type GmScienceCapabilitySource = "built_in" | "local" | "external";
+
 export interface GmScienceCapability {
   id: string;
   kind: GmScienceCapabilityKind;
   name: string;
   description: string;
+  source: GmScienceCapabilitySource;
+  version: string;
+  license: string;
+  files: string[];
   available: boolean;
   defaultEnabled: boolean;
   projectEnabled: boolean | null;

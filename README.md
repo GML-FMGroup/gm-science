@@ -63,6 +63,23 @@ gm-science 原生支持 arXiv、PubMed 和 OpenAlex。配置统一位于：
 
 配置文件可能包含密钥，不要提交到 Git 仓库。
 
+## Skills
+
+gm-science 的 Skills 设置页直接读取 openppx `SkillRegistry`，不再维护单独的静态 Skill 清单。它会显示随 runtime 提供的内置 Skills，以及当前 `science-research` agent 的本地 Skills。
+
+本地 Skill 放在：
+
+```text
+~/.gm-science/science-research/skills/<skill-id>/SKILL.md
+```
+
+添加或修改后，在 Project 的 `Customize > Skills` 页面点击 Refresh。页面支持按名称、ID、说明和来源搜索，并展示来源、版本、许可和相对文件清单；client-api 不返回 Skill 的本机绝对路径。
+
+- Skill 目录名是 Project `enabledSkills` 中保存的稳定 ID。
+- 内置 Skill 与本地 Skill 同名时以内置版本为准，避免本地文件静默覆盖运行时行为。
+- `version` 和 `license` 来自 `SKILL.md` frontmatter；未声明时页面会明确显示未声明。
+- 当前支持发现和附加本地 Skill，不包含 GitHub marketplace 安装、升级或依赖安装流程。
+
 ## 专家智能体
 
 `science-research` 是唯一直接与用户对话的主智能体。它可以按需调用两个受限专家：

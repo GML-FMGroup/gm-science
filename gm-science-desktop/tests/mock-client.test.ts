@@ -61,6 +61,12 @@ describe("mock client adapter", () => {
 
     const catalog = await listGmScienceCapabilities(created.project.id);
     expect(catalog.items.some((item) => item.id === "pubmed" && item.projectEnabled)).toBe(true);
+    expect(catalog.items.find((item) => item.id === "local-analysis")).toMatchObject({
+      source: "local",
+      version: "0.1.0",
+      license: "Private",
+      files: ["SKILL.md", "scripts/analyze.py"],
+    });
 
     const updated = await updateGmScienceProjectCapabilities(created.project.id, {
       enabledSkills: [],

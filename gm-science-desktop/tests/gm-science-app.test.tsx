@@ -218,6 +218,10 @@ function capabilities(projectValue: GmScienceProject = project()): GmScienceCapa
   ];
   return definitions.map((item) => ({
     ...item,
+    source: "built_in" as const,
+    version: "",
+    license: "",
+    files: [],
     available: true,
     defaultEnabled: true,
     projectEnabled:
@@ -429,6 +433,52 @@ describe("gm-science App", () => {
         enabledSpecialists: ["paper_reader", "research_reviewer"],
       });
     });
+  });
+
+  it("searches dynamically discovered Skills and shows safe details", async () => {
+    const items: GmScienceCapability[] = [
+      ...capabilities(),
+      {
+        id: "local-analysis",
+        kind: "skill",
+        name: "Local Analysis",
+        description: "Analyze local tabular datasets.",
+        source: "local",
+        version: "0.4.0",
+        license: "Private",
+        files: ["SKILL.md", "scripts/analyze.py"],
+        available: true,
+        defaultEnabled: false,
+        projectEnabled: false,
+        status: "ready",
+        statusDetail: "",
+        metadata: { file_count: 2 },
+      },
+    ];
+    installClient({
+      listGmScienceCapabilities: async (projectId) => ({ projectId: projectId ?? "", items }),
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Customize" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Skills" }));
+    const panel = await screen.findByRole("region", { name: "Skills" });
+    expect(within(panel).getByRole("heading", { name: /Built-in/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("heading", { name: /Local/ })).toBeInTheDocument();
+
+    fireEvent.change(within(panel).getByRole("searchbox", { name: "Search skills" }), {
+      target: { value: "local" },
+    });
+
+    expect(within(panel).queryByText("Literature Review")).not.toBeInTheDocument();
+    expect(within(panel).getByText("Local Analysis")).toBeInTheDocument();
+    fireEvent.click(within(panel).getByRole("button", { name: "Show details for Local Analysis" }));
+    expect(within(panel).getByText("0.4.0")).toBeInTheDocument();
+    expect(within(panel).getByText("Private")).toBeInTheDocument();
+    expect(within(panel).getByText("scripts/analyze.py")).toBeInTheDocument();
+    expect(within(panel).queryByText(/\/tmp\//)).not.toBeInTheDocument();
   });
 
   it("does not allow an unavailable connector to be enabled", async () => {

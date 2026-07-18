@@ -17,6 +17,17 @@ def _fake_handler(coordinator: ClientApiCoordinator) -> tuple[_ClientApiHandler,
     return handler, sent
 
 
+def _write_test_skill(root: Path, name: str, description: str) -> None:
+    """Create a minimal Skill fixture under the requested registry root."""
+
+    skill_dir = root / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\n\n# {name}\n",
+        encoding="utf-8",
+    )
+
+
 def test_handler_routes_expose_gm_science_project_and_artifact_api(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path / "gm-science"))
     coordinator = ClientApiCoordinator(data_dir=tmp_path)
@@ -374,32 +385,81 @@ def test_client_api_lists_capabilities_with_global_and_project_status(
     assert payload["ok"] is True
     assert payload["data"]["project_id"] == project["id"]
     items = {item["id"]: item for item in payload["data"]["items"]}
-    assert list(items) == [
-        "literature-review",
-        "arxiv",
-        "pubmed",
-        "openalex",
-        "paper_reader",
-        "research_reviewer",
-    ]
+    ordered_ids = list(items)
+    assert "docx" in ordered_ids
+    assert "literature-review" in ordered_ids
+    arxiv_index = ordered_ids.index("arxiv")
+    assert ordered_ids[arxiv_index : arxiv_index + 3] == ["arxiv", "pubmed", "openalex"]
+    assert ordered_ids[-2:] == ["paper_reader", "research_reviewer"]
     assert items["literature-review"] == {
         "id": "literature-review",
         "kind": "skill",
         "name": "Literature Review",
-        "description": "Search scholarly sources, synthesize evidence, and register a cited review.",
+        "description": "Search scholarly sources, build an evidence matrix, and register a cited review in gm-science.",
+        "source": "built_in",
+        "version": "",
+        "license": "",
+        "files": ["SKILL.md"],
         "available": True,
         "default_enabled": True,
         "project_enabled": True,
         "status": "ready",
         "status_detail": "",
-        "metadata": {"source": "built_in"},
+        "metadata": {
+            "registry_source": "builtin",
+            "file_count": 1,
+            "files_truncated": False,
+        },
     }
+    assert items["arxiv"]["source"] == "built_in"
+    assert items["arxiv"]["files"] == []
     assert items["arxiv"]["status"] == "ready"
     assert items["pubmed"]["status"] == "needs_configuration"
     assert items["pubmed"]["status_detail"] == "Set science.literature.pubmed.email."
     assert items["openalex"]["status"] == "needs_configuration"
     assert items["paper_reader"]["metadata"]["auto_dispatch"] is True
     assert "api_key" not in json.dumps(payload)
+
+
+def test_client_api_discovers_and_selects_agent_local_skills(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
+    bundled_dir = tmp_path / "test-bundled-skills"
+    _write_test_skill(
+        bundled_dir,
+        "literature-review",
+        "Search scholarly sources and register a cited review.",
+    )
+    _write_test_skill(bundled_dir, "docx", "Create and edit Word documents.")
+    monkeypatch.setenv("OPENPPX_BUILTIN_SKILLS_DIR", str(bundled_dir))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    _write_test_skill(
+        tmp_path / GM_SCIENCE_DEFAULT_AGENT_NAME / "skills",
+        "local-analysis",
+        "Analyze local tabular datasets.",
+    )
+
+    created = coordinator.create_gm_science_project(
+        {
+            "name": "Local skills",
+            "enabled_skills": ["local-analysis", "docx"],
+            "enabled_connectors": [],
+            "enabled_specialists": [],
+        }
+    )
+
+    assert created["ok"] is True
+    project = created["data"]["project"]
+    assert project["enabled_skills"] == ["docx", "local-analysis"]
+    payload = coordinator.list_gm_science_capabilities(project["id"])
+    skills = {
+        item["id"]: item
+        for item in payload["data"]["items"]
+        if item["kind"] == "skill"
+    }
+    assert list(skills) == ["docx", "literature-review", "local-analysis"]
+    assert skills["local-analysis"]["source"] == "local"
+    assert skills["local-analysis"]["project_enabled"] is True
 
 
 def test_client_api_updates_project_capabilities_in_catalog_order(
