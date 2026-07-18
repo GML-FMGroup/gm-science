@@ -2,6 +2,7 @@ import {
   DEFAULT_GM_SCIENCE_CLIENT_API_PORT,
   appendClientApiLogTail,
   buildCreateGmScienceProjectPayload,
+  buildClientApiRunPayload,
   buildClientApiRunPath,
   buildClientApiSpawnEnv,
   formatClientApiStartupError,
@@ -80,6 +81,33 @@ describe("gm-science local adapter helpers", () => {
         text: "Summarize",
       }),
     ).toBe("/api/v1/gm-science/projects/proj_123/sessions/session-1/runs");
+  });
+
+  it("builds a compact versioned resource reference run payload", () => {
+    expect(
+      buildClientApiRunPayload({
+        agentId: "science-research",
+        sessionId: "session-1",
+        projectId: "proj_123",
+        text: "Compare",
+        resourceRefs: [{ id: "project_file:abc", versionOrHash: "1:20" }],
+      }),
+    ).toEqual({
+      text: "Compare",
+      agent_id: "science-research",
+      resource_refs: [{ id: "project_file:abc", version_or_hash: "1:20" }],
+    });
+  });
+
+  it("rejects resource references on a non-Project run", () => {
+    expect(() =>
+      buildClientApiRunPayload({
+        agentId: "writer",
+        sessionId: "session-1",
+        text: "Compare",
+        resourceRefs: [{ id: "project_file:abc", versionOrHash: "1:20" }],
+      }),
+    ).toThrow("Project resource references require a Project-scoped run");
   });
 
   it("omits unspecified project capabilities so the runtime can apply config defaults", () => {

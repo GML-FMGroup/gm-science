@@ -11,6 +11,18 @@ export type MessagePart =
   | { type: "image"; text: string; url: string; mimeType?: string }
   | { type: "error"; text: string; errorCode?: string }
   | { type: "tool_result"; toolName: string; summary: string; detail?: string; rawText?: string }
+  | {
+      type: "resource_ref";
+      resourceId: string;
+      displayName: string;
+      kind: GmScienceResourceKind;
+      versionOrHash: string;
+      mimeType: string;
+      relativePath: string;
+      url: string;
+      contentStatus: string;
+      truncated: boolean;
+    }
   | { type: "step_ref"; stepId: string; title: string; status: "running" | "completed" | "failed"; detail: string };
 
 export interface ConnectionTarget {
@@ -164,6 +176,11 @@ export interface GmScienceResource {
   createdAt: string;
   updatedAt: string;
   metadata: Record<string, unknown>;
+}
+
+export interface GmScienceResourceSelection {
+  id: string;
+  versionOrHash: string;
 }
 
 export interface CreateGmScienceArtifactInput {
@@ -373,6 +390,7 @@ export interface SendMessageInput {
   sessionId: string;
   text: string;
   projectId?: string;
+  resourceRefs?: GmScienceResourceSelection[];
 }
 
 export interface PpxClientApi {

@@ -411,6 +411,42 @@ describe("gm-science App", () => {
     });
   });
 
+  it("selects Files and sends exact resource versions with the user request", async () => {
+    const selected = resource({
+      id: "project_file:results",
+      displayName: "results.csv",
+      mimeType: "text/csv",
+      relativePath: "analysis/results.csv",
+      versionOrHash: "10:2048",
+    });
+    const sendMessage = vi.fn(async () => ({ runId: "run-resource" }));
+    installClient({
+      sendMessage,
+      listGmScienceResources: async () => ({ resources: [selected] }),
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Select results.csv" }));
+    expect(screen.getByText("1 file selected")).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("向本地 agent 发送任务..."), {
+      target: { value: "Compare the selected results" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledWith({
+        agentId: "science-research",
+        sessionId: "session-a",
+        projectId: "proj_123",
+        text: "Compare the selected results",
+        resourceRefs: [{ id: "project_file:results", versionOrHash: "10:2048" }],
+      });
+    });
+    expect(screen.queryByText("1 file selected")).not.toBeInTheDocument();
+  });
+
   it("updates the selected Project connector allowlist from Customize", async () => {
     const updateGmScienceProjectCapabilities = vi.fn(async (projectId, input) => {
       const updated = project({

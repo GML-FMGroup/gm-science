@@ -66,6 +66,24 @@ export function buildClientApiRunPath(input: SendMessageInput): string {
   return `/api/v1/agents/${encodeURIComponent(input.agentId)}/sessions/${sessionId}/runs`;
 }
 
+export function buildClientApiRunPayload(input: SendMessageInput): Record<string, unknown> {
+  if (input.resourceRefs?.length && !input.projectId?.trim()) {
+    throw new Error("Project resource references require a Project-scoped run.");
+  }
+  return {
+    text: input.text,
+    agent_id: input.agentId,
+    ...(input.resourceRefs?.length
+      ? {
+          resource_refs: input.resourceRefs.map((resource) => ({
+            id: resource.id,
+            version_or_hash: resource.versionOrHash,
+          })),
+        }
+      : {}),
+  };
+}
+
 export function buildCreateGmScienceProjectPayload(
   input: CreateGmScienceProjectInput,
 ): Record<string, unknown> {

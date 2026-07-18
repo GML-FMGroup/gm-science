@@ -11,6 +11,19 @@ ResourceSource = Literal["artifact", "workspace"]
 
 
 @dataclass(frozen=True, slots=True)
+class ResourceSelection:
+    """Optimistic reference to one exact version of a Project resource."""
+
+    id: str
+    version_or_hash: str
+
+    def to_dict(self) -> dict[str, str]:
+        """Return the compact worker/client-api representation."""
+
+        return {"id": self.id, "version_or_hash": self.version_or_hash}
+
+
+@dataclass(frozen=True, slots=True)
 class ResourceRef:
     """A stable, path-safe reference to one Project-owned research resource."""
 

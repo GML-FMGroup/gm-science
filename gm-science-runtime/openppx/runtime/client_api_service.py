@@ -29,7 +29,7 @@ from ..gm_science.data import DatasetService
 from ..gm_science.execution import ScienceExecutionService
 from ..gm_science.literature.config import load_literature_config, select_literature_sources
 from ..gm_science.models import ArtifactRecord, ProjectRecord
-from ..gm_science.resources import ResourceCatalogService
+from ..gm_science.resources import ResourceCatalogService, ResourceContextService, ResourceSelection
 from ..gm_science.specialists.config import load_specialist_config
 from ..gm_science.store import GmScienceStore
 from .access_policy import AccessPolicy
@@ -73,6 +73,19 @@ def _error(code: str, message: str, details: dict[str, Any] | None = None) -> di
             "details": details or {},
         },
     }
+
+
+def _project_run_http_status(payload: dict[str, Any]) -> int:
+    """Map Project run results to stable HTTP status semantics."""
+
+    if payload.get("ok"):
+        return 200
+    code = str(payload.get("error", {}).get("code") or "")
+    if code == "ACCESS_DENIED":
+        return 403
+    if code in {"AGENT_NOT_FOUND", "PROJECT_NOT_FOUND", "SESSION_NOT_FOUND", "SESSION_NOT_IN_PROJECT"}:
+        return 404
+    return 400
 
 
 def _normalize_agent_name(value: str) -> str:
@@ -473,6 +486,8 @@ def _event_preview_text(event: dict[str, Any]) -> str:
             continue
         if bool(raw_part.get("thought")):
             continue
+        if _resource_part_metadata(raw_part) is not None:
+            continue
         text = raw_part.get("text")
         if isinstance(text, str) and text.strip():
             normalized_text = _strip_request_time_prefix(text)
@@ -534,6 +549,10 @@ def project_session_event(event: dict[str, Any], session_id: str) -> dict[str, A
             continue
         if bool(raw_part.get("thought")):
             continue
+        resource_metadata = _resource_part_metadata(raw_part)
+        if resource_metadata is not None:
+            parts.append(_resource_ref_message_part(resource_metadata))
+            continue
         text = raw_part.get("text")
         if isinstance(text, str) and text.strip():
             normalized_text = _strip_request_time_prefix(text)
@@ -584,6 +603,35 @@ def project_session_event(event: dict[str, Any], session_id: str) -> dict[str, A
         "status": "completed",
         "created_at": created_at,
         "metadata": {},
+    }
+
+
+def _resource_part_metadata(raw_part: dict[str, Any]) -> dict[str, Any] | None:
+    """Return validated gm-science metadata from one serialized ADK Part."""
+
+    raw_metadata = raw_part.get("part_metadata") or raw_part.get("partMetadata")
+    if not isinstance(raw_metadata, dict):
+        return None
+    resource = raw_metadata.get("gm_science_resource")
+    if not isinstance(resource, dict) or not str(resource.get("id") or "").strip():
+        return None
+    return resource
+
+
+def _resource_ref_message_part(resource: dict[str, Any]) -> dict[str, Any]:
+    """Project safe resource metadata into the renderer message contract."""
+
+    return {
+        "type": "resource_ref",
+        "resource_id": str(resource.get("id") or ""),
+        "display_name": str(resource.get("display_name") or "Project resource"),
+        "kind": str(resource.get("kind") or "artifact"),
+        "version_or_hash": str(resource.get("version_or_hash") or ""),
+        "mime_type": str(resource.get("mime_type") or ""),
+        "relative_path": str(resource.get("relative_path") or ""),
+        "url": str(resource.get("url") or ""),
+        "content_status": str(resource.get("content_status") or "metadata_descriptor_only"),
+        "truncated": bool(resource.get("truncated")),
     }
 
 
@@ -765,6 +813,7 @@ class ClientApiCoordinator:
             store=self._gm_science_store,
             config_path=agent_config_path(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir),
         )
+        self._resource_context = ResourceContextService(catalog=self._resource_catalog)
         self._analysis_service = AnalysisService(
             store=self._gm_science_store,
             dataset_service=self._dataset_service,
@@ -1542,6 +1591,7 @@ class ClientApiCoordinator:
         *,
         user_id: str = "ppx-client-user",
         agent_id: str = _GM_SCIENCE_DEFAULT_AGENT_ID,
+        resource_refs: object | None = None,
     ) -> dict[str, Any]:
         """Create one run for a gm-science project using the default research agent."""
 
@@ -1559,6 +1609,13 @@ class ClientApiCoordinator:
                 "SESSION_AGENT_MISMATCH",
                 f"Session '{session_id}' belongs to agent '{association.agent_id}', not '{agent_id}'.",
             )
+        try:
+            resource_selections = self._resource_context.validate_selections(
+                project.id,
+                [] if resource_refs is None else resource_refs,
+            )
+        except ValueError as exc:
+            return _error("INVALID_RESOURCE_REFS", str(exc))
         literature_config = load_literature_config(agent_config_path(agent_id, self.data_dir))
         source_selection = select_literature_sources(
             literature_config,
@@ -1603,6 +1660,7 @@ class ClientApiCoordinator:
             user_id=user_id,
             project_id=project.id,
             enabled_mcp_servers=enabled_mcp_servers,
+            resource_refs=resource_selections,
         )
 
     def list_sessions(self, agent_id: str, *, user_id: str = "ppx-client-user") -> dict[str, Any]:
@@ -2293,6 +2351,7 @@ class ClientApiCoordinator:
         user_id: str = "ppx-client-user",
         project_id: str = "",
         enabled_mcp_servers: list[str] | None = None,
+        resource_refs: list[ResourceSelection] | None = None,
     ) -> dict[str, Any]:
         """Create one streaming run and start consuming worker events in background."""
 
@@ -2343,6 +2402,19 @@ class ClientApiCoordinator:
                 [
                     "--enabled-mcp-servers-json",
                     json.dumps(enabled_mcp_servers, ensure_ascii=False, separators=(",", ":")),
+                ]
+            )
+        if resource_refs:
+            if not project_id:
+                return _error("INVALID_RESOURCE_REFS", "Project resources require a Project run.")
+            cmd.extend(
+                [
+                    "--resource-refs-json",
+                    json.dumps(
+                        [selection.to_dict() for selection in resource_refs],
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
                 ]
             )
         process = subprocess.Popen(
@@ -3193,9 +3265,9 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
                 text,
                 user_id=user_id,
                 agent_id=agent_id,
+                resource_refs=body.get("resource_refs", body.get("resourceRefs", [])),
             )
-            status = 200 if payload.get("ok") else 404
-            self._send_json(status, payload)
+            self._send_json(_project_run_http_status(payload), payload)
             return
         if len(segments) == 6 and segments[:3] == ["api", "v1", "agents"] and segments[4] == "access" and segments[5] == "owner":
             user_id = str(body.get("user_id") or "ppx-client-user")

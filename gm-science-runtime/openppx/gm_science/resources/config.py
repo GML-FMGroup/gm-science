@@ -13,13 +13,16 @@ from ...core.env_utils import is_enabled
 
 @dataclass(frozen=True, slots=True)
 class ResourceCatalogConfig:
-    """Validated limits for bounded Project workspace discovery."""
+    """Validated limits for Project resource discovery and model context."""
 
     enabled: bool
     max_workspace_files: int
     max_scan_depth: int
     include_hidden: bool
     excluded_directories: tuple[str, ...]
+    max_selected_resources: int
+    max_context_chars_per_resource: int
+    max_context_chars_total: int
 
 
 def parse_resource_catalog_config(config: Mapping[str, Any] | None) -> ResourceCatalogConfig:
@@ -36,6 +39,19 @@ def parse_resource_catalog_config(config: Mapping[str, Any] | None) -> ResourceC
         max_scan_depth=_bounded_int(resources.get("maxScanDepth"), 6, 0, 20),
         include_hidden=is_enabled(resources.get("includeHidden"), default=False),
         excluded_directories=exclusions,
+        max_selected_resources=_bounded_int(resources.get("maxSelectedResources"), 8, 1, 32),
+        max_context_chars_per_resource=_bounded_int(
+            resources.get("maxContextCharsPerResource"),
+            30_000,
+            256,
+            200_000,
+        ),
+        max_context_chars_total=_bounded_int(
+            resources.get("maxContextCharsTotal"),
+            100_000,
+            256,
+            1_000_000,
+        ),
     )
 
 

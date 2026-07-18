@@ -113,6 +113,86 @@ def test_handler_routes_expose_path_safe_searchable_project_resources(tmp_path: 
     assert sent[-1][1]["error"]["code"] == "INVALID_REQUEST"
 
 
+def test_handler_forwards_structured_resource_refs_to_project_run() -> None:
+    observed: dict[str, object] = {}
+
+    class _Coordinator:
+        def create_gm_science_project_run(
+            self,
+            project_id: str,
+            session_id: str,
+            text: str,
+            **kwargs: object,
+        ) -> dict[str, object]:
+            observed.update(
+                {
+                    "project_id": project_id,
+                    "session_id": session_id,
+                    "text": text,
+                    **kwargs,
+                }
+            )
+            return {"ok": True, "data": {"run": {"id": "run-resource"}}}
+
+    handler, sent = _fake_handler(_Coordinator())  # type: ignore[arg-type]
+    handler._parse = lambda: (
+        "/api/v1/gm-science/projects/proj_1/sessions/session_1/runs",
+        ["api", "v1", "gm-science", "projects", "proj_1", "sessions", "session_1", "runs"],
+        {},
+    )
+    handler._read_json_body = lambda: {
+        "text": "Compare results.",
+        "agent_id": "science-research",
+        "resource_refs": [{"id": "project_file:abc", "version_or_hash": "1:20"}],
+    }
+
+    _ClientApiHandler.do_POST(handler)
+
+    assert sent[-1][0] == 200
+    assert observed == {
+        "project_id": "proj_1",
+        "session_id": "session_1",
+        "text": "Compare results.",
+        "user_id": "ppx-client-user",
+        "agent_id": "science-research",
+        "resource_refs": [{"id": "project_file:abc", "version_or_hash": "1:20"}],
+    }
+
+
+def test_project_run_handler_preserves_http_error_semantics() -> None:
+    class _Coordinator:
+        error_code = "INVALID_RESOURCE_REFS"
+
+        def create_gm_science_project_run(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+            return {
+                "ok": False,
+                "error": {"code": self.error_code, "message": "Rejected for test."},
+            }
+
+    coordinator = _Coordinator()
+    handler, sent = _fake_handler(coordinator)  # type: ignore[arg-type]
+    handler._parse = lambda: (
+        "/api/v1/gm-science/projects/proj_1/sessions/session_1/runs",
+        ["api", "v1", "gm-science", "projects", "proj_1", "sessions", "session_1", "runs"],
+        {},
+    )
+    handler._read_json_body = lambda: {"text": "Compare results."}
+
+    expected_statuses = {
+        "INVALID_RESOURCE_REFS": 400,
+        "SESSION_AGENT_MISMATCH": 400,
+        "ACCESS_DENIED": 403,
+        "AGENT_NOT_FOUND": 404,
+        "PROJECT_NOT_FOUND": 404,
+        "SESSION_NOT_FOUND": 404,
+        "SESSION_NOT_IN_PROJECT": 404,
+    }
+    for error_code, expected_status in expected_statuses.items():
+        coordinator.error_code = error_code
+        _ClientApiHandler.do_POST(handler)
+        assert sent[-1][0] == expected_status
+
+
 def test_handler_routes_expose_project_python_runs(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("GM_SCIENCE_MODE", "1")
     monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
@@ -634,7 +714,16 @@ def test_client_api_project_run_injects_agent_context(tmp_path: Path, monkeypatc
         agent_id=GM_SCIENCE_DEFAULT_AGENT_NAME,
     )
 
-    payload = coordinator.create_gm_science_project_run(project["id"], "session_1", "Summarize the papers.")
+    resource_path = Path(project["workspace_path"]) / "papers.md"
+    resource_path.write_text("# Saved papers\n", encoding="utf-8")
+    resource = coordinator.list_gm_science_resources(project["id"])["data"]["items"][0]
+
+    payload = coordinator.create_gm_science_project_run(
+        project["id"],
+        "session_1",
+        "Summarize the papers.",
+        resource_refs=[{"id": resource["id"], "version_or_hash": resource["version_or_hash"]}],
+    )
 
     assert payload["ok"] is True
     message_index = observed_cmd.index("--message") + 1
@@ -656,6 +745,19 @@ def test_client_api_project_run_injects_agent_context(tmp_path: Path, monkeypatc
     assert observed_cmd[project_index] == project["id"]
     mcp_index = observed_cmd.index("--enabled-mcp-servers-json") + 1
     assert json.loads(observed_cmd[mcp_index]) == []
+    resource_index = observed_cmd.index("--resource-refs-json") + 1
+    assert json.loads(observed_cmd[resource_index]) == [
+        {"id": resource["id"], "version_or_hash": resource["version_or_hash"]}
+    ]
+
+    stale = coordinator.create_gm_science_project_run(
+        project["id"],
+        "session_1",
+        "Summarize the papers.",
+        resource_refs=[{"id": resource["id"], "version_or_hash": "stale"}],
+    )
+    assert stale["ok"] is False
+    assert stale["error"]["code"] == "INVALID_RESOURCE_REFS"
 
 
 def test_client_api_project_run_passes_only_selected_available_mcp_servers(

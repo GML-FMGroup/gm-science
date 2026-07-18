@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from openppx.gm_science.resources import ResolvedResourceContext, ResourceCatalogService, ResourceContextService
 from openppx.gm_science.specialists.config import load_specialist_config
 from openppx.gm_science.store import GmScienceStore
 
@@ -44,6 +45,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--user-id", default="ppx-client-user")
     parser.add_argument("--project-id", default="")
     parser.add_argument("--enabled-mcp-servers-json", default=None)
+    parser.add_argument("--resource-refs-json", default=None)
     return parser.parse_args()
 
 
@@ -183,12 +185,60 @@ def _event_preview_text(event: object) -> str:
     for part in parts:
         if bool(getattr(part, "thought", False)):
             continue
+        if _part_resource_metadata(part) is not None:
+            continue
         text = getattr(part, "text", None)
         if isinstance(text, str) and text.strip():
             normalized_text = _strip_request_time_prefix(text)
             if normalized_text.strip():
                 texts.append(normalized_text.strip())
     return " ".join(texts).strip()
+
+
+def _part_resource_metadata(part: object) -> dict[str, Any] | None:
+    """Return gm-science resource metadata from one ADK Part object."""
+
+    raw_metadata = getattr(part, "part_metadata", None)
+    if not isinstance(raw_metadata, dict):
+        return None
+    resource = raw_metadata.get("gm_science_resource")
+    return resource if isinstance(resource, dict) and resource.get("id") else None
+
+
+def _build_adk_user_content(
+    prompt: str,
+    contexts: list[ResolvedResourceContext],
+) -> Any:
+    """Build one ADK-native user Content with structured resource Parts."""
+
+    from google.genai import types
+
+    parts = [types.Part.from_text(text=prompt)]
+    parts.extend(
+        types.Part(text=context.render_text(), part_metadata=context.metadata())
+        for context in contexts
+    )
+    return types.UserContent(parts=parts)
+
+
+def _resolve_resource_contexts(
+    *,
+    project_id: str,
+    resource_refs_json: str | None,
+    config_path: Path,
+) -> list[ResolvedResourceContext]:
+    """Revalidate compact resource references and read bounded local context."""
+
+    if resource_refs_json is None:
+        return []
+    try:
+        raw_refs = json.loads(resource_refs_json)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("--resource-refs-json must contain valid JSON.") from exc
+    if raw_refs and not project_id:
+        raise ValueError("Project resource references require --project-id.")
+    catalog = ResourceCatalogService(store=GmScienceStore(), config_path=config_path)
+    return ResourceContextService(catalog=catalog).resolve_contexts(project_id, raw_refs)
 
 
 def _strip_request_time_prefix(text: str) -> str:
@@ -249,8 +299,6 @@ async def _run() -> int:
     bootstrap_env_from_config(config_path)
     if args.enabled_mcp_servers_json is not None:
         _restrict_mcp_servers_env(args.enabled_mcp_servers_json)
-
-    from google.genai import types
 
     from openppx.app.agent import root_agent
     from openppx.runtime.adk_utils import run_text_async
@@ -343,7 +391,16 @@ async def _run() -> int:
         return 1
 
     prompt = inject_request_time(args.message, received_at=dt.datetime.now().astimezone())
-    request = types.UserContent(parts=[types.Part.from_text(text=prompt)])
+    try:
+        resource_contexts = _resolve_resource_contexts(
+            project_id=args.project_id,
+            resource_refs_json=args.resource_refs_json,
+            config_path=config_path,
+        )
+    except ValueError as exc:
+        _emit({"type": "error", "message": str(exc)})
+        return 1
+    request = _build_adk_user_content(prompt, resource_contexts)
     runner, _service = create_runner(agent=root_agent, app_name=app_name, session_service=session_service)
     before_artifact_ids: set[str] = set()
     if args.project_id:

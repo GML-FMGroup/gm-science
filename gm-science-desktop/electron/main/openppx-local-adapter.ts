@@ -50,6 +50,7 @@ import {
   appendClientApiLogTail,
   buildCreateGmScienceProjectPayload,
   buildClientApiRunPath,
+  buildClientApiRunPayload,
   buildClientApiSpawnEnv,
   formatClientApiStartupError,
   isOpenPpxClientApiHealthPayload,
@@ -1198,7 +1199,7 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
   private async sendMessageViaClientApi(input: SendMessageInput): Promise<{ runId: string }> {
     const payload = await this.fetchClientApiJson(buildClientApiRunPath(input), {
       method: "POST",
-      body: JSON.stringify({ text: input.text, agent_id: input.agentId }),
+      body: JSON.stringify(buildClientApiRunPayload(input)),
     });
     const run = ((payload.data as Record<string, unknown> | undefined)?.run ?? {}) as Record<string, unknown>;
     const runId = String(run.id ?? `run-${crypto.randomUUID()}`);

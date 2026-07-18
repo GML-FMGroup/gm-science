@@ -237,6 +237,9 @@ Files 资源接口和面板不返回本机绝对路径。Project 内文件只显
       "maxWorkspaceFiles": 1000,
       "maxScanDepth": 6,
       "includeHidden": false,
+      "maxSelectedResources": 8,
+      "maxContextCharsPerResource": 30000,
+      "maxContextCharsTotal": 100000,
       "excludedDirectories": [
         ".git",
         ".venv",
@@ -250,7 +253,9 @@ Files 资源接口和面板不返回本机绝对路径。Project 内文件只显
 }
 ```
 
-当前 Files 支持浏览和搜索，尚不支持本机文件预览、从 Composer 发送结构化资源引用或附加任意本机目录。
+Files 行尾复选框可以把资源加入 Composer。发送时桌面端只提交资源 ID 和选择时的版本；client-api 先校验 Project 归属和版本，Worker 在模型调用前再次校验并按上述字符预算读取本地文本。模型输入使用 Google ADK 原生 `UserContent`/`Part`，资源 provenance 保存在 `part_metadata.gm_science_resource` 中；会话历史只显示结构化资源引用，不显示内部上下文包装。
+
+当前不会读取二进制内容，也不会自动抓取外部 URL；这两类资源只提供描述信息。内容预览、`@`/`#`/`/` 命令系统、任意目录附加和跨 Project 引用尚未实现。
 
 ## 数据集与 Data Analyst
 

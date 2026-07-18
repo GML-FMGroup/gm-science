@@ -600,6 +600,9 @@ def default_config() -> dict[str, Any]:
                 "maxWorkspaceFiles": 1000,
                 "maxScanDepth": 6,
                 "includeHidden": False,
+                "maxSelectedResources": 8,
+                "maxContextCharsPerResource": 30000,
+                "maxContextCharsTotal": 100000,
                 "excludedDirectories": [
                     ".git",
                     ".venv",

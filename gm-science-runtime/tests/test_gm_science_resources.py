@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 from openppx.gm_science.resources.config import ResourceCatalogConfig, parse_resource_catalog_config
+from openppx.gm_science.resources.context import ResourceContextService
+from openppx.gm_science.resources.models import ResourceSelection
 from openppx.gm_science.resources.service import ResourceCatalogService
 from openppx.gm_science.store import GmScienceStore
 
@@ -24,6 +26,9 @@ def _service(
         max_scan_depth=max_scan_depth,
         include_hidden=False,
         excluded_directories=(".git", ".venv", "__pycache__", "node_modules", "datasets", "runs"),
+        max_selected_resources=8,
+        max_context_chars_per_resource=30_000,
+        max_context_chars_total=100_000,
     )
     return ResourceCatalogService(store=store, config=config), store, project.id, Path(project.workspace_path)
 
@@ -38,6 +43,9 @@ def test_resource_config_is_bounded_and_reads_science_resources() -> None:
                     "maxScanDepth": 999,
                     "includeHidden": True,
                     "excludedDirectories": ["runs", "runs", "  custom  ", ""],
+                    "maxSelectedResources": 999,
+                    "maxContextCharsPerResource": 0,
+                    "maxContextCharsTotal": 9_999_999,
                 }
             }
         }
@@ -48,6 +56,9 @@ def test_resource_config_is_bounded_and_reads_science_resources() -> None:
     assert parsed.max_scan_depth == 20
     assert parsed.include_hidden is True
     assert parsed.excluded_directories == ("runs", "custom")
+    assert parsed.max_selected_resources == 32
+    assert parsed.max_context_chars_per_resource == 256
+    assert parsed.max_context_chars_total == 1_000_000
 
 
 def test_catalog_projects_artifacts_datasets_run_outputs_and_workspace_files(tmp_path: Path) -> None:
@@ -205,7 +216,132 @@ def test_catalog_rejects_unknown_or_disabled_projects(tmp_path: Path) -> None:
             max_scan_depth=2,
             include_hidden=False,
             excluded_directories=(),
+            max_selected_resources=8,
+            max_context_chars_per_resource=30_000,
+            max_context_chars_total=100_000,
         ),
     )
     with pytest.raises(ValueError, match="disabled"):
         disabled.list_resources(project_id)
+
+
+def test_context_resolves_bounded_text_and_descriptor_only_resources(tmp_path: Path) -> None:
+    catalog, store, project_id, workspace = _service(tmp_path)
+    protocol_path = workspace / "protocol.md"
+    protocol_path.write_text("0123456789abcdefghij", encoding="utf-8")
+    image_path = workspace / "figure.png"
+    image_path.write_bytes(b"not-text")
+    external = store.create_artifact(
+        project_id=project_id,
+        artifact_type="paper",
+        title="External paper",
+        path_or_url="https://example.org/paper",
+        mime_type="text/html",
+    )
+    config = ResourceCatalogConfig(
+        enabled=True,
+        max_workspace_files=100,
+        max_scan_depth=6,
+        include_hidden=False,
+        excluded_directories=(),
+        max_selected_resources=4,
+        max_context_chars_per_resource=10,
+        max_context_chars_total=10,
+    )
+    service = ResourceContextService(
+        catalog=ResourceCatalogService(store=store, config=config),
+        config=config,
+    )
+    resources = {item.display_name: item for item in service.catalog.list_resources(project_id)}
+
+    contexts = service.resolve_contexts(
+        project_id,
+        [
+            ResourceSelection(
+                id=resources["protocol.md"].id,
+                version_or_hash=resources["protocol.md"].version_or_hash,
+            ),
+            ResourceSelection(
+                id=resources["figure.png"].id,
+                version_or_hash=resources["figure.png"].version_or_hash,
+            ),
+            ResourceSelection(
+                id=f"artifact:{external.id}",
+                version_or_hash=resources["External paper"].version_or_hash,
+            ),
+        ],
+    )
+
+    assert contexts[0].content == "0123456789"
+    assert contexts[0].content_included is True
+    assert contexts[0].truncated is True
+    assert contexts[0].metadata()["gm_science_resource"]["id"] == resources["protocol.md"].id
+    assert "untrusted research data" in contexts[0].render_text()
+    assert contexts[1].content == ""
+    assert contexts[1].content_included is False
+    assert contexts[1].content_status == "binary_descriptor_only"
+    assert contexts[2].content_status == "external_descriptor_only"
+    assert "https://example.org/paper" in contexts[2].render_text()
+
+
+def test_context_rejects_stale_duplicate_unknown_and_excess_selections(tmp_path: Path) -> None:
+    catalog, store, project_id, workspace = _service(tmp_path)
+    (workspace / "note.txt").write_text("note", encoding="utf-8")
+    resource = catalog.list_resources(project_id)[0]
+    service = ResourceContextService(catalog=catalog, config=catalog.config)
+    selection = ResourceSelection(id=resource.id, version_or_hash=resource.version_or_hash)
+
+    assert service.validate_selections(project_id, [selection]) == [selection]
+    with pytest.raises(ValueError, match="selected more than once"):
+        service.validate_selections(project_id, [selection, selection])
+    with pytest.raises(ValueError, match="has changed"):
+        service.validate_selections(
+            project_id,
+            [ResourceSelection(id=resource.id, version_or_hash="stale-version")],
+        )
+    with pytest.raises(ValueError, match="was not found"):
+        service.validate_selections(
+            project_id,
+            [ResourceSelection(id="project_file:missing", version_or_hash="1")],
+        )
+
+    limited_config = ResourceCatalogConfig(
+        enabled=True,
+        max_workspace_files=100,
+        max_scan_depth=6,
+        include_hidden=False,
+        excluded_directories=(),
+        max_selected_resources=1,
+        max_context_chars_per_resource=30_000,
+        max_context_chars_total=100_000,
+    )
+    limited = ResourceContextService(
+        catalog=ResourceCatalogService(store=store, config=limited_config),
+        config=limited_config,
+    )
+    with pytest.raises(ValueError, match="At most 1"):
+        limited.validate_selections(project_id, [selection, selection])
+
+
+def test_context_selection_payload_requires_stable_id_and_version(tmp_path: Path) -> None:
+    catalog, _store, project_id, workspace = _service(tmp_path)
+    (workspace / "note.txt").write_text("note", encoding="utf-8")
+    resource = catalog.list_resources(project_id)[0]
+    service = ResourceContextService(catalog=catalog, config=catalog.config)
+
+    assert service.validate_selections(
+        project_id,
+        [{"id": resource.id, "version_or_hash": resource.version_or_hash}],
+    ) == [ResourceSelection(id=resource.id, version_or_hash=resource.version_or_hash)]
+    with pytest.raises(ValueError, match="must be a list"):
+        service.validate_selections(project_id, {"id": resource.id})
+    with pytest.raises(ValueError, match="non-empty 'version_or_hash'"):
+        service.validate_selections(project_id, [{"id": resource.id}])
+
+
+def test_empty_context_selection_does_not_scan_the_resource_catalog(tmp_path: Path, monkeypatch) -> None:
+    catalog, _store, project_id, _workspace = _service(tmp_path)
+    service = ResourceContextService(catalog=catalog, config=catalog.config)
+    monkeypatch.setattr(catalog, "list_resources", lambda *_args, **_kwargs: pytest.fail("unexpected scan"))
+
+    assert service.validate_selections(project_id, []) == []

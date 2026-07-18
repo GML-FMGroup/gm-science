@@ -141,6 +141,21 @@ function renderPart(part: MessagePart) {
       </div>
     );
   }
+  if (part.type === "resource_ref") {
+    const location = part.relativePath || part.url;
+    const status = part.contentStatus === "included" ? "Context included" : part.contentStatus === "selected" ? "Selected" : "Reference only";
+    return (
+      <div className="resource-ref-card">
+        <span className="resource-ref-symbol" aria-hidden="true">R</span>
+        <div>
+          <strong>{part.displayName}</strong>
+          <span>{[part.kind.replaceAll("_", " "), part.mimeType, status].filter(Boolean).join(" · ")}</span>
+          {location ? <small>{location}</small> : null}
+          {part.truncated ? <small>Context was truncated to the configured limit.</small> : null}
+        </div>
+      </div>
+    );
+  }
   const detailText = part.detail
     .split("\n")
     .map((line) => line.trimEnd())

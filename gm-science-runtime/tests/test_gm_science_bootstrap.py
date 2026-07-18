@@ -72,6 +72,9 @@ def test_bootstrap_creates_default_science_agent_with_openai_codex_provider(tmp_
     assert resources["maxWorkspaceFiles"] == 1000
     assert resources["maxScanDepth"] == 6
     assert resources["includeHidden"] is False
+    assert resources["maxSelectedResources"] == 8
+    assert resources["maxContextCharsPerResource"] == 30_000
+    assert resources["maxContextCharsTotal"] == 100_000
     assert resources["excludedDirectories"] == [
         ".git",
         ".venv",
@@ -119,3 +122,5 @@ def test_bootstrap_persists_missing_science_defaults_into_existing_config(tmp_pa
     assert saved["science"]["analysis"]["maxDatasets"] == 3
     assert saved["science"]["execution"]["defaultTimeoutSeconds"] == 900
     assert saved["science"]["resources"]["maxWorkspaceFiles"] == 1000
+    assert saved["science"]["resources"]["maxSelectedResources"] == 8
+    assert saved["science"]["resources"]["maxContextCharsTotal"] == 100_000

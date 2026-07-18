@@ -99,4 +99,31 @@ describe("client api projection helpers", () => {
       rawText: "{\n  \"ok\": true\n}",
     });
   });
+
+  it("normalizes structured Project resource reference parts", () => {
+    const part = normalizeClientApiPart({
+      type: "resource_ref",
+      resource_id: "project_file:abc",
+      display_name: "results.csv",
+      kind: "project_file",
+      version_or_hash: "1:20",
+      mime_type: "text/csv",
+      relative_path: "results.csv",
+      content_status: "included",
+      truncated: true,
+    });
+
+    expect(part).toEqual({
+      type: "resource_ref",
+      resourceId: "project_file:abc",
+      displayName: "results.csv",
+      kind: "project_file",
+      versionOrHash: "1:20",
+      mimeType: "text/csv",
+      relativePath: "results.csv",
+      url: "",
+      contentStatus: "included",
+      truncated: true,
+    });
+  });
 });

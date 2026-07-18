@@ -196,7 +196,7 @@ ResourceRef
   size_bytes
 ```
 
-Composer 解析出的 `@artifact`、`#session` 和 `/skill` 必须作为结构化 message parts 发送。后端在运行前解析引用、校验 Project 归属、控制读取范围并记录 provenance。
+Files 选择产生的资源引用必须作为结构化 message parts 发送。后端在运行前解析引用、校验 Project 归属、控制读取范围并记录 provenance。后续 `@artifact`、`#session` 和 `/skill` 语法也必须复用同一消息合同，不能发展成第二套 prompt 字符串协议。
 
 ### 5.4 Compute 与 Run 分离
 
@@ -286,7 +286,17 @@ TaskRun
 - `science.resources` 配置扫描数量、深度、隐藏文件和排除目录。
 - 当前不支持打开/预览本机文件、选择资源进入 Composer、附加任意目录或跨 Project 引用。
 
-##### Phase 8B.2：选择、预览与结构化引用（下一阶段）
+##### Phase 8B.2a：Files 选择与 ADK 原生资源上下文（已完成）
+
+- Files 行使用复选框选择 Artifact、Dataset、Run output 或 Project file，并在 Composer 显示可移除的选择摘要。
+- 桌面消息合同只发送稳定 `id` 和 `version_or_hash`，不发送绝对路径或文件正文。
+- client-api 在创建 run 前校验 Project/Session/Agent 关系、资源归属、重复项、数量上限和乐观版本。
+- 独立 Worker 在模型调用前按同一规则再次校验，只读取 Project 内可读文本；外部、二进制和 metadata-only 资源只生成 descriptor。
+- 资源正文受单资源和总字符预算限制，配置位于 `science.resources`。
+- 模型请求复用现有 Google ADK Runner，构造一个包含多个 `Part` 的 `UserContent`；provenance 保存在 `part_metadata.gm_science_resource`。
+- Session 投影把资源 Part 显示为 `resource_ref`，并从用户可见正文和会话标题中排除内部上下文。
+
+##### Phase 8B.2b：预览与统一 Composer 命令（下一阶段）
 
 - 为 Artifact、Dataset、Run output 和文件提供统一详情/预览框架。
 - 增加列表和网格视图、类型筛选和全文元数据搜索。
@@ -295,8 +305,8 @@ TaskRun
   - `#` 引用当前 Project 内的 Session。
   - `/` 选择当前 Project 已附加的 Skill。
   - 快捷搜索打开统一命令面板。
-- 消息 API 使用结构化引用，不把引用展开为用户可见的伪文本。
-- 运行前校验引用归属和文件 hash，运行后写入 Artifact provenance。
+- `@` 入口必须复用 8B.2a 的结构化资源消息合同；`#session` 和 `/skill` 分别定义独立的 typed reference，不把引用展开为用户可见的伪文本。
+- 快捷搜索、键盘导航和预览都建立在现有 ResourceRef 目录之上，不直接读取任意路径。
 
 ##### Phase 8B.3：附加目录与资源状态（后续）
 
@@ -639,7 +649,7 @@ Phase 8A.3 于 2026-07-18 实施：
 | 文献与科研垂直闭环 | 第一版完成 |
 | 本地执行与数据分析 | 第一版完成 |
 | 动态能力注册与组合 | Skill、MCP Connector 和配置驱动 Specialist 第一版完成；安装/编辑与治理待后续阶段 |
-| 统一 Files 与上下文引用 | 只读统一目录与搜索完成；预览、结构化引用和附加目录待后续迭代 |
+| 统一 Files 与上下文引用 | 统一目录、搜索、Files 选择和 ADK 原生结构化资源上下文完成；内容预览、Composer 命令和附加目录待后续迭代 |
 | 会话级调度控制 | 部分完成 |
 | 可审阅 Memory | 底座存在，产品层未完成 |
 | Credentials / Permissions / Network | 未形成产品闭环 |

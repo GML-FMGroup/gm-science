@@ -1238,6 +1238,58 @@ button.small {
   color: rgba(156, 163, 175, 0.95);
 }
 
+.composer-resources {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 9px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid rgba(24, 23, 22, 0.08);
+  color: var(--text-subtle);
+  font-size: 0.72rem;
+}
+
+.composer-resources > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.composer-resource {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 5px 4px 8px;
+  border: 1px solid rgba(47, 96, 126, 0.18);
+  border-radius: 6px;
+  background: #eef3f6;
+  color: #315d78;
+}
+
+.composer-resource > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-resource button {
+  display: grid;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+}
+
+.composer-resource button:hover {
+  background: rgba(47, 96, 126, 0.1);
+}
+
 .composer-actions {
   margin-top: 6px;
   color: var(--text-subtle);
@@ -2173,9 +2225,61 @@ button.primary.small {
 
 .resource-title-row {
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
+  grid-template-columns: 24px minmax(0, 1fr) 20px;
   align-items: start;
   gap: 9px;
+}
+
+.resource-title-row input {
+  width: 16px;
+  height: 16px;
+  margin: 3px 0 0;
+  accent-color: #386789;
+}
+
+.resource-item.selected {
+  background: rgba(238, 243, 246, 0.74);
+}
+
+.resource-ref-card {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 9px;
+  max-width: 620px;
+  padding: 9px 10px;
+  border: 1px solid rgba(47, 96, 126, 0.16);
+  border-radius: 6px;
+  background: rgba(238, 243, 246, 0.7);
+}
+
+.resource-ref-symbol {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 5px;
+  background: #dfeaf0;
+  color: #315d78;
+  font-size: 0.7rem;
+  font-weight: 750;
+}
+
+.resource-ref-card strong,
+.resource-ref-card span,
+.resource-ref-card small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.resource-ref-card span,
+.resource-ref-card small {
+  margin-top: 2px;
+  color: var(--text-subtle);
+  font-size: 0.72rem;
+}
+
+.resource-ref-card small {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 .resource-title-row > div {

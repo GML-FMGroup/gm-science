@@ -206,6 +206,55 @@ def test_project_session_event_strips_request_time_prefix_from_user_text() -> No
     assert message["parts"] == [{"type": "markdown", "text": "今天日期给我一下"}]
 
 
+def test_project_session_event_projects_resource_metadata_without_context_text() -> None:
+    message = project_session_event(
+        {
+            "id": "evt_resource",
+            "author": "user",
+            "timestamp": 1_717_171_720,
+            "content": {
+                "parts": [
+                    {"text": "Compare these results."},
+                    {
+                        "text": "private bounded resource content",
+                        "part_metadata": {
+                            "gm_science_resource": {
+                                "id": "project_file:abc",
+                                "kind": "project_file",
+                                "display_name": "results.csv",
+                                "version_or_hash": "1:20",
+                                "mime_type": "text/csv",
+                                "relative_path": "results.csv",
+                                "url": "",
+                                "content_status": "included",
+                                "truncated": True,
+                            }
+                        },
+                    },
+                ]
+            },
+        },
+        "session_resource",
+    )
+
+    assert message is not None
+    assert message["parts"] == [
+        {"type": "markdown", "text": "Compare these results."},
+        {
+            "type": "resource_ref",
+            "resource_id": "project_file:abc",
+            "display_name": "results.csv",
+            "kind": "project_file",
+            "version_or_hash": "1:20",
+            "mime_type": "text/csv",
+            "relative_path": "results.csv",
+            "url": "",
+            "content_status": "included",
+            "truncated": True,
+        },
+    ]
+
+
 def test_create_run_streams_replayable_events(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / "global_config.json").write_text(
         json.dumps({"agents": [{"name": "writer", "enabled": True}]}),

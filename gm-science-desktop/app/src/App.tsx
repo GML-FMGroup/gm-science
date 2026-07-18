@@ -219,7 +219,15 @@ function formatRunTime(value: string): string {
     : date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
-function ResourceItem({ resource }: { resource: GmScienceResource }) {
+function ResourceItem({
+  resource,
+  selected,
+  onToggle,
+}: {
+  resource: GmScienceResource;
+  selected: boolean;
+  onToggle: (resource: GmScienceResource) => void;
+}) {
   const marker =
     resource.kind === "dataset" ? "D" : resource.kind === "run_output" ? "O" : resource.kind === "project_file" ? "F" : "A";
   const details = [
@@ -233,7 +241,7 @@ function ResourceItem({ resource }: { resource: GmScienceResource }) {
   const location = resource.relativePath || resource.url;
 
   return (
-    <article className={`resource-item resource-${resource.kind}`}>
+    <article className={`resource-item resource-${resource.kind}${selected ? " selected" : ""}`}>
       <div className="resource-title-row">
         <span className="resource-marker" aria-hidden="true">
           {marker}
@@ -242,6 +250,12 @@ function ResourceItem({ resource }: { resource: GmScienceResource }) {
           <strong>{resource.displayName}</strong>
           <span className="resource-kind">{formatResourceKind(resource.kind)}</span>
         </div>
+        <input
+          type="checkbox"
+          checked={selected}
+          aria-label={`Select ${resource.displayName}`}
+          onChange={() => onToggle(resource)}
+        />
       </div>
       {location ? <p className="resource-location">{location}</p> : null}
       {details ? <p className="resource-detail">{details}</p> : null}
@@ -305,6 +319,7 @@ export function App() {
   const [agents, setAgents] = useState<AgentProfile[]>([]);
   const [projects, setProjects] = useState<GmScienceProject[]>([]);
   const [resources, setResources] = useState<GmScienceResource[]>([]);
+  const [selectedResources, setSelectedResources] = useState<GmScienceResource[]>([]);
   const [runs, setRuns] = useState<GmScienceRun[]>([]);
   const [resourceSearch, setResourceSearch] = useState("");
   const [workspacePanel, setWorkspacePanel] = useState<WorkspacePanel>("files");
@@ -372,6 +387,10 @@ export function App() {
     const query = resourceSearch.trim().toLowerCase();
     return query ? resources.filter((resource) => resourceSearchText(resource).includes(query)) : resources;
   }, [resourceSearch, resources]);
+  const selectedResourceIds = useMemo(
+    () => new Set(selectedResources.map((resource) => resource.id)),
+    [selectedResources],
+  );
   const canSend = Boolean(composer.trim()) && Boolean(selectedAgentId) && Boolean(selectedProjectId) && !selectedAgentBusy;
 
   useEffect(() => {
@@ -612,6 +631,7 @@ export function App() {
     selectedProjectIdRef.current = project.id;
     setSelectedProjectId(project.id);
     setResourceSearch("");
+    setSelectedResources([]);
     setRunError(null);
     runsRef.current = [];
     setRuns([]);
@@ -836,16 +856,33 @@ export function App() {
       return;
     }
     const sessionId = session.id;
+    const resourceSnapshot = selectedResources;
     setSelectedAgentId(agentId);
     setSendingSessionIds((current) => (current.includes(sessionId) ? current : [...current, sessionId]));
     setComposer("");
+    setSelectedResources([]);
+    const optimisticParts: ChatMessage["parts"] = [
+      { type: "markdown", text },
+      ...resourceSnapshot.map((resource) => ({
+        type: "resource_ref" as const,
+        resourceId: resource.id,
+        displayName: resource.displayName,
+        kind: resource.kind,
+        versionOrHash: resource.versionOrHash,
+        mimeType: resource.mimeType,
+        relativePath: resource.relativePath,
+        url: resource.url,
+        contentStatus: "selected",
+        truncated: false,
+      })),
+    ];
     const optimisticMessage: ChatMessage = {
       id: `local-user-${crypto.randomUUID()}`,
       sessionId,
       role: "user",
       status: "completed",
       createdAt: new Date().toISOString(),
-      parts: [{ type: "markdown", text }],
+      parts: optimisticParts,
     };
     applyFirstUserTitle(sessionId, text, optimisticMessage.createdAt);
     setMessages((current) => [...current, optimisticMessage]);
@@ -855,10 +892,27 @@ export function App() {
         sessionId,
         projectId: selectedProjectId,
         text,
+        ...(resourceSnapshot.length
+          ? {
+              resourceRefs: resourceSnapshot.map((resource) => ({
+                id: resource.id,
+                versionOrHash: resource.versionOrHash,
+              })),
+            }
+          : {}),
       });
     } catch (error) {
       console.error("Failed to send message", error);
       setSendError(error instanceof Error ? error.message : String(error));
+      if (selectedProjectIdRef.current === selectedProjectId) {
+        setSelectedResources((current) => {
+          const restored = new Map(current.map((resource) => [resource.id, resource]));
+          for (const resource of resourceSnapshot) {
+            restored.set(resource.id, resource);
+          }
+          return [...restored.values()];
+        });
+      }
       await refreshResources(selectedProjectId);
     } finally {
       setSendingSessionIds((current) => current.filter((item) => item !== sessionId));
@@ -1107,6 +1161,28 @@ export function App() {
                 )}
               </section>
               <div className="composer-shell">
+                {selectedResources.length ? (
+                  <div className="composer-resources" aria-label="Selected Project files">
+                    <span>{selectedResources.length === 1 ? "1 file selected" : `${selectedResources.length} files selected`}</span>
+                    <div>
+                      {selectedResources.map((resource) => (
+                        <span className="composer-resource" key={resource.id}>
+                          <span>{resource.displayName}</span>
+                          <button
+                            type="button"
+                            aria-label={`Remove ${resource.displayName}`}
+                            title={`Remove ${resource.displayName}`}
+                            onClick={() =>
+                              setSelectedResources((current) => current.filter((item) => item.id !== resource.id))
+                            }
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 <textarea
                   ref={composerRef}
                   value={composer}
@@ -1165,7 +1241,18 @@ export function App() {
                 />
                 <div className="artifact-list">
                   {visibleResources.map((resource) => (
-                    <ResourceItem key={resource.id} resource={resource} />
+                    <ResourceItem
+                      key={resource.id}
+                      resource={resource}
+                      selected={selectedResourceIds.has(resource.id)}
+                      onToggle={(next) =>
+                        setSelectedResources((current) =>
+                          current.some((item) => item.id === next.id)
+                            ? current.filter((item) => item.id !== next.id)
+                            : [...current, next],
+                        )
+                      }
+                    />
                   ))}
                   {resources.length === 0 ? <div className="artifact-empty">No files yet</div> : null}
                   {resources.length > 0 && visibleResources.length === 0 ? (

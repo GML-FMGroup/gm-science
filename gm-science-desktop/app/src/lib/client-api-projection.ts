@@ -121,6 +121,24 @@ export function normalizeClientApiPart(payload: unknown): MessagePart | null {
       rawText: asString(part.raw_text ?? part.rawText) || undefined,
     };
   }
+  if (type === "resource_ref") {
+    const kind = asString(part.kind) as GmScienceResourceKind;
+    if (!GM_SCIENCE_RESOURCE_KINDS.has(kind)) {
+      return null;
+    }
+    return {
+      type,
+      resourceId: asString(part.resource_id ?? part.resourceId),
+      displayName: asString(part.display_name ?? part.displayName, "Project resource"),
+      kind,
+      versionOrHash: asString(part.version_or_hash ?? part.versionOrHash),
+      mimeType: asString(part.mime_type ?? part.mimeType),
+      relativePath: asString(part.relative_path ?? part.relativePath),
+      url: asString(part.url),
+      contentStatus: asString(part.content_status ?? part.contentStatus, "metadata_descriptor_only"),
+      truncated: Boolean(part.truncated),
+    };
+  }
   if (type === "step_ref") {
     const status = asString(part.status, "running");
     return {
