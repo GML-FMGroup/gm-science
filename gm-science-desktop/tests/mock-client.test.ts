@@ -5,6 +5,10 @@ import {
   createGmScienceProject,
   createGmSciencePythonRun,
   createSession,
+  getGmScienceSettings,
+  getGmScienceResourceDetail,
+  getGmScienceSessionPolicy,
+  getGmScienceMemory,
   listGmScienceCapabilities,
   listGmScienceArtifacts,
   importGmScienceDataset,
@@ -15,6 +19,13 @@ import {
   listGmScienceRuns,
   loadSession,
   updateGmScienceProjectCapabilities,
+  updateGmScienceSessionPolicy,
+  updateGmScienceSettings,
+  createGmScienceMemoryNote,
+  updateGmScienceMemoryNote,
+  deleteGmScienceMemoryNote,
+  clearGmScienceMemory,
+  reviewGmScienceMemoryCandidate,
   retryGmScienceRun,
   runGmScienceAnalysis,
 } from "../app/src/lib/mock-client";
@@ -28,12 +39,29 @@ describe("mock client adapter", () => {
   });
 
   it("creates an empty session for the selected project", async () => {
-    const created = await createSession("builder", "proj_mock_research");
-    expect(created.session.agentId).toBe("builder");
+    const created = await createSession("science-research", "proj_mock_research");
+    expect(created.session.agentId).toBe("science-research");
     expect(created.session.projectId).toBe("proj_mock_research");
 
     const loaded = await loadSession(created.session.id);
     expect(loaded.messages).toHaveLength(0);
+    expect(await getGmScienceSessionPolicy(created.session.id)).toMatchObject({
+      delegationEnabled: false,
+      autoReviewEnabled: false,
+      memoryEnabled: false,
+      specialistId: "",
+      reviewerModel: "default",
+      computeTarget: "local",
+    });
+
+    const updated = await updateGmScienceSessionPolicy(created.session.id, {
+      delegationEnabled: true,
+      specialistId: "paper_reader",
+    });
+    expect(updated).toMatchObject({ delegationEnabled: true, specialistId: "paper_reader" });
+    await expect(updateGmScienceSessionPolicy(created.session.id, { specialistId: "missing" })).rejects.toThrow(
+      "is not ready",
+    );
   });
 
   it("supports gm-science project and artifact APIs", async () => {
@@ -52,8 +80,9 @@ describe("mock client adapter", () => {
     const artifact = await createGmScienceArtifact(created.project.id, {
       type: "paper",
       title: "A relevant paper",
-      pathOrUrl: "https://example.test/paper",
-      metadata: { source: "manual" },
+      pathOrUrl: "https://user:secret@example.test/paper?token=secret#page",
+      metadata: { source: "manual", summary: "Relevant evidence.", profile_path: "/private/profile.json" },
+      provenance: { created_by: "mock-client", credential: "must-not-leak" },
     });
 
     expect(artifact.artifact.projectId).toBe(created.project.id);
@@ -65,8 +94,20 @@ describe("mock client adapter", () => {
         id: `artifact:${artifact.artifact.id}`,
         kind: "artifact",
         displayName: "A relevant paper",
+        url: "https://example.test/paper",
       }),
     );
+    const detail = await getGmScienceResourceDetail(created.project.id, `artifact:${artifact.artifact.id}`);
+    expect(detail.detail).toMatchObject({
+      preview: { contentStatus: "external_descriptor_only", content: "" },
+      artifact: {
+        id: artifact.artifact.id,
+        metadata: { summary: "Relevant evidence." },
+        provenance: { created_by: "mock-client" },
+      },
+    });
+    expect(JSON.stringify(detail)).not.toContain("/private/profile.json");
+    expect(JSON.stringify(detail)).not.toContain("must-not-leak");
 
     const catalog = await listGmScienceCapabilities(created.project.id);
     expect(catalog.items.some((item) => item.id === "pubmed" && item.projectEnabled)).toBe(true);
@@ -109,6 +150,71 @@ describe("mock client adapter", () => {
 
     const retried = await retryGmScienceRun("proj_mock_research", created.run.taskId);
     expect(retried.run.parentTaskId).toBe(created.run.taskId);
+  });
+
+  it("updates mock settings with explicit secret semantics", async () => {
+    const initial = await getGmScienceSettings();
+    expect(initial.model.provider).toBe("openai_codex");
+
+    const updated = await updateGmScienceSettings({
+      projectId: "proj_mock_research",
+      model: { provider: "openai", model: "openai/gpt-5.5" },
+      providerApiKey: { operation: "replace", value: "provider-secret" },
+      pubmedEmail: "researcher@example.org",
+      openalexApiKey: { operation: "replace", value: "openalex-secret" },
+      memoryEnabled: false,
+    });
+    expect(updated.settings.model).toEqual({ provider: "openai", model: "openai/gpt-5.5" });
+    expect(updated.settings.providers.find((provider) => provider.id === "openai")).toMatchObject({
+      credentialConfigured: true,
+      credentialSource: "local_config",
+      active: true,
+    });
+    expect(updated.settings.literature.pubmed.status).toBe("ready");
+    expect(updated.settings.literature.openalex.status).toBe("ready");
+    expect(updated.settings.memory.enabled).toBe(false);
+    expect(updated.capabilities.find((capability) => capability.id === "openalex")?.status).toBe("ready");
+
+    const preserved = await updateGmScienceSettings({ projectId: "proj_mock_research" });
+    expect(preserved.settings.providers.find((provider) => provider.id === "openai")?.credentialConfigured).toBe(true);
+    const removed = await updateGmScienceSettings({
+      projectId: "proj_mock_research",
+      providerApiKey: { operation: "remove" },
+      openalexApiKey: { operation: "remove" },
+    });
+    expect(removed.settings.providers.find((provider) => provider.id === "openai")?.credentialConfigured).toBe(false);
+    expect(removed.settings.literature.openalex.status).toBe("needs_configuration");
+    expect(JSON.stringify(removed)).not.toContain("provider-secret");
+    expect(JSON.stringify(removed)).not.toContain("openalex-secret");
+  });
+
+  it("supports reviewed User and Project Memory lifecycle", async () => {
+    const projectId = "proj_mock_research";
+    const initial = await getGmScienceMemory(projectId);
+    const pending = initial.candidates.find((candidate) => candidate.status === "pending");
+    expect(pending).toBeDefined();
+
+    const reviewed = await reviewGmScienceMemoryCandidate(projectId, pending!.id, "approve");
+    expect(reviewed.status).toBe("approved");
+    const afterReview = await getGmScienceMemory(projectId);
+    expect(afterReview.notes.find((note) => note.id === reviewed.approvedNoteId)).toMatchObject({
+      scope: "project",
+      provenance: { candidateId: pending!.id, sessionId: pending!.sourceSessionId },
+    });
+
+    const created = await createGmScienceMemoryNote(projectId, {
+      scope: "user",
+      category: "Preferences",
+      text: "Prefer concise summaries.",
+    });
+    const updated = await updateGmScienceMemoryNote(projectId, created.id, {
+      category: "Preferences",
+      text: "Prefer concise summaries with uncertainty labels.",
+    });
+    expect(updated.text).toContain("uncertainty labels");
+    await deleteGmScienceMemoryNote(projectId, created.id);
+    expect((await getGmScienceMemory(projectId)).notes.some((note) => note.id === created.id)).toBe(false);
+    expect(await clearGmScienceMemory(projectId, "project")).toBe(1);
   });
 
   it("supports mock dataset import and review-before-run analysis", async () => {

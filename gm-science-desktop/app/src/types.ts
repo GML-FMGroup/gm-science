@@ -68,6 +68,8 @@ export interface AgentProfile {
   id: string;
   name: string;
   description: string;
+  provider: string;
+  model: string;
   enabled: boolean;
   status: "healthy" | "idle" | "starting" | "disabled";
   tags: string[];
@@ -82,6 +84,44 @@ export interface SessionSummary {
   lastMessagePreview: string;
 }
 
+export interface GmScienceSessionPolicyValues {
+  delegationEnabled: boolean;
+  autoReviewEnabled: boolean;
+  memoryEnabled: boolean;
+  specialistId: string;
+  reviewerModel: "default";
+  computeTarget: "local";
+}
+
+export interface GmScienceSessionPolicyOption {
+  id: string;
+  name: string;
+}
+
+export interface GmScienceSessionPolicySpecialist extends GmScienceSessionPolicyOption {
+  description: string;
+  status: GmScienceCapabilityStatus;
+}
+
+export interface GmScienceSessionPolicy extends GmScienceSessionPolicyValues {
+  sessionId: string;
+  projectId: string;
+  specialists: GmScienceSessionPolicySpecialist[];
+  reviewerAvailable: boolean;
+  reviewerModels: GmScienceSessionPolicyOption[];
+  computeTargets: GmScienceSessionPolicyOption[];
+  issues: string[];
+}
+
+export interface UpdateGmScienceSessionPolicyInput {
+  delegationEnabled?: boolean;
+  autoReviewEnabled?: boolean;
+  memoryEnabled?: boolean;
+  specialistId?: string;
+  reviewerModel?: "default";
+  computeTarget?: "local";
+}
+
 export interface GmScienceProject {
   id: string;
   name: string;
@@ -93,6 +133,7 @@ export interface GmScienceProject {
   enabledSkills: string[];
   enabledConnectors: string[];
   enabledSpecialists: string[];
+  sessionPolicyDefaults: GmScienceSessionPolicyValues;
   createdAt: string;
   updatedAt: string;
 }
@@ -104,6 +145,7 @@ export interface CreateGmScienceProjectInput {
   enabledSkills?: string[];
   enabledConnectors?: string[];
   enabledSpecialists?: string[];
+  sessionPolicyDefaults?: Partial<GmScienceSessionPolicyValues>;
 }
 
 export type GmScienceCapabilityKind = "skill" | "connector" | "specialist";
@@ -140,6 +182,135 @@ export interface UpdateGmScienceCapabilitiesInput {
   enabledSpecialists: string[];
 }
 
+export type GmScienceProviderAuthType = "oauth" | "api_key" | "optional_api_key";
+
+export type GmScienceCredentialSource = "none" | "local_config" | "environment" | "oauth_cache";
+
+export interface GmScienceProviderOption {
+  id: string;
+  name: string;
+  defaultModel: string;
+  authType: GmScienceProviderAuthType;
+  credentialRequired: boolean;
+  credentialConfigured: boolean;
+  credentialSource: GmScienceCredentialSource;
+  active: boolean;
+}
+
+export interface GmScienceSettings {
+  model: {
+    provider: string;
+    model: string;
+  };
+  memory: {
+    enabled: boolean;
+  };
+  providers: GmScienceProviderOption[];
+  literature: {
+    arxiv: {
+      status: GmScienceCapabilityStatus;
+      statusDetail: string;
+    };
+    pubmed: {
+      email: string;
+      apiKeyConfigured: boolean;
+      status: GmScienceCapabilityStatus;
+      statusDetail: string;
+    };
+    openalex: {
+      apiKeyConfigured: boolean;
+      status: GmScienceCapabilityStatus;
+      statusDetail: string;
+    };
+  };
+}
+
+export interface GmScienceSecretMutation {
+  operation: "replace" | "remove";
+  value?: string;
+}
+
+export interface UpdateGmScienceSettingsInput {
+  projectId?: string;
+  memoryEnabled?: boolean;
+  model?: {
+    provider: string;
+    model: string;
+  };
+  providerApiKey?: GmScienceSecretMutation;
+  pubmedEmail?: string;
+  pubmedApiKey?: GmScienceSecretMutation;
+  openalexApiKey?: GmScienceSecretMutation;
+}
+
+export type GmScienceMemoryScope = "user" | "project";
+
+export interface GmScienceMemoryUsage {
+  count: number;
+  sessionIds: string[];
+  lastUsedAtMs: number;
+}
+
+export interface GmScienceMemoryNote {
+  id: string;
+  scope: GmScienceMemoryScope;
+  category: string;
+  text: string;
+  createdAt: string;
+  updatedAt: string;
+  provenance: {
+    source: string;
+    projectId: string;
+    sessionId: string;
+    model: string;
+    candidateId: string;
+    rationale: string;
+  };
+  usage: GmScienceMemoryUsage;
+}
+
+export type GmScienceMemoryCandidateStatus = "pending" | "approved" | "rejected";
+
+export interface GmScienceMemoryCandidate {
+  id: string;
+  scope: GmScienceMemoryScope;
+  category: string;
+  text: string;
+  rationale: string;
+  status: GmScienceMemoryCandidateStatus;
+  projectId: string;
+  sourceSessionId: string;
+  model: string;
+  approvedNoteId: string;
+  createdAt: string;
+  reviewedAt: string;
+}
+
+export interface GmScienceMemoryWorkspace {
+  projectId: string;
+  notes: GmScienceMemoryNote[];
+  candidates: GmScienceMemoryCandidate[];
+  categories: string[];
+}
+
+export interface CreateGmScienceMemoryNoteInput {
+  scope: GmScienceMemoryScope;
+  category: string;
+  text: string;
+}
+
+export interface UpdateGmScienceMemoryNoteInput {
+  category: string;
+  text: string;
+}
+
+export interface GmScienceSettingsUpdateResult {
+  settings: GmScienceSettings;
+  agent: AgentProfile;
+  projectId: string;
+  capabilities: GmScienceCapability[];
+}
+
 export interface GmScienceArtifact {
   id: string;
   projectId: string;
@@ -157,6 +328,14 @@ export interface GmScienceArtifact {
 export type GmScienceResourceKind = "artifact" | "dataset" | "run_output" | "project_file";
 export type GmScienceResourceAccessMode = "read" | "external" | "metadata_only";
 export type GmScienceResourceSource = "artifact" | "workspace";
+export type GmScienceResourceContentStatus =
+  | "included"
+  | "binary_descriptor_only"
+  | "external_descriptor_only"
+  | "metadata_descriptor_only"
+  | "budget_exhausted_descriptor_only"
+  | "unavailable_descriptor_only";
+export type GmScienceArtifactRelationDirection = "outgoing" | "incoming";
 
 export interface GmScienceResource {
   id: string;
@@ -181,6 +360,43 @@ export interface GmScienceResource {
 export interface GmScienceResourceSelection {
   id: string;
   versionOrHash: string;
+}
+
+export interface GmScienceResourcePreview {
+  content: string;
+  contentStatus: GmScienceResourceContentStatus;
+  contentIncluded: boolean;
+  contentChars: number;
+  truncated: boolean;
+}
+
+export interface GmScienceArtifactDetail {
+  id: string;
+  sessionId: string;
+  type: string;
+  title: string;
+  mimeType: string;
+  metadata: Record<string, unknown>;
+  provenance: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GmScienceArtifactRelation {
+  artifactId: string;
+  resourceId: string;
+  sessionId: string;
+  title: string;
+  artifactType: string;
+  relation: string;
+  direction: GmScienceArtifactRelationDirection;
+}
+
+export interface GmScienceResourceDetail {
+  resource: GmScienceResource;
+  preview: GmScienceResourcePreview;
+  artifact: GmScienceArtifactDetail | null;
+  relations: GmScienceArtifactRelation[];
 }
 
 export interface CreateGmScienceArtifactInput {
@@ -410,8 +626,33 @@ export interface PpxClientApi {
     projectId: string,
     input: UpdateGmScienceCapabilitiesInput,
   ): Promise<{ project: GmScienceProject; capabilities: GmScienceCapability[] }>;
+  getGmScienceSettings(): Promise<GmScienceSettings>;
+  updateGmScienceSettings(input: UpdateGmScienceSettingsInput): Promise<GmScienceSettingsUpdateResult>;
+  getGmScienceMemory(projectId: string): Promise<GmScienceMemoryWorkspace>;
+  createGmScienceMemoryNote(
+    projectId: string,
+    input: CreateGmScienceMemoryNoteInput,
+  ): Promise<GmScienceMemoryNote>;
+  updateGmScienceMemoryNote(
+    projectId: string,
+    noteId: string,
+    input: UpdateGmScienceMemoryNoteInput,
+  ): Promise<GmScienceMemoryNote>;
+  deleteGmScienceMemoryNote(projectId: string, noteId: string): Promise<void>;
+  clearGmScienceMemory(projectId: string, scope: GmScienceMemoryScope): Promise<number>;
+  reviewGmScienceMemoryCandidate(
+    projectId: string,
+    candidateId: string,
+    decision: "approve" | "reject",
+  ): Promise<GmScienceMemoryCandidate>;
+  getGmScienceSessionPolicy(sessionId: string): Promise<GmScienceSessionPolicy>;
+  updateGmScienceSessionPolicy(
+    sessionId: string,
+    input: UpdateGmScienceSessionPolicyInput,
+  ): Promise<GmScienceSessionPolicy>;
   listGmScienceArtifacts(projectId: string): Promise<{ artifacts: GmScienceArtifact[] }>;
   listGmScienceResources(projectId: string, query?: string): Promise<{ resources: GmScienceResource[] }>;
+  getGmScienceResourceDetail(projectId: string, resourceId: string): Promise<{ detail: GmScienceResourceDetail }>;
   createGmScienceArtifact(
     projectId: string,
     input: CreateGmScienceArtifactInput,

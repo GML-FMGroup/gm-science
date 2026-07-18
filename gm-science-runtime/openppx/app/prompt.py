@@ -38,6 +38,10 @@ def build_static_policy_instruction() -> str:
     routing, and per-request values so it can later become the cacheable prompt
     prefix if ADK context caching is enabled.
     """
+    if env_enabled("GM_SCIENCE_MODE", default=False):
+        from ..gm_science.prompt import build_science_static_policy_instruction
+
+        return build_science_static_policy_instruction()
     return """You are openppx, a lightweight skills-first coding assistant.
 
 Your job:
@@ -107,6 +111,10 @@ def _build_gui_tool_guidance() -> str:
 
 def build_startup_runtime_context() -> str:
     """Build startup-time context that should not be treated as stable policy."""
+    if env_enabled("GM_SCIENCE_MODE", default=False):
+        from ..gm_science.prompt import build_science_startup_runtime_context
+
+        return build_science_startup_runtime_context()
     runtime = f"{platform.system()} {platform.machine()} / Python"
     workspace = os.getenv("OPENPPX_WORKSPACE", os.getcwd())
     skills_summary = get_registry().build_summary()

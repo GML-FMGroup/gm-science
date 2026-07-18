@@ -17,6 +17,7 @@ from .models import (
     ScienceRunRecord,
 )
 from .paths import get_gm_science_data_dir
+from .session_policy import default_session_policy, normalize_session_policy
 
 
 def _utc_now() -> str:
@@ -72,6 +73,7 @@ class GmScienceStore:
         enabled_skills: list[str] | None = None,
         enabled_connectors: list[str] | None = None,
         enabled_specialists: list[str] | None = None,
+        session_policy_defaults: dict[str, Any] | None = None,
     ) -> ProjectRecord:
         """Create and persist one local research project."""
 
@@ -94,6 +96,9 @@ class GmScienceStore:
             enabled_skills=list(enabled_skills or []),
             enabled_connectors=list(enabled_connectors or []),
             enabled_specialists=list(enabled_specialists or []),
+            session_policy_defaults=normalize_session_policy(
+                session_policy_defaults or default_session_policy()
+            ),
         )
         with self._connect() as conn:
             conn.execute(
@@ -101,9 +106,9 @@ class GmScienceStore:
                 INSERT INTO gm_science_projects (
                     id, name, description, agent_context, workspace_path,
                     created_at, updated_at, enabled_skills, enabled_connectors,
-                    enabled_specialists
+                    enabled_specialists, session_policy_defaults
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.id,
@@ -116,6 +121,7 @@ class GmScienceStore:
                     _json_dumps(record.enabled_skills),
                     _json_dumps(record.enabled_connectors),
                     _json_dumps(record.enabled_specialists),
+                    _json_dumps(record.session_policy_defaults),
                 ),
             )
         return record
@@ -178,6 +184,7 @@ class GmScienceStore:
         project_id: str,
         session_id: str,
         agent_id: str,
+        policy: dict[str, Any] | None = None,
     ) -> ProjectSessionRecord:
         """Attach one ADK Session to a Project without allowing cross-Project relinking."""
 
@@ -196,21 +203,31 @@ class GmScienceStore:
             )
         timestamp = _utc_now()
         created_at = existing.created_at if existing is not None else timestamp
+        project = self.get_project(project_id)
+        if project is None:
+            raise ValueError(f"Project '{project_id}' was not found.")
+        resolved_policy = (
+            existing.policy
+            if existing is not None and policy is None
+            else normalize_session_policy(policy or project.session_policy_defaults)
+        )
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO gm_science_project_sessions (
-                    session_id, project_id, agent_id, created_at, updated_at
+                    session_id, project_id, agent_id, session_policy, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_id) DO UPDATE SET
                     agent_id = excluded.agent_id,
+                    session_policy = excluded.session_policy,
                     updated_at = excluded.updated_at
                 """,
                 (
                     normalized_session_id,
                     project_id,
                     normalized_agent_id,
+                    _json_dumps(resolved_policy),
                     created_at,
                     timestamp,
                 ),
@@ -223,6 +240,61 @@ class GmScienceStore:
         if linked is None:
             raise RuntimeError(f"Session '{normalized_session_id}' was not linked to Project '{project_id}'.")
         return linked
+
+    def update_project_session_policy(
+        self,
+        session_id: str,
+        policy: dict[str, Any],
+    ) -> ProjectSessionRecord:
+        """Replace one Project Session policy and return the updated association."""
+
+        existing = self.get_project_session(session_id)
+        if existing is None:
+            raise ValueError(f"Session '{session_id}' is not attached to a Project.")
+        resolved = normalize_session_policy(policy)
+        timestamp = _utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE gm_science_project_sessions
+                SET session_policy = ?, updated_at = ?
+                WHERE session_id = ?
+                """,
+                (_json_dumps(resolved), timestamp, existing.session_id),
+            )
+            conn.execute(
+                "UPDATE gm_science_projects SET updated_at = ? WHERE id = ?",
+                (timestamp, existing.project_id),
+            )
+        updated = self.get_project_session(existing.session_id)
+        if updated is None:
+            raise RuntimeError(f"Session '{existing.session_id}' disappeared during policy update.")
+        return updated
+
+    def update_project_session_policy_defaults(
+        self,
+        project_id: str,
+        policy: dict[str, Any],
+    ) -> ProjectRecord:
+        """Replace defaults used by future Sessions without mutating existing Sessions."""
+
+        if self.get_project(project_id) is None:
+            raise ValueError(f"Project '{project_id}' was not found.")
+        resolved = normalize_session_policy(policy)
+        timestamp = _utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE gm_science_projects
+                SET session_policy_defaults = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (_json_dumps(resolved), timestamp, project_id),
+            )
+        updated = self.get_project(project_id)
+        if updated is None:
+            raise RuntimeError(f"Project '{project_id}' disappeared during policy update.")
+        return updated
 
     def get_project_session(self, session_id: str) -> ProjectSessionRecord | None:
         """Return the Project association for one Session, if present."""
@@ -650,7 +722,8 @@ class GmScienceStore:
                     updated_at TEXT NOT NULL,
                     enabled_skills TEXT NOT NULL,
                     enabled_connectors TEXT NOT NULL,
-                    enabled_specialists TEXT NOT NULL
+                    enabled_specialists TEXT NOT NULL,
+                    session_policy_defaults TEXT NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS gm_science_artifacts (
@@ -675,6 +748,7 @@ class GmScienceStore:
                     session_id TEXT PRIMARY KEY,
                     project_id TEXT NOT NULL,
                     agent_id TEXT NOT NULL,
+                    session_policy TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY(project_id) REFERENCES gm_science_projects(id) ON DELETE CASCADE
@@ -722,6 +796,32 @@ class GmScienceStore:
                 ON gm_science_analysis_drafts(project_id, created_at);
                 """
             )
+            self._ensure_column(
+                conn,
+                table="gm_science_projects",
+                column="session_policy_defaults",
+                declaration="TEXT NOT NULL DEFAULT '{}'",
+            )
+            self._ensure_column(
+                conn,
+                table="gm_science_project_sessions",
+                column="session_policy",
+                declaration="TEXT NOT NULL DEFAULT '{}'",
+            )
+
+    @staticmethod
+    def _ensure_column(
+        conn: sqlite3.Connection,
+        *,
+        table: str,
+        column: str,
+        declaration: str,
+    ) -> None:
+        """Add one product-owned column when opening a pre-release local database."""
+
+        existing = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
 
 
 def _project_from_row(row: sqlite3.Row) -> ProjectRecord:
@@ -738,6 +838,9 @@ def _project_from_row(row: sqlite3.Row) -> ProjectRecord:
         enabled_skills=_json_loads_list(row["enabled_skills"]),
         enabled_connectors=_json_loads_list(row["enabled_connectors"]),
         enabled_specialists=_json_loads_list(row["enabled_specialists"]),
+        session_policy_defaults=normalize_session_policy(
+            _json_loads_dict(row["session_policy_defaults"])
+        ),
     )
 
 
@@ -766,6 +869,7 @@ def _project_session_from_row(row: sqlite3.Row) -> ProjectSessionRecord:
         project_id=str(row["project_id"]),
         session_id=str(row["session_id"]),
         agent_id=str(row["agent_id"]),
+        policy=normalize_session_policy(_json_loads_dict(row["session_policy"])),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )

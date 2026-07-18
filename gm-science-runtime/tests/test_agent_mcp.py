@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import unittest
 from unittest.mock import patch
 
@@ -42,7 +43,21 @@ class AgentMcpTests(unittest.TestCase):
 
         with patch.dict(
             os.environ,
-            {"GM_SCIENCE_MODE": "1", "OPENPPX_AGENT_PRIVILEGE_LEVEL": "medium"},
+            {
+                "GM_SCIENCE_MODE": "1",
+                "OPENPPX_AGENT_PRIVILEGE_LEVEL": "medium",
+                "OPENPPX_MEMORY_ENABLED": "1",
+                "GM_SCIENCE_SESSION_POLICY_JSON": json.dumps(
+                    {
+                        "delegation_enabled": True,
+                        "auto_review_enabled": False,
+                        "memory_enabled": False,
+                        "specialist_id": "",
+                        "reviewer_model": "default",
+                        "compute_target": "local",
+                    }
+                ),
+            },
             clear=False,
         ):
             with patch("openppx.app.agent.build_mcp_toolsets_from_env", return_value=[]):
@@ -56,16 +71,111 @@ class AgentMcpTests(unittest.TestCase):
         self.assertIn("science_list_specialists", names)
         self.assertIn("paper_reader", names)
         self.assertIn("research_reviewer", names)
+        self.assertIn("exec", names)
+        self.assertIn("read_file", names)
+        self.assertNotIn("browser", names)
+        self.assertNotIn("cron", names)
+        self.assertNotIn("message", names)
+        self.assertNotIn("start_gui_task", names)
+        self.assertNotIn("spawn_subagent", names)
+        self.assertNotIn("long_task", names)
+
+    def test_root_agent_name_is_product_owned_in_gm_science_mode(self) -> None:
+        from openppx import agent
+
+        with patch.dict(os.environ, {"GM_SCIENCE_MODE": "1"}, clear=False):
+            self.assertEqual(agent._root_agent_name(), "gm_science")
+        with patch.dict(os.environ, {"GM_SCIENCE_MODE": "0"}, clear=False):
+            self.assertEqual(agent._root_agent_name(), "openppx")
 
     def test_dynamic_instruction_adds_specialist_dispatch_policy_in_gm_science_mode(self) -> None:
         from openppx import agent
 
-        with patch.dict(os.environ, {"GM_SCIENCE_MODE": "1"}, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "GM_SCIENCE_MODE": "1",
+                "GM_SCIENCE_SESSION_POLICY_JSON": json.dumps(
+                    {
+                        "delegation_enabled": True,
+                        "auto_review_enabled": False,
+                        "memory_enabled": False,
+                        "specialist_id": "",
+                        "reviewer_model": "default",
+                        "compute_target": "local",
+                    }
+                ),
+            },
+            clear=False,
+        ):
             text = agent._build_dynamic_instruction()
 
         self.assertIn("paper_reader", text)
         self.assertIn("research_reviewer", text)
         self.assertIn("evidence_scope", text)
+
+    def test_session_policy_filters_specialists_and_memory_preload(self) -> None:
+        from google.adk.tools.preload_memory_tool import PreloadMemoryTool
+        from openppx import agent
+
+        with patch.dict(
+            os.environ,
+            {
+                "GM_SCIENCE_MODE": "1",
+                "OPENPPX_AGENT_PRIVILEGE_LEVEL": "medium",
+                "GM_SCIENCE_SESSION_POLICY_JSON": json.dumps(
+                    {
+                        "delegation_enabled": False,
+                        "auto_review_enabled": False,
+                        "memory_enabled": True,
+                        "specialist_id": "paper_reader",
+                        "reviewer_model": "default",
+                        "compute_target": "local",
+                    }
+                ),
+            },
+            clear=False,
+        ):
+            with patch("openppx.app.agent.build_mcp_toolsets_from_env", return_value=[]):
+                tools = agent._build_tools()
+
+        names = _tool_names(tools)
+        self.assertIn("paper_reader", names)
+        self.assertNotIn("research_reviewer", names)
+        self.assertTrue(any(isinstance(tool, PreloadMemoryTool) for tool in tools))
+        self.assertIn("science_propose_memory", names)
+
+    def test_global_memory_switch_disables_preload_and_candidate_tool(self) -> None:
+        from google.adk.tools.preload_memory_tool import PreloadMemoryTool
+        from openppx import agent
+
+        with patch.dict(
+            os.environ,
+            {
+                "GM_SCIENCE_MODE": "1",
+                "OPENPPX_AGENT_PRIVILEGE_LEVEL": "medium",
+                "OPENPPX_MEMORY_ENABLED": "0",
+                "GM_SCIENCE_SESSION_POLICY_JSON": json.dumps(
+                    {
+                        "delegation_enabled": False,
+                        "auto_review_enabled": False,
+                        "memory_enabled": True,
+                        "specialist_id": "",
+                        "reviewer_model": "default",
+                        "compute_target": "local",
+                    }
+                ),
+            },
+            clear=False,
+        ):
+            with patch("openppx.app.agent.build_mcp_toolsets_from_env", return_value=[]):
+                tools = agent._build_tools()
+                instruction = agent._build_dynamic_instruction()
+
+        names = _tool_names(tools)
+        self.assertFalse(any(isinstance(tool, PreloadMemoryTool) for tool in tools))
+        self.assertNotIn("science_propose_memory", names)
+        self.assertIn("Memory recall is off", instruction)
 
     def test_build_tools_appends_mcp_toolsets(self) -> None:
         from openppx import agent

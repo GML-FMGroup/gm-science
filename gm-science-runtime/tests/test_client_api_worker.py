@@ -9,11 +9,34 @@ from google.adk.agents.run_config import StreamingMode
 from openppx.gm_science.resources.context import ResolvedResourceContext
 from openppx.gm_science.resources.models import ResourceRef
 from openppx.runtime.client_api_worker import (
+    _build_project_memory_service,
     _build_adk_user_content,
     _build_interactive_run_config,
     _restrict_mcp_servers_env,
     _session_title,
 )
+
+
+def test_project_memory_service_is_only_built_for_project_runs(tmp_path) -> None:
+    from openppx.gm_science.memory import ProjectScopedMemoryService
+
+    assert (
+        _build_project_memory_service(
+            project_id="",
+            session_id="session-generic",
+            data_dir=tmp_path,
+        )
+        is None
+    )
+    service = _build_project_memory_service(
+        project_id="project-1",
+        session_id="session-1",
+        data_dir=tmp_path,
+    )
+    assert isinstance(service, ProjectScopedMemoryService)
+    assert service.project_id == "project-1"
+    assert service.session_id == "session-1"
+    assert service.backend._db_path == tmp_path / "database" / "memory.db"
 
 
 def test_interactive_run_config_uses_adk_native_sse_streaming() -> None:

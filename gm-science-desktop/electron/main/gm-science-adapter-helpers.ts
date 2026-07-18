@@ -103,5 +103,17 @@ export function buildCreateGmScienceProjectPayload(
     ...(input.enabledSkills !== undefined ? { enabled_skills: input.enabledSkills } : {}),
     ...(input.enabledConnectors !== undefined ? { enabled_connectors: input.enabledConnectors } : {}),
     ...(input.enabledSpecialists !== undefined ? { enabled_specialists: input.enabledSpecialists } : {}),
+    ...(input.sessionPolicyDefaults !== undefined
+      ? {
+          session_policy_defaults: {
+            delegation_enabled: input.sessionPolicyDefaults.delegationEnabled,
+            auto_review_enabled: input.sessionPolicyDefaults.autoReviewEnabled,
+            memory_enabled: input.sessionPolicyDefaults.memoryEnabled,
+            specialist_id: input.sessionPolicyDefaults.specialistId,
+            reviewer_model: input.sessionPolicyDefaults.reviewerModel,
+            compute_target: input.sessionPolicyDefaults.computeTarget,
+          },
+        }
+      : {}),
   };
 }

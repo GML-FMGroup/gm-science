@@ -9,6 +9,11 @@ from typing import Any, Iterable, Literal
 from ..core.config import load_config
 from ..core.mcp_registry import describe_mcp_server_config
 from ..tooling.skills_adapter import SkillInfo, SkillRegistry
+from .catalog import (
+    BUILTIN_SCIENCE_SKILLS,
+    SCIENCE_CONNECTORS,
+    ScienceCapabilityDefinition,
+)
 from .literature.config import load_literature_config
 from .models import ProjectRecord
 from .specialists.config import load_specialist_config
@@ -17,16 +22,6 @@ from .specialists.registry import list_specialist_specs, specialist_configuratio
 CapabilityKind = Literal["skill", "connector", "specialist"]
 CapabilitySource = Literal["built_in", "local", "external"]
 
-_CONNECTOR_NAMES = {
-    "arxiv": "arXiv",
-    "pubmed": "PubMed",
-    "openalex": "OpenAlex",
-}
-_CONNECTOR_DESCRIPTIONS = {
-    "arxiv": "Search open-access preprints across scientific and technical fields.",
-    "pubmed": "Search biomedical literature indexed by the NCBI PubMed service.",
-    "openalex": "Search scholarly works and citation metadata from OpenAlex.",
-}
 _DISPLAY_TOKENS = {
     "api": "API",
     "cli": "CLI",
@@ -55,48 +50,91 @@ def build_capability_catalog(
 
     literature = load_literature_config(config_path)
     specialists = load_specialist_config(config_path)
+    config = load_config(config_path=config_path)
     defaults = specialists.project_defaults
     project_values = _project_capability_sets(project)
 
     items: list[dict[str, Any]] = []
     registry = skill_registry or _skill_registry_for_config(config_path)
+    discovered_skills = {skill.name.casefold(): skill for skill in registry.list_skills()}
+    emitted_skill_ids: set[str] = set()
+    for definition in BUILTIN_SCIENCE_SKILLS:
+        skill = discovered_skills.get(definition.id.casefold())
+        if skill is None:
+            items.append(
+                _unavailable_product_capability(
+                    definition=definition,
+                    kind="skill",
+                    default_enabled=definition.id in defaults.enabled_skills,
+                    project_enabled=_project_enabled(project_values, "skill", definition.id),
+                )
+            )
+        else:
+            items.append(
+                _skill_capability_payload(
+                    skill=skill,
+                    definition=definition,
+                    default_enabled=definition.id in defaults.enabled_skills,
+                    project_enabled=_project_enabled(project_values, "skill", definition.id),
+                )
+            )
+        emitted_skill_ids.add(definition.id.casefold())
+
     for skill in registry.list_skills():
+        if skill.source != "workspace" or skill.name.casefold() in emitted_skill_ids:
+            continue
         items.append(
             _skill_capability_payload(
                 skill=skill,
+                definition=None,
                 default_enabled=skill.name in defaults.enabled_skills,
                 project_enabled=_project_enabled(project_values, "skill", skill.name),
             )
         )
 
     source_statuses = literature.public_source_statuses()
-    for source_id in ("arxiv", "pubmed", "openalex"):
-        source = source_statuses[source_id]
+    for definition in SCIENCE_CONNECTORS:
+        source = source_statuses.get(definition.id)
+        if source is None:
+            items.append(
+                _unavailable_product_capability(
+                    definition=definition,
+                    kind="connector",
+                    default_enabled=definition.id in defaults.enabled_connectors,
+                    project_enabled=_project_enabled(project_values, "connector", definition.id),
+                )
+            )
+            continue
         raw_status = str(source["status"])
         items.append(
             _capability_payload(
-                capability_id=source_id,
+                capability_id=definition.id,
                 kind="connector",
-                name=_CONNECTOR_NAMES[source_id],
-                description=_CONNECTOR_DESCRIPTIONS[source_id],
-                source="built_in",
+                name=definition.name,
+                description=definition.description,
+                source=definition.source,
                 available=bool(source["enabled"]),
-                default_enabled=source_id in defaults.enabled_connectors,
-                project_enabled=_project_enabled(project_values, "connector", source_id),
+                default_enabled=definition.id in defaults.enabled_connectors,
+                project_enabled=_project_enabled(project_values, "connector", definition.id),
                 status="ready" if raw_status == "ok" else raw_status,
                 status_detail=str(source["configuration_message"] or ""),
-                metadata={"api_base": str(source["api_base"])},
+                metadata={
+                    "api_base": str(source["api_base"]),
+                    "catalog_group": definition.group,
+                    "implementation_status": "native",
+                    "registry_source": "product_catalog",
+                },
             )
         )
 
-    config = load_config(config_path=config_path)
     tools = config.get("tools")
     mcp_servers = tools.get("mcpServers", {}) if isinstance(tools, dict) else {}
     if isinstance(mcp_servers, dict):
         for raw_server_name in sorted(mcp_servers, key=lambda value: str(value).casefold()):
             server_name = str(raw_server_name)
             description = describe_mcp_server_config(server_name, mcp_servers[raw_server_name])
-            metadata = description["metadata"]
+            metadata = dict(description["metadata"])
+            metadata["catalog_group"] = "custom"
             transport = str(metadata.get("transport") or "")
             items.append(
                 _capability_payload(
@@ -118,11 +156,19 @@ def build_capability_catalog(
                 )
             )
 
-    skill_ids = {str(item["id"]) for item in items if item["kind"] == "skill"}
+    skill_ids = {
+        str(item["id"])
+        for item in items
+        if item["kind"] == "skill" and item["available"] is True
+    }
     connector_items = {
         str(item["id"]).casefold(): item for item in items if item["kind"] == "connector"
     }
-    connector_ids = {str(item["id"]) for item in connector_items.values()}
+    connector_ids = {
+        str(item["id"])
+        for item in connector_items.values()
+        if item["available"] is True
+    }
     for spec in list_specialist_specs(specialists):
         issues = list(
             specialist_configuration_issues(
@@ -151,6 +197,7 @@ def build_capability_catalog(
             status_detail = ""
         metadata = {
             "registry_source": "custom" if spec.source == "local" else "built_in",
+            "catalog_group": "custom" if spec.source == "local" else "built_in",
             "auto_dispatch": spec.auto_dispatch,
             "read_only": spec.read_only,
             "network_access": spec.network_access,
@@ -194,6 +241,7 @@ def _skill_registry_for_config(config_path: Path) -> SkillRegistry:
 def _skill_capability_payload(
     *,
     skill: SkillInfo,
+    definition: ScienceCapabilityDefinition | None,
     default_enabled: bool,
     project_enabled: bool | None,
 ) -> dict[str, Any]:
@@ -204,6 +252,8 @@ def _skill_capability_payload(
     source = "local" if skill.source == "workspace" else "built_in"
     metadata: dict[str, Any] = {
         "registry_source": skill.source,
+        "catalog_group": definition.group if definition is not None else "personal",
+        "implementation_status": "installed",
         "file_count": file_count,
         "files_truncated": file_count > len(files),
     }
@@ -213,7 +263,7 @@ def _skill_capability_payload(
     return _capability_payload(
         capability_id=skill.name,
         kind="skill",
-        name=_display_skill_name(skill.name),
+        name=definition.name if definition is not None else _display_skill_name(skill.name),
         description=skill.description,
         source=source,
         version=frontmatter.get("version", ""),
@@ -225,6 +275,34 @@ def _skill_capability_payload(
         status="ready",
         status_detail="",
         metadata=metadata,
+    )
+
+
+def _unavailable_product_capability(
+    *,
+    definition: ScienceCapabilityDefinition,
+    kind: CapabilityKind,
+    default_enabled: bool,
+    project_enabled: bool | None,
+) -> dict[str, Any]:
+    """Project a stable product candidate whose implementation is not installed."""
+
+    return _capability_payload(
+        capability_id=definition.id,
+        kind=kind,
+        name=definition.name,
+        description=definition.description,
+        source=definition.source,
+        available=False,
+        default_enabled=default_enabled,
+        project_enabled=project_enabled,
+        status="disabled",
+        status_detail="Not available in this gm-science build.",
+        metadata={
+            "catalog_group": definition.group,
+            "implementation_status": "not_installed",
+            "registry_source": "product_catalog",
+        },
     )
 
 
@@ -279,12 +357,22 @@ def normalize_capability_selection(
     """Validate capability IDs and return them in stable catalog order."""
 
     selected = {str(value or "").strip().casefold() for value in values if str(value or "").strip()}
-    allowed = [str(item["id"]) for item in catalog if item["kind"] == kind]
-    allowed_normalized = {capability_id.casefold() for capability_id in allowed}
-    unknown = sorted(selected.difference(allowed_normalized))
+    known = [str(item["id"]) for item in catalog if item["kind"] == kind]
+    known_normalized = {capability_id.casefold() for capability_id in known}
+    unknown = sorted(selected.difference(known_normalized))
     if unknown:
         rendered = ", ".join(unknown)
         raise ValueError(f"Unsupported {kind} capability: {rendered}")
+    allowed = [
+        str(item["id"])
+        for item in catalog
+        if item["kind"] == kind and item["available"] is True
+    ]
+    allowed_normalized = {capability_id.casefold() for capability_id in allowed}
+    unavailable = sorted(selected.difference(allowed_normalized))
+    if unavailable:
+        rendered = ", ".join(unavailable)
+        raise ValueError(f"Unavailable {kind} capability: {rendered}")
     return [capability_id for capability_id in allowed if capability_id.casefold() in selected]
 
 

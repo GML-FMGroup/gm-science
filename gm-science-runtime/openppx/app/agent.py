@@ -17,6 +17,8 @@ from ..core.mcp_registry import build_mcp_toolsets_from_env
 from ..core.provider import build_adk_model_from_env
 from ..gm_science.analysis.tools import science_list_datasets, science_plan_data_analysis
 from ..gm_science.literature.tools import science_list_sources, science_register_review, science_search
+from ..gm_science.memory import science_propose_memory
+from ..gm_science.session_policy import session_policy_from_env
 from ..gm_science.specialists.agents import build_specialist_tools, specialist_dispatch_guidance
 from ..gm_science.specialists.registry import science_list_specialists
 from ..tooling.skills_adapter import list_skills, read_skill
@@ -169,12 +171,106 @@ def _build_dynamic_instruction() -> str:
     """Build startup/runtime context for ADK dynamic ``instruction``."""
     instruction = build_startup_runtime_context()
     if env_enabled("GM_SCIENCE_MODE", default=False):
-        instruction += "\n" + specialist_dispatch_guidance()
+        policy = session_policy_from_env()
+        specialist_id = str(policy["specialist_id"] or "")
+        if specialist_id:
+            instruction += (
+                "\n# Session Specialist Route\n\n"
+                f"The user explicitly routed this Session to `{specialist_id}`. "
+                "Delegate each substantive request to that specialist with the current Project "
+                "and Session identifiers. Do not choose a different specialist.\n"
+            )
+        elif policy["delegation_enabled"]:
+            instruction += "\n" + specialist_dispatch_guidance()
+        else:
+            instruction += (
+                "\n# Session Delegation Policy\n\n"
+                "Delegation is off for this Session. Answer with the root scientific tools and "
+                "do not invoke a Specialist.\n"
+            )
+        if not policy["memory_enabled"] or not env_enabled("OPENPPX_MEMORY_ENABLED", default=True):
+            instruction += "Memory recall is off for this Session.\n"
+        if policy["auto_review_enabled"]:
+            instruction += "The host will run the configured Reviewer gate after eligible reports.\n"
     return instruction
+
+
+def _root_agent_name() -> str:
+    """Return the ADK Agent name for the selected product composition."""
+
+    return "gm_science" if env_enabled("GM_SCIENCE_MODE", default=False) else "openppx"
+
+
+def _build_science_tools() -> list[Any]:
+    """Assemble the bounded tool surface owned by gm-science."""
+
+    policy = session_policy_from_env()
+    specialist_id = str(policy["specialist_id"] or "")
+    specialist_tools = build_specialist_tools()
+    if specialist_id:
+        specialist_tools = [
+            tool for tool in specialist_tools if _tool_name(tool) == specialist_id
+        ]
+    elif not policy["delegation_enabled"]:
+        specialist_tools = []
+    tools: list[Any] = [
+        load_artifacts,
+        list_skills,
+        read_skill,
+        read_file,
+        write_file,
+        edit_file,
+        list_dir,
+        glob,
+        grep,
+        _confirmation_tool(exec_command, exec_command_requires_confirmation),
+        _confirmation_tool(process_session, _process_requires_confirmation),
+        science_list_sources,
+        science_search,
+        science_register_review,
+        science_list_datasets,
+        science_plan_data_analysis,
+        science_list_specialists,
+        *specialist_tools,
+    ]
+    if policy["memory_enabled"] and env_enabled("OPENPPX_MEMORY_ENABLED", default=True):
+        tools.insert(0, PreloadMemoryTool())
+        tools.append(science_propose_memory)
+    return tools
+
+
+def _apply_science_privilege(tools: list[Any]) -> list[Any]:
+    """Apply openppx execution privilege levels to the scientific tool set."""
+
+    privilege_level = _agent_privilege_level()
+    if privilege_level == "low":
+        allowed_names = {
+            "load_artifacts",
+            "list_skills",
+            "read_skill",
+            "read_file",
+            "list_dir",
+            "glob",
+            "grep",
+            "science_list_sources",
+            "science_list_datasets",
+            "science_list_specialists",
+            "science_propose_memory",
+        }
+        return [
+            tool
+            for tool in tools
+            if _tool_name(tool) in allowed_names or isinstance(tool, PreloadMemoryTool)
+        ]
+    tools.extend(build_mcp_toolsets_from_env())
+    return tools
 
 
 def _build_tools() -> list[Any]:
     """Assemble builtin tools plus optional MCP toolsets from env config."""
+    if env_enabled("GM_SCIENCE_MODE", default=False):
+        return _apply_science_privilege(_build_science_tools())
+
     base_tools: list[Any] = [
         PreloadMemoryTool(),
         load_artifacts,
@@ -239,19 +335,6 @@ def _build_tools() -> list[Any]:
         base_tools.append(LongRunningFunctionTool(func=spawn_subagent))
     if _gui_builtin_tools_enabled():
         base_tools.extend([start_gui_task, computer_task, computer_use])
-    if env_enabled("GM_SCIENCE_MODE", default=False):
-        base_tools.extend(
-            [
-                science_list_sources,
-                science_search,
-                science_register_review,
-                science_list_datasets,
-                science_plan_data_analysis,
-                science_list_specialists,
-                *build_specialist_tools(),
-            ]
-        )
-
     privilege_level = _agent_privilege_level()
     if privilege_level == "low":
         allowed_names = {
@@ -284,7 +367,7 @@ def _build_tools() -> list[Any]:
 
 
 root_agent = LlmAgent(
-    name="openppx",
+    name=_root_agent_name(),
     model=build_adk_model_from_env(),
     static_instruction=_build_static_instruction(),
     instruction=_build_dynamic_instruction(),

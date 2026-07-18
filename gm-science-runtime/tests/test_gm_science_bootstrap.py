@@ -41,6 +41,7 @@ def test_bootstrap_creates_default_science_agent_with_openai_codex_provider(tmp_
     assert config["providers"]["openai_codex"]["enabled"] is True
     assert config["providers"]["openai_codex"]["model"] == EXPECTED_CODEX_MODEL
     assert config["providers"]["google"]["enabled"] is False
+    assert "capabilityCatalog" not in config["science"]
     literature = config["science"]["literature"]
     assert literature["defaultSources"] == ["arxiv", "pubmed", "openalex"]
     assert literature["arxiv"]["apiBase"] == "https://export.arxiv.org/api/query"

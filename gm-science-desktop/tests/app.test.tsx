@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { vi } from "vitest";
 import { App } from "../app/src/App";
 import type {
@@ -6,11 +6,26 @@ import type {
   ClientDiagnostics,
   GmScienceProject,
   GmScienceRun,
+  GmScienceSessionPolicy,
+  GmScienceSettings,
   PpxClientApi,
   RunEvent,
   RuntimeStatus,
   SessionSummary,
 } from "../app/src/types";
+
+function buildSettings(): GmScienceSettings {
+  return {
+    model: { provider: "openai_codex", model: "openai-codex/gpt-5.5" },
+    memory: { enabled: true },
+    providers: [{ id: "openai_codex", name: "OpenAI Codex", defaultModel: "openai-codex/gpt-5.5", authType: "oauth", credentialRequired: true, credentialConfigured: true, credentialSource: "oauth_cache", active: true }],
+    literature: {
+      arxiv: { status: "ready", statusDetail: "" },
+      pubmed: { email: "", apiKeyConfigured: false, status: "needs_configuration", statusDetail: "Configuration required." },
+      openalex: { apiKeyConfigured: false, status: "needs_configuration", statusDetail: "Configuration required." },
+    },
+  };
+}
 
 function buildBootstrapPayload(): BootstrapPayload {
   const runtime: RuntimeStatus = {
@@ -44,6 +59,8 @@ function buildBootstrapPayload(): BootstrapPayload {
         id: "agent-1",
         name: "Agent 1",
         description: "Local test agent",
+        provider: "openai_codex",
+        model: "openai-codex/gpt-5.5",
         enabled: true,
         status: "healthy",
         tags: ["local"],
@@ -97,9 +114,35 @@ function buildProject(overrides: Partial<GmScienceProject> = {}): GmScienceProje
     enabledSkills: ["Literature Review"],
     enabledConnectors: ["OpenAlex"],
     enabledSpecialists: ["Reviewer"],
+    sessionPolicyDefaults: {
+      delegationEnabled: false,
+      autoReviewEnabled: false,
+      memoryEnabled: false,
+      specialistId: "",
+      reviewerModel: "default",
+      computeTarget: "local",
+    },
     createdAt: "2026-04-02T10:00:00.000Z",
     updatedAt: "2026-04-02T10:00:00.000Z",
     ...overrides,
+  };
+}
+
+function buildSessionPolicy(sessionId: string): GmScienceSessionPolicy {
+  return {
+    sessionId,
+    projectId: "proj-test",
+    delegationEnabled: false,
+    autoReviewEnabled: false,
+    memoryEnabled: false,
+    specialistId: "",
+    reviewerModel: "default",
+    computeTarget: "local",
+    specialists: [],
+    reviewerAvailable: false,
+    reviewerModels: [{ id: "default", name: "Default" }],
+    computeTargets: [{ id: "local", name: "Local" }],
+    issues: [],
   };
 }
 
@@ -154,6 +197,7 @@ function installClient(overrides: Partial<PpxClientApi> = {}): { client: PpxClie
         enabledSkills: input.enabledSkills ?? [],
         enabledConnectors: input.enabledConnectors ?? [],
         enabledSpecialists: input.enabledSpecialists ?? [],
+        sessionPolicyDefaults: buildProject().sessionPolicyDefaults,
         createdAt: "2026-04-02T10:00:00.000Z",
         updatedAt: "2026-04-02T10:00:00.000Z",
       },
@@ -170,6 +214,7 @@ function installClient(overrides: Partial<PpxClientApi> = {}): { client: PpxClie
         enabledSkills: [],
         enabledConnectors: [],
         enabledSpecialists: [],
+        sessionPolicyDefaults: buildProject().sessionPolicyDefaults,
         createdAt: "2026-04-02T10:00:00.000Z",
         updatedAt: "2026-04-02T10:00:00.000Z",
       },
@@ -184,8 +229,29 @@ function installClient(overrides: Partial<PpxClientApi> = {}): { client: PpxClie
       }),
       capabilities: [],
     }),
+    getGmScienceSettings: async () => buildSettings(),
+    updateGmScienceSettings: async () => {
+      throw new Error("Settings updates are not configured in this test");
+    },
+    getGmScienceMemory: async (projectId) => ({ projectId, notes: [], candidates: [], categories: [] }),
+    createGmScienceMemoryNote: async () => {
+      throw new Error("Memory creation is not configured in this test");
+    },
+    updateGmScienceMemoryNote: async () => {
+      throw new Error("Memory updates are not configured in this test");
+    },
+    deleteGmScienceMemoryNote: async () => undefined,
+    clearGmScienceMemory: async () => 0,
+    reviewGmScienceMemoryCandidate: async () => {
+      throw new Error("Memory review is not configured in this test");
+    },
+    getGmScienceSessionPolicy: async (sessionId) => buildSessionPolicy(sessionId),
+    updateGmScienceSessionPolicy: async (sessionId, input) => ({ ...buildSessionPolicy(sessionId), ...input }),
     listGmScienceArtifacts: async () => ({ artifacts: [] }),
     listGmScienceResources: async () => ({ resources: [] }),
+    getGmScienceResourceDetail: async () => {
+      throw new Error("Resource detail is not configured in this test");
+    },
     createGmScienceArtifact: async (projectId, input) => ({
       artifact: {
         id: "art-test",
@@ -248,7 +314,16 @@ function installClient(overrides: Partial<PpxClientApi> = {}): { client: PpxClie
 }
 
 async function openDefaultProject(): Promise<void> {
-  fireEvent.click(await screen.findByRole("button", { name: /Test research project/ }));
+  const projects = await screen.findByRole("region", { name: "Projects" });
+  fireEvent.click(within(projects).getByRole("button", { name: /^Test research project/ }));
+}
+
+function messageComposer(): HTMLElement {
+  return screen.getByRole("textbox", { name: "Message" });
+}
+
+function sendButton(): HTMLElement {
+  return screen.getByRole("button", { name: "Send" });
 }
 
 describe("App sending state", () => {
@@ -294,20 +369,20 @@ describe("App sending state", () => {
 
     await openDefaultProject();
 
-    fireEvent.change(screen.getByPlaceholderText("向本地 agent 发送任务..."), {
+    fireEvent.change(messageComposer(), {
       target: { value: "hello world" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    fireEvent.click(sendButton());
 
-    await screen.findByRole("button", { name: "运行中" });
+    await waitFor(() => expect(sendButton()).toBeDisabled());
 
     fireEvent.click(screen.getByRole("button", { name: /Session B/ }));
-    fireEvent.change(screen.getByPlaceholderText("向本地 agent 发送任务..."), {
+    fireEvent.change(messageComposer(), {
       target: { value: "follow up" },
     });
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "运行中" })).toBeDisabled();
+      expect(sendButton()).toBeDisabled();
     });
   });
 
@@ -318,12 +393,12 @@ describe("App sending state", () => {
 
     await openDefaultProject();
 
-    fireEvent.change(screen.getByPlaceholderText("向本地 agent 发送任务..."), {
+    fireEvent.change(messageComposer(), {
       target: { value: "hello world" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    fireEvent.click(sendButton());
 
-    await screen.findByRole("button", { name: "运行中" });
+    await waitFor(() => expect(sendButton()).toBeDisabled());
 
     await act(async () => {
       emit({
@@ -336,12 +411,12 @@ describe("App sending state", () => {
       });
     });
 
-    fireEvent.change(screen.getByPlaceholderText("向本地 agent 发送任务..."), {
+    fireEvent.change(messageComposer(), {
       target: { value: "second try" },
     });
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "发送" })).toBeEnabled();
+      expect(sendButton()).toBeEnabled();
     });
   });
 
@@ -353,7 +428,7 @@ describe("App sending state", () => {
 
     await openDefaultProject();
 
-    const composer = screen.getByPlaceholderText("向本地 agent 发送任务...");
+    const composer = messageComposer();
 
     fireEvent.change(composer, { target: { value: "first line" } });
     fireEvent.keyDown(composer, { key: "Enter", code: "Enter", charCode: 13 });
@@ -378,7 +453,7 @@ describe("App sending state", () => {
       id: "session-created",
       agentId: "agent-1",
       projectId: "proj-test",
-      title: "New local session",
+      title: "New session",
       updatedAt: "2026-04-02T10:01:00.000Z",
       lastMessagePreview: "Start a task",
     };
@@ -402,10 +477,10 @@ describe("App sending state", () => {
     await screen.findByText("Test research project is ready");
     expect(createSession).not.toHaveBeenCalled();
 
-    fireEvent.change(screen.getByPlaceholderText("向本地 agent 发送任务..."), {
+    fireEvent.change(messageComposer(), {
       target: { value: "first task" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    fireEvent.click(sendButton());
 
     await waitFor(() => {
       expect(createSession).toHaveBeenCalledWith("agent-1", "proj-test");
@@ -423,7 +498,7 @@ describe("App sending state", () => {
       id: "session-on-send",
       agentId: "agent-1",
       projectId: "proj-test",
-      title: "New local session",
+      title: "New session",
       updatedAt: "2026-04-02T10:01:00.000Z",
       lastMessagePreview: "Start a task",
     };
@@ -446,10 +521,10 @@ describe("App sending state", () => {
     await openDefaultProject();
     await screen.findByText("Test research project is ready");
 
-    fireEvent.change(screen.getByPlaceholderText("向本地 agent 发送任务..."), {
+    fireEvent.change(messageComposer(), {
       target: { value: "recover session" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    fireEvent.click(sendButton());
 
     await waitFor(() => {
       expect(createSession).toHaveBeenCalledWith("agent-1", "proj-test");
@@ -475,10 +550,10 @@ describe("App sending state", () => {
 
       await openDefaultProject();
 
-      fireEvent.change(screen.getByPlaceholderText("向本地 agent 发送任务..."), {
+      fireEvent.change(messageComposer(), {
         target: { value: "will fail" },
       });
-      fireEvent.click(screen.getByRole("button", { name: "发送" }));
+      fireEvent.click(sendButton());
 
       await screen.findByText("gateway refused the run");
     } finally {
@@ -493,16 +568,16 @@ describe("App sending state", () => {
 
     await openDefaultProject();
 
-    const sendButton = screen.getByRole("button", { name: "发送" });
-    expect(sendButton).toBeDisabled();
+    const button = sendButton();
+    expect(button).toBeDisabled();
 
-    fireEvent.change(screen.getByPlaceholderText("向本地 agent 发送任务..."), {
+    fireEvent.change(messageComposer(), {
       target: { value: "hello world" },
     });
 
     await waitFor(() => {
-      expect(sendButton).toBeEnabled();
-      expect(sendButton.className).toContain("ready");
+      expect(button).toBeEnabled();
+      expect(button.className).toContain("ready");
     });
   });
 
@@ -542,8 +617,9 @@ describe("App sending state", () => {
     await screen.findByRole("button", { name: /Session A/ });
     expect(screen.queryByRole("button", { name: /Other project session/ })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Projects" }));
-    fireEvent.click(await screen.findByRole("button", { name: /Other research project/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Back to dashboard" }));
+    const projects = await screen.findByRole("region", { name: "Projects" });
+    fireEvent.click(within(projects).getByRole("button", { name: /^Other research project/ }));
     await screen.findByRole("button", { name: /Other project session/ });
     expect(screen.queryByRole("button", { name: /Session A/ })).not.toBeInTheDocument();
   });
@@ -553,7 +629,7 @@ describe("App sending state", () => {
       id: "session-created",
       agentId: "agent-1",
       projectId: "proj-test",
-      title: "新对话",
+      title: "New session",
       updatedAt: "2026-04-02T10:01:00.000Z",
       lastMessagePreview: "",
     };
@@ -575,10 +651,10 @@ describe("App sending state", () => {
     await openDefaultProject();
     await screen.findByText("Test research project is ready");
 
-    fireEvent.change(screen.getByPlaceholderText("向本地 agent 发送任务..."), {
+    fireEvent.change(messageComposer(), {
       target: { value: "帮我查一下深圳到青岛的火车和费用" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    fireEvent.click(sendButton());
 
     await waitFor(() => {
       expect(screen.getAllByText("帮我查一下深圳到青岛的火车和费用").length).toBeGreaterThan(0);
@@ -692,8 +768,7 @@ describe("App sending state", () => {
 
     await screen.findByText("gm-science");
 
-    fireEvent.click(screen.getByRole("button", { name: "设置" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Runtime" }));
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
 
     await screen.findByText("Connection");
     expect(screen.getByText("http://127.0.0.1:8876")).toBeInTheDocument();
@@ -709,8 +784,8 @@ describe("App sending state", () => {
 
     render(<App />);
     await screen.findByText("gm-science");
-    fireEvent.click(screen.getByRole("button", { name: "设置" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Runtime" }));
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Compute" }));
     fireEvent.click(await screen.findByRole("button", { name: "重启" }));
 
     await screen.findByText("Local gm-science client-api failed to start: address already in use");
@@ -725,8 +800,7 @@ describe("App sending state", () => {
 
     render(<App />);
     await screen.findByText("gm-science");
-    fireEvent.click(screen.getByRole("button", { name: "设置" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Runtime" }));
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     fireEvent.click(await screen.findByRole("button", { name: "Save connection" }));
 
     await screen.findByText("Unable to save local connection");
@@ -747,8 +821,7 @@ describe("App sending state", () => {
     render(<App />);
 
     await screen.findByText("gm-science");
-    fireEvent.click(screen.getByRole("button", { name: "设置" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Runtime" }));
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
 
     await screen.findByText("Ops Gateway (remote)");
     expect(screen.getAllByText("remote").length).toBeGreaterThan(0);
@@ -778,8 +851,7 @@ describe("App sending state", () => {
     render(<App />);
 
     await screen.findByText("gm-science");
-    fireEvent.click(screen.getByRole("button", { name: "设置" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Runtime" }));
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
 
     fireEvent.change(screen.getByDisplayValue("This Mac"), {
       target: { value: "Ops Gateway" },
@@ -787,7 +859,7 @@ describe("App sending state", () => {
     fireEvent.change(screen.getByDisplayValue("http://127.0.0.1:8876"), {
       target: { value: "http://10.0.0.8:8765" },
     });
-    fireEvent.change(screen.getByDisplayValue("local"), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Target type" }), {
       target: { value: "remote" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save connection" }));

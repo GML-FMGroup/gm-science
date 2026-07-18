@@ -9,12 +9,31 @@ import type {
   GmScienceDataset,
   GmScienceProject,
   GmScienceResource,
+  GmScienceResourceDetail,
   GmScienceRun,
+  GmScienceSessionPolicy,
+  GmScienceSettings,
   PpxClientApi,
   RunEvent,
   RuntimeStatus,
   SessionSummary,
 } from "../app/src/types";
+
+function settings(): GmScienceSettings {
+  return {
+    model: { provider: "openai_codex", model: "openai-codex/gpt-5.5" },
+    memory: { enabled: true },
+    providers: [
+      { id: "openai_codex", name: "OpenAI Codex", defaultModel: "openai-codex/gpt-5.5", authType: "oauth", credentialRequired: true, credentialConfigured: true, credentialSource: "oauth_cache", active: true },
+      { id: "openai", name: "OpenAI", defaultModel: "openai/gpt-5.4", authType: "api_key", credentialRequired: true, credentialConfigured: false, credentialSource: "none", active: false },
+    ],
+    literature: {
+      arxiv: { status: "ready", statusDetail: "" },
+      pubmed: { email: "", apiKeyConfigured: false, status: "needs_configuration", statusDetail: "Configuration required." },
+      openalex: { apiKeyConfigured: false, status: "needs_configuration", statusDetail: "Configuration required." },
+    },
+  };
+}
 
 function runtime(): RuntimeStatus {
   return {
@@ -29,7 +48,7 @@ function session(): SessionSummary {
   return {
     id: "session-a",
     agentId: "science-research",
-    title: "New local session",
+    title: "New session",
     updatedAt: "2026-07-10T10:00:00.000Z",
     lastMessagePreview: "",
   };
@@ -47,8 +66,37 @@ function project(overrides: Partial<GmScienceProject> = {}): GmScienceProject {
     enabledSkills: ["literature-review"],
     enabledConnectors: ["arxiv", "pubmed", "openalex"],
     enabledSpecialists: ["paper_reader", "research_reviewer"],
+    sessionPolicyDefaults: {
+      delegationEnabled: false,
+      autoReviewEnabled: false,
+      memoryEnabled: false,
+      specialistId: "",
+      reviewerModel: "default",
+      computeTarget: "local",
+    },
     createdAt: "2026-07-10T10:00:00.000Z",
     updatedAt: "2026-07-10T10:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function sessionPolicy(overrides: Partial<GmScienceSessionPolicy> = {}): GmScienceSessionPolicy {
+  return {
+    sessionId: "session-a",
+    projectId: "proj_123",
+    delegationEnabled: false,
+    autoReviewEnabled: false,
+    memoryEnabled: false,
+    specialistId: "",
+    reviewerModel: "default",
+    computeTarget: "local",
+    specialists: [
+      { id: "paper_reader", name: "Paper Reader", description: "Read papers", status: "ready" },
+    ],
+    reviewerAvailable: true,
+    reviewerModels: [{ id: "default", name: "Default" }],
+    computeTargets: [{ id: "local", name: "Local" }],
+    issues: [],
     ...overrides,
   };
 }
@@ -173,8 +221,10 @@ function bootstrapPayload(): BootstrapPayload {
     agents: [
       {
         id: "science-research",
-        name: "science-research",
+        name: "gm-science",
         description: "Local science agent",
+        provider: "openai_codex",
+        model: "openai-codex/gpt-5.5",
         enabled: true,
         status: "healthy",
         tags: ["local"],
@@ -262,8 +312,29 @@ function installClient(overrides: Partial<PpxClientApi> = {}): {
       });
       return { project: updated, capabilities: capabilities(updated) };
     },
+    getGmScienceSettings: async () => settings(),
+    updateGmScienceSettings: async () => {
+      throw new Error("Settings updates are not configured in this test");
+    },
+    getGmScienceMemory: async (projectId) => ({ projectId, notes: [], candidates: [], categories: [] }),
+    createGmScienceMemoryNote: async () => {
+      throw new Error("Memory creation is not configured in this test");
+    },
+    updateGmScienceMemoryNote: async () => {
+      throw new Error("Memory updates are not configured in this test");
+    },
+    deleteGmScienceMemoryNote: async () => undefined,
+    clearGmScienceMemory: async () => 0,
+    reviewGmScienceMemoryCandidate: async () => {
+      throw new Error("Memory review is not configured in this test");
+    },
+    getGmScienceSessionPolicy: async (sessionId) => sessionPolicy({ sessionId }),
+    updateGmScienceSessionPolicy: async (sessionId, input) => sessionPolicy({ sessionId, ...input }),
     listGmScienceArtifacts: async () => ({ artifacts: [] }),
     listGmScienceResources: async () => ({ resources: [] }),
+    getGmScienceResourceDetail: async () => {
+      throw new Error("Resource detail is not configured in this test");
+    },
     createGmScienceArtifact: async (projectId, input) => ({
       artifact: {
         id: "art-test",
@@ -345,6 +416,37 @@ function resource(overrides: Partial<GmScienceResource> = {}): GmScienceResource
   };
 }
 
+function resourceDetail(
+  resourceValue: GmScienceResource,
+  overrides: Partial<GmScienceResourceDetail> = {},
+): GmScienceResourceDetail {
+  return {
+    resource: resourceValue,
+    preview: {
+      content: "# Evidence summary\n\nSupported result.",
+      contentStatus: "included",
+      contentIncluded: true,
+      contentChars: 37,
+      truncated: false,
+    },
+    artifact: resourceValue.artifactId
+      ? {
+          id: resourceValue.artifactId,
+          sessionId: resourceValue.sessionId,
+          type: resourceValue.artifactType,
+          title: resourceValue.displayName,
+          mimeType: resourceValue.mimeType,
+          metadata: { evidence_scope: "Project literature" },
+          provenance: { created_by: "literature_review", model: "openai-codex/gpt-5.5" },
+          createdAt: resourceValue.createdAt,
+          updatedAt: resourceValue.updatedAt,
+        }
+      : null,
+    relations: [],
+    ...overrides,
+  };
+}
+
 describe("gm-science App", () => {
   it("renders the Projects home", async () => {
     installClient();
@@ -353,7 +455,188 @@ describe("gm-science App", () => {
 
     await screen.findByText("gm-science");
     expect(screen.getByRole("button", { name: /Protein design/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /\+ New project/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New project" })).toBeInTheDocument();
+  });
+
+  it("uses the Claude Science dashboard information architecture without a global app rail", async () => {
+    installClient();
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "gm-science", level: 1 })).toBeInTheDocument();
+    expect(screen.getByText("Beta")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Search" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Projects", level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Recent sessions", level: 2 })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Primary" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Workspace" })).not.toBeInTheDocument();
+  });
+
+  it("opens a Project-scoped shell and toggles the Files split pane", async () => {
+    installClient();
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+
+    expect(await screen.findByRole("button", { name: "Back to dashboard" })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Sessions" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Customize" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Files" })).toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "Files" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Files" }));
+    expect(await screen.findByRole("complementary", { name: "Files" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Close Files" })).toBeInTheDocument();
+  });
+
+  it("opens Session options in the Composer and persists Session-scoped policy", async () => {
+    const projectSession = session();
+    projectSession.projectId = "proj_123";
+    const updatePolicy = vi.fn(async (sessionId: string, input: { delegationEnabled?: boolean }) =>
+      sessionPolicy({ sessionId, delegationEnabled: input.delegationEnabled ?? false }),
+    );
+    installClient({
+      listSessions: async () => ({ sessions: [projectSession] }),
+      getGmScienceSessionPolicy: async (sessionId) => sessionPolicy({ sessionId }),
+      updateGmScienceSessionPolicy: updatePolicy,
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    const button = await screen.findByRole("button", { name: "Session options" });
+    await waitFor(() => expect(button).toBeEnabled());
+    fireEvent.click(button);
+
+    const menu = await screen.findByRole("menu", { name: "Session options" });
+    expect(within(menu).getByRole("switch", { name: "Delegation" })).not.toBeChecked();
+    expect(within(menu).getByRole("switch", { name: "Auto-review" })).toBeEnabled();
+    expect(within(menu).getByRole("combobox", { name: "Reviewer model" })).toHaveValue("default");
+    expect(within(menu).getByRole("combobox", { name: "Specialist" })).toHaveValue("");
+    expect(within(menu).getByRole("combobox", { name: "Compute" })).toHaveValue("local");
+    expect(screen.queryByRole("dialog", { name: "Specialists" })).not.toBeInTheDocument();
+
+    fireEvent.click(within(menu).getByRole("switch", { name: "Delegation" }));
+    await waitFor(() => expect(updatePolicy).toHaveBeenCalledWith("session-a", { delegationEnabled: true }));
+    await waitFor(() => expect(within(menu).getByRole("switch", { name: "Delegation" })).toBeChecked());
+  });
+
+  it("opens Customize as a settings dialog with Claude Science section placement", async () => {
+    installClient();
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Customize" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Skills" });
+    expect(within(dialog).getByText("Capabilities")).toBeInTheDocument();
+    expect(within(dialog).getByText("Workspace")).toBeInTheDocument();
+    for (const section of [
+      "Skills",
+      "Connectors",
+      "Specialists",
+      "Memory",
+      "Compute",
+      "Network",
+      "Permissions",
+      "Credentials",
+      "Storage",
+      "Usage",
+      "General",
+    ]) {
+      expect(within(dialog).getByRole("button", { name: section })).toBeInTheDocument();
+    }
+    expect(screen.getByRole("button", { name: "Back to dashboard" })).toBeInTheDocument();
+  });
+
+  it("shows the configured model in the Composer and General settings", async () => {
+    installClient();
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    await screen.findByRole("button", { name: "Back to dashboard" });
+    const modelButton = await screen.findByRole("button", { name: /openai-codex\/gpt-5\.5/ });
+    fireEvent.click(modelButton);
+
+    const dialog = await screen.findByRole("dialog", { name: "General" });
+    await waitFor(() => {
+      expect(within(dialog).getByRole("textbox", { name: "Default model" })).toHaveValue("openai-codex/gpt-5.5");
+      expect(within(dialog).getByRole("combobox", { name: "Model provider" })).toHaveValue("openai_codex");
+    });
+  });
+
+  it("saves model routing and refreshes the Composer label", async () => {
+    const nextSettings: GmScienceSettings = {
+      ...settings(),
+      model: { provider: "openai", model: "openai/gpt-5.4" },
+      providers: settings().providers.map((provider) => ({ ...provider, active: provider.id === "openai" })),
+    };
+    const updateGmScienceSettings = vi.fn(async (input) => ({
+      settings: nextSettings,
+      agent: { ...bootstrapPayload().agents[0], provider: "openai", model: "openai/gpt-5.4" },
+      projectId: input.projectId ?? "",
+      capabilities: capabilities(),
+    }));
+    installClient({ updateGmScienceSettings });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /openai-codex\/gpt-5\.5/ }));
+    const dialog = await screen.findByRole("dialog", { name: "General" });
+    await waitFor(() => expect(within(dialog).getByRole("combobox", { name: "Model provider" })).toHaveValue("openai_codex"));
+    fireEvent.change(within(dialog).getByRole("combobox", { name: "Model provider" }), { target: { value: "openai" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save model" }));
+
+    await waitFor(() => expect(updateGmScienceSettings).toHaveBeenCalledWith({
+      projectId: "proj_123",
+      model: { provider: "openai", model: "openai/gpt-5.4" },
+    }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close Settings" }));
+    expect(await screen.findByRole("button", { name: /openai\/gpt-5\.4/ })).toBeInTheDocument();
+  });
+
+  it("uses write-only replace and remove credential mutations", async () => {
+    const configured: GmScienceSettings = {
+      ...settings(),
+      model: { provider: "openai", model: "openai/gpt-5.4" },
+      providers: settings().providers.map((provider) => provider.id === "openai"
+        ? { ...provider, active: true, credentialConfigured: true, credentialSource: "local_config" }
+        : { ...provider, active: false }),
+      literature: {
+        ...settings().literature,
+        pubmed: { email: "researcher@example.org", apiKeyConfigured: false, status: "ready", statusDetail: "" },
+      },
+    };
+    const updateGmScienceSettings = vi.fn(async (input) => ({
+      settings: configured,
+      agent: { ...bootstrapPayload().agents[0], provider: "openai", model: "openai/gpt-5.4" },
+      projectId: input.projectId ?? "",
+      capabilities: capabilities(),
+    }));
+    installClient({
+      getGmScienceSettings: async () => configured,
+      updateGmScienceSettings,
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Customize" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Credentials" }));
+    const dialog = await screen.findByRole("dialog", { name: "Credentials" });
+    fireEvent.change(within(dialog).getAllByLabelText("API key")[0], { target: { value: "new-secret" } });
+    fireEvent.click(within(dialog).getAllByRole("button", { name: "Save" })[0]);
+    await waitFor(() => expect(updateGmScienceSettings).toHaveBeenCalledWith({
+      projectId: "proj_123",
+      providerApiKey: { operation: "replace", value: "new-secret" },
+    }));
+
+    fireEvent.click(within(dialog).getAllByRole("button", { name: "Remove" })[0]);
+    await waitFor(() => expect(updateGmScienceSettings).toHaveBeenCalledWith({
+      projectId: "proj_123",
+      providerApiKey: { operation: "remove" },
+    }));
+    expect(within(dialog).queryByDisplayValue("new-secret")).not.toBeInTheDocument();
   });
 
   it("creates a project from the New Project dialog and opens the workspace", async () => {
@@ -368,7 +651,7 @@ describe("gm-science App", () => {
     render(<App />);
 
     await screen.findByText("No projects yet");
-    fireEvent.click(screen.getAllByRole("button", { name: /\+ New project/ })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "New project" })[0]);
     fireEvent.change(screen.getByPlaceholderText("Project name"), { target: { value: "Genome notes" } });
     fireEvent.change(screen.getByPlaceholderText("Describe what this project is about..."), {
       target: { value: "Cell line literature" },
@@ -396,10 +679,10 @@ describe("gm-science App", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
     await screen.findByText("Protein design is ready");
-    fireEvent.change(screen.getByPlaceholderText("向本地 agent 发送任务..."), {
+    fireEvent.change(screen.getByPlaceholderText("Ask anything..."), {
       target: { value: "Summarize the new papers" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     await waitFor(() => {
       expect(sendMessage).toHaveBeenCalledWith({
@@ -428,12 +711,13 @@ describe("gm-science App", () => {
     render(<App />);
 
     fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Files" }));
     fireEvent.click(await screen.findByRole("checkbox", { name: "Select results.csv" }));
     expect(screen.getByText("1 file selected")).toBeInTheDocument();
-    fireEvent.change(screen.getByPlaceholderText("向本地 agent 发送任务..."), {
+    fireEvent.change(screen.getByPlaceholderText("Ask anything..."), {
       target: { value: "Compare the selected results" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     await waitFor(() => {
       expect(sendMessage).toHaveBeenCalledWith({
@@ -467,7 +751,6 @@ describe("gm-science App", () => {
     const pubmedSwitch = await screen.findByRole("switch", { name: "Enable PubMed" });
     expect(pubmedSwitch).toHaveAttribute("aria-checked", "true");
     fireEvent.click(pubmedSwitch);
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => {
       expect(updateGmScienceProjectCapabilities).toHaveBeenCalledWith("proj_123", {
@@ -475,6 +758,29 @@ describe("gm-science App", () => {
         enabledConnectors: ["arxiv", "openalex"],
         enabledSpecialists: ["paper_reader", "research_reviewer"],
       });
+    });
+  });
+
+  it("rolls back an optimistic capability toggle when persistence fails", async () => {
+    const updateGmScienceProjectCapabilities = vi.fn().mockRejectedValue(new Error("save failed"));
+    installClient({ updateGmScienceProjectCapabilities });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Customize" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Connectors" }));
+    const arxivSwitch = await screen.findByRole("switch", { name: "Enable arXiv" });
+    expect(arxivSwitch).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(arxivSwitch);
+
+    await waitFor(() => {
+      expect(updateGmScienceProjectCapabilities).toHaveBeenCalledOnce();
+      expect(screen.getByText("save failed")).toBeInTheDocument();
+      expect(screen.getByRole("switch", { name: "Enable arXiv" })).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
     });
   });
 
@@ -508,8 +814,8 @@ describe("gm-science App", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Customize" }));
     fireEvent.click(await screen.findByRole("button", { name: "Skills" }));
     const panel = await screen.findByRole("region", { name: "Skills" });
-    expect(within(panel).getByRole("heading", { name: /Built-in/ })).toBeInTheDocument();
-    expect(within(panel).getByRole("heading", { name: /Local/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("heading", { name: /Featured/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("heading", { name: /Personal/ })).toBeInTheDocument();
 
     fireEvent.change(within(panel).getByRole("searchbox", { name: "Search skills" }), {
       target: { value: "local" },
@@ -526,17 +832,38 @@ describe("gm-science App", () => {
 
   it("does not allow an unavailable connector to be enabled", async () => {
     const projectValue = project({ enabledConnectors: ["arxiv", "openalex"] });
-    const items = capabilities(projectValue).map((item) =>
-      item.id === "pubmed"
+    const items: GmScienceCapability[] = [
+      {
+        id: "biomart",
+        kind: "connector",
+        name: "BioMart",
+        description: "Query federated biological datasets.",
+        source: "built_in",
+        version: "",
+        license: "",
+        files: [],
+        available: false,
+        defaultEnabled: false,
+        projectEnabled: false,
+        status: "disabled",
+        statusDetail: "Not available in this gm-science build.",
+        metadata: { catalog_group: "featured" },
+      },
+      ...capabilities(projectValue).map((item) =>
+        item.id === "pubmed"
         ? {
             ...item,
             available: false,
             projectEnabled: false,
             status: "disabled" as const,
             statusDetail: "Disabled in global configuration.",
+            metadata: { catalog_group: "directory" },
           }
-        : item,
-    );
+          : item.id === "arxiv" || item.id === "openalex"
+            ? { ...item, metadata: { catalog_group: "native" } }
+            : item,
+      ),
+    ];
     installClient({
       listGmScienceProjects: async () => ({ projects: [projectValue] }),
       listGmScienceCapabilities: async (projectId) => ({ projectId: projectId ?? "", items }),
@@ -548,7 +875,11 @@ describe("gm-science App", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Customize" }));
     fireEvent.click(await screen.findByRole("button", { name: "Connectors" }));
 
-    expect(await screen.findByRole("switch", { name: "Enable PubMed" })).toBeDisabled();
+    const panel = await screen.findByRole("region", { name: "Connectors" });
+    expect(within(panel).getByRole("heading", { name: /Featured/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("heading", { name: /Directory/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("heading", { name: /Native/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("switch", { name: "Enable PubMed" })).toBeDisabled();
   });
 
   it("searches configured MCP connectors and shows redacted connection details", async () => {
@@ -594,7 +925,7 @@ describe("gm-science App", () => {
       target: { value: "filesystem" },
     });
 
-    expect(within(panel).getByRole("heading", { name: /Local/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("heading", { name: /Custom/ })).toBeInTheDocument();
     expect(within(panel).getByText("Filesystem")).toBeInTheDocument();
     fireEvent.click(within(panel).getByRole("button", { name: "Show details for Filesystem" }));
     expect(within(panel).getByText("stdio")).toBeInTheDocument();
@@ -693,8 +1024,9 @@ describe("gm-science App", () => {
 
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Files" }));
 
-    expect(await screen.findByRole("tab", { name: "Files" })).toBeInTheDocument();
+    expect(await screen.findByRole("tab", { name: "Artifacts" })).toBeInTheDocument();
     expect(screen.getByText("Measurements")).toBeInTheDocument();
     expect(screen.getByText("dataset")).toBeInTheDocument();
     expect(screen.getByText("Result figure")).toBeInTheDocument();
@@ -702,6 +1034,98 @@ describe("gm-science App", () => {
     expect(screen.getByText("runs/run-1/outputs/result.png")).toBeInTheDocument();
     expect(screen.getByText(/2 KB/)).toBeInTheDocument();
     expect(screen.getByText("notes/protocol.md")).toBeInTheDocument();
+  });
+
+  it("opens Artifact tabs, shows provenance, and routes to the exact source Session", async () => {
+    const report = resource({
+      id: "artifact:report-context",
+      kind: "artifact",
+      sessionId: "session-source",
+      displayName: "Summary report",
+      artifactType: "report",
+      artifactId: "art-report-context",
+      relativePath: "reports/summary.md",
+      sizeBytes: 256,
+    });
+    const currentSession = { ...session(), projectId: "proj_123", title: "Current work" };
+    const sourceSession = {
+      ...session(),
+      id: "session-source",
+      projectId: "proj_123",
+      title: "Source research",
+    };
+    const loadSession = vi.fn(async () => ({ messages: [] }));
+    const getGmScienceResourceDetail = vi.fn(async () => ({ detail: resourceDetail(report) }));
+    installClient({
+      listSessions: async () => ({ sessions: [currentSession, sourceSession] }),
+      loadSession,
+      listGmScienceResources: async () => ({ resources: [report] }),
+      getGmScienceResourceDetail,
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Files" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open Summary report" }));
+
+    expect(await screen.findByRole("heading", { name: "Summary report", level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Evidence summary" })).toBeInTheDocument();
+    expect(getGmScienceResourceDetail).toHaveBeenCalledWith("proj_123", report.id);
+    expect(screen.getByRole("tab", { name: /Summary report/ })).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Artifact actions" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Provenance" }));
+    const provenance = await screen.findByRole("complementary", { name: "Artifact provenance" });
+    expect(within(provenance).getByText("openai-codex/gpt-5.5")).toBeInTheDocument();
+    expect(within(provenance).getByText("Project literature")).toBeInTheDocument();
+    fireEvent.click(within(provenance).getByRole("button", { name: "Close provenance" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Artifact actions" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "View in context" }));
+    await waitFor(() => expect(loadSession).toHaveBeenLastCalledWith("session-source"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Close Summary report" }));
+    expect(await screen.findByPlaceholderText("Search artifacts...")).toBeInTheDocument();
+  });
+
+  it("recovers from an Artifact detail failure and renders descriptor-only content", async () => {
+    const figure = resource({
+      id: "artifact:figure-retry",
+      kind: "run_output",
+      displayName: "Result figure",
+      artifactType: "figure",
+      artifactId: "art-figure-retry",
+      mimeType: "image/png",
+      relativePath: "runs/run-1/result.png",
+    });
+    const getGmScienceResourceDetail = vi.fn()
+      .mockRejectedValueOnce(new Error("Resource temporarily unavailable"))
+      .mockResolvedValueOnce({
+        detail: resourceDetail(figure, {
+          preview: {
+            content: "",
+            contentStatus: "binary_descriptor_only",
+            contentIncluded: false,
+            contentChars: 0,
+            truncated: false,
+          },
+        }),
+      });
+    installClient({
+      listGmScienceResources: async () => ({ resources: [figure] }),
+      getGmScienceResourceDetail,
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Files" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open Result figure" }));
+
+    expect(await screen.findByText("Artifact unavailable")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Preview unavailable")).toBeInTheDocument();
+    expect(screen.getByText(/file type does not have a local preview/i)).toBeInTheDocument();
+    expect(getGmScienceResourceDetail).toHaveBeenCalledTimes(2);
   });
 
   it("filters Files by name, kind, type, and relative path", async () => {
@@ -716,9 +1140,10 @@ describe("gm-science App", () => {
 
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Files" }));
     await screen.findByText("Protein atlas");
 
-    fireEvent.change(screen.getByPlaceholderText("Search files..."), { target: { value: "run output" } });
+    fireEvent.change(screen.getByPlaceholderText("Search artifacts..."), { target: { value: "run output" } });
 
     expect(screen.queryByText("Protein atlas")).not.toBeInTheDocument();
     expect(screen.getByText("Genome review")).toBeInTheDocument();
@@ -740,6 +1165,7 @@ describe("gm-science App", () => {
 
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Files" }));
     fireEvent.click(await screen.findByRole("tab", { name: "Runs" }));
     fireEvent.click(screen.getByRole("button", { name: "New Python run" }));
 
@@ -788,6 +1214,7 @@ describe("gm-science App", () => {
 
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Files" }));
     fireEvent.click(await screen.findByRole("tab", { name: "Data" }));
     expect(await screen.findByText("No datasets yet")).toBeInTheDocument();
 
@@ -833,6 +1260,7 @@ describe("gm-science App", () => {
 
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Files" }));
     fireEvent.click(await screen.findByRole("tab", { name: "Runs" }));
     fireEvent.click(screen.getByRole("button", { name: "New Python run" }));
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
@@ -861,6 +1289,7 @@ describe("gm-science App", () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
     await waitFor(() => expect(listGmScienceResources).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "Files" }));
     fireEvent.click(await screen.findByRole("tab", { name: "Runs" }));
     fireEvent.click(screen.getByRole("button", { name: "New Python run" }));
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
@@ -911,6 +1340,7 @@ describe("gm-science App", () => {
 
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Files" }));
     fireEvent.click(await screen.findByRole("tab", { name: "Runs" }));
 
     expect(await screen.findByText("Long analysis")).toBeInTheDocument();
@@ -937,7 +1367,8 @@ describe("gm-science App", () => {
 
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
-    await screen.findByText("No files yet");
+    fireEvent.click(screen.getByRole("button", { name: "Files" }));
+    await screen.findByText("No artifacts yet");
 
     await act(async () => {
       emit({ type: "run.finished", runId: "run-1", sessionId: "session-a" });
@@ -958,9 +1389,10 @@ describe("gm-science App", () => {
 
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
-    await screen.findByText("No files yet");
-    fireEvent.change(screen.getByPlaceholderText("向本地 agent 发送任务..."), { target: { value: "search" } });
-    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    fireEvent.click(screen.getByRole("button", { name: "Files" }));
+    await screen.findByText("No artifacts yet");
+    fireEvent.change(screen.getByPlaceholderText("Ask anything..."), { target: { value: "search" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     await screen.findByText("run failed");
     await waitFor(() => expect(listGmScienceResources).toHaveBeenCalledTimes(2));

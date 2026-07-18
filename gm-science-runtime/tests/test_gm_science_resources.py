@@ -7,6 +7,7 @@ import pytest
 
 from openppx.gm_science.resources.config import ResourceCatalogConfig, parse_resource_catalog_config
 from openppx.gm_science.resources.context import ResourceContextService
+from openppx.gm_science.resources.detail import ResourceDetailService
 from openppx.gm_science.resources.models import ResourceSelection
 from openppx.gm_science.resources.service import ResourceCatalogService
 from openppx.gm_science.store import GmScienceStore
@@ -345,3 +346,132 @@ def test_empty_context_selection_does_not_scan_the_resource_catalog(tmp_path: Pa
     monkeypatch.setattr(catalog, "list_resources", lambda *_args, **_kwargs: pytest.fail("unexpected scan"))
 
     assert service.validate_selections(project_id, []) == []
+
+
+def test_detail_returns_bounded_preview_safe_provenance_and_relations(tmp_path: Path) -> None:
+    catalog, store, project_id, workspace = _service(tmp_path)
+    paper = store.create_artifact(
+        project_id=project_id,
+        artifact_type="paper",
+        title="Evidence paper",
+        path_or_url="https://example.org/paper?token=secret",
+        mime_type="text/html",
+        metadata={"doi": "10.1000/example", "abstract": "Evidence summary."},
+    )
+    report_path = workspace / "reports" / "summary.md"
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text("# Summary\nSupported claim.\n", encoding="utf-8")
+    report = store.create_artifact(
+        project_id=project_id,
+        artifact_type="report",
+        title="Summary report",
+        path_or_url=str(report_path),
+        mime_type="text/markdown",
+        session_id="session-report",
+        metadata={
+            "paper_artifact_ids": [paper.id],
+            "summary": "Supported claim.",
+            "profile_path": str(tmp_path / "private" / "profile.json"),
+        },
+        provenance={
+            "created_by": "literature_review",
+            "model": "openai-codex/gpt-5.5",
+            "session_id": "session-report",
+            "source_artifact_ids": [paper.id],
+            "credential": "must-not-leak",
+            "stdout_path": str(tmp_path / "private" / "stdout.log"),
+        },
+    )
+    detail_service = ResourceDetailService(catalog=catalog)
+
+    detail = detail_service.get_detail(project_id, f"artifact:{report.id}").to_dict()
+
+    assert detail["resource"]["relative_path"] == "reports/summary.md"
+    assert detail["preview"] == {
+        "content": "# Summary\nSupported claim.\n",
+        "content_status": "included",
+        "content_included": True,
+        "content_chars": 27,
+        "truncated": False,
+    }
+    assert detail["artifact"] == {
+        "id": report.id,
+        "session_id": "session-report",
+        "type": "report",
+        "title": "Summary report",
+        "mime_type": "text/markdown",
+        "metadata": {
+            "paper_artifact_ids": [paper.id],
+            "summary": "Supported claim.",
+        },
+        "provenance": {
+            "created_by": "literature_review",
+            "model": "openai-codex/gpt-5.5",
+            "session_id": "session-report",
+            "source_artifact_ids": [paper.id],
+        },
+        "created_at": report.created_at,
+        "updated_at": report.updated_at,
+    }
+    assert detail["relations"] == [
+        {
+            "artifact_id": paper.id,
+            "resource_id": f"artifact:{paper.id}",
+            "session_id": None,
+            "title": "Evidence paper",
+            "artifact_type": "paper",
+            "relation": "paper",
+            "direction": "outgoing",
+        },
+    ]
+    serialized = json.dumps(detail)
+    assert str(workspace) not in serialized
+    assert str(tmp_path / "private") not in serialized
+    assert "must-not-leak" not in serialized
+
+
+def test_detail_uses_descriptor_status_for_external_and_binary_resources(tmp_path: Path) -> None:
+    catalog, store, project_id, workspace = _service(tmp_path)
+    external = store.create_artifact(
+        project_id=project_id,
+        artifact_type="paper",
+        title="External paper",
+        path_or_url="https://user:secret@example.org/paper?token=secret#page",
+        mime_type="text/html",
+    )
+    image_path = workspace / "figure.png"
+    image_path.write_bytes(b"png")
+    image = store.create_artifact(
+        project_id=project_id,
+        artifact_type="figure",
+        title="Result figure",
+        path_or_url=str(image_path),
+        mime_type="image/png",
+    )
+    service = ResourceDetailService(catalog=catalog)
+
+    external_detail = service.get_detail(project_id, f"artifact:{external.id}").to_dict()
+    image_detail = service.get_detail(project_id, f"artifact:{image.id}").to_dict()
+
+    assert external_detail["resource"]["url"] == "https://example.org/paper"
+    assert external_detail["preview"]["content_status"] == "external_descriptor_only"
+    assert external_detail["preview"]["content"] == ""
+    assert image_detail["preview"]["content_status"] == "binary_descriptor_only"
+    assert image_detail["preview"]["content"] == ""
+
+
+def test_detail_rejects_unknown_cross_project_and_invalid_resource_ids(tmp_path: Path) -> None:
+    catalog, store, project_id, workspace = _service(tmp_path)
+    (workspace / "note.txt").write_text("note", encoding="utf-8")
+    resource = catalog.list_resources(project_id)[0]
+    other_project = store.create_project(name="Other", description="", agent_context="")
+    service = ResourceDetailService(catalog=catalog)
+
+    with pytest.raises(LookupError, match="was not found"):
+        service.get_detail(other_project.id, resource.id)
+    with pytest.raises(LookupError, match="was not found"):
+        service.get_detail(project_id, "project_file:missing")
+    with pytest.raises(ValueError, match="required"):
+        service.get_detail(project_id, "")
+    with pytest.raises(ValueError, match="exceeds"):
+        service.get_detail(project_id, "x" * 513)

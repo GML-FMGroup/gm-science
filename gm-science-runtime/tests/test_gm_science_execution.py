@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -75,6 +76,43 @@ print("analysis finished")
     ]
     assert {artifact.type for artifact in artifacts} == {"code", "experiment_log", "artifact_file"}
     assert next(artifact for artifact in artifacts if artifact.type == "artifact_file").path_or_url.endswith("result.txt")
+
+
+def test_run_payload_promotes_outputs_when_task_finishes_between_sync_and_show(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service, store, project_id, _session_id = _service(tmp_path)
+    run_dir = tmp_path / "race-run"
+    run_dir.mkdir()
+    source_path = run_dir / "main.py"
+    source_path.write_text("print('done')\n", encoding="utf-8")
+    record = store.create_science_run(
+        task_id="task-race",
+        project_id=project_id,
+        kind="data_analysis",
+        title="Race regression",
+        source_path=str(source_path),
+        working_directory=str(run_dir),
+    )
+    promoted: list[tuple[str, str]] = []
+    monkeypatch.setattr(service, "_synchronized_task", lambda _task_id: SimpleNamespace(status="running"))
+    monkeypatch.setattr(
+        service.controller,
+        "show_task",
+        lambda _task_id: {"ok": True, "task": {"status": "completed"}, "events": []},
+    )
+    monkeypatch.setattr(
+        service,
+        "_promote_artifacts",
+        lambda run, status: promoted.append((run.task_id, status)),
+    )
+    monkeypatch.setattr(service, "_gm_artifacts_for_task", lambda _project_id, _task_id: [])
+
+    payload = service._run_payload(record)
+
+    assert payload["status"] == "completed"
+    assert promoted == [("task-race", "completed")]
 
 
 def test_failed_python_run_can_be_retried_from_saved_source(tmp_path: Path) -> None:

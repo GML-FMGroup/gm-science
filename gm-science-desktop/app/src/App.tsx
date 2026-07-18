@@ -1,7 +1,46 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  ArrowLeft,
+  BookOpen,
+  Box,
+  Brain,
+  ChevronDown,
+  Clock3,
+  Cloud,
+  Columns2,
+  Cpu,
+  Database,
+  FileText,
+  Folder,
+  HardDrive,
+  KeyRound,
+  LayoutGrid,
+  Library,
+  Menu,
+  MessageSquarePlus,
+  Network,
+  PanelLeftClose,
+  PanelRightClose,
+  Play,
+  Plus,
+  RefreshCw,
+  Search,
+  Send,
+  Settings as SettingsIcon,
+  ShieldCheck,
+  SlidersHorizontal,
+  UserRound,
+  UsersRound,
+  X,
+  Zap,
+} from "lucide-react";
 import { CapabilitiesPanel } from "./components/CapabilitiesPanel";
+import { ArtifactInspector } from "./components/ArtifactInspector";
 import { DataPanel } from "./components/DataPanel";
 import { MessageBubble } from "./components/MessageBubble";
+import { MemorySettingsPanel } from "./components/MemorySettingsPanel";
+import { SessionOptionsMenu } from "./components/SessionOptionsMenu";
+import { CredentialsSettingsPanel, GeneralSettingsPanel } from "./components/SettingsPanels";
 import type {
   AgentProfile,
   BootstrapPayload,
@@ -12,15 +51,43 @@ import type {
   GmScienceCapabilityKind,
   GmScienceProject,
   GmScienceResource,
+  GmScienceResourceDetail,
   GmScienceRun,
+  GmScienceSessionPolicy,
+  GmScienceSettings,
   RuntimeState,
   RuntimeStatus,
   SessionSummary,
+  UpdateGmScienceSessionPolicyInput,
+  UpdateGmScienceSettingsInput,
 } from "./types";
 
-type NavView = "projects" | "workspace" | "settings";
-type SettingsSection = GmScienceCapabilityKind | "runtime";
+type NavView = "projects" | "workspace";
+type SettingsSection =
+  | GmScienceCapabilityKind
+  | "memory"
+  | "compute"
+  | "network"
+  | "permissions"
+  | "credentials"
+  | "storage"
+  | "usage"
+  | "general";
 type WorkspacePanel = "files" | "data" | "runs";
+
+const SETTINGS_SECTION_TITLES: Record<SettingsSection, string> = {
+  skill: "Skills",
+  connector: "Connectors",
+  specialist: "Specialists",
+  memory: "Memory",
+  compute: "Compute",
+  network: "Network",
+  permissions: "Permissions",
+  credentials: "Credentials",
+  storage: "Storage",
+  usage: "Usage",
+  general: "General",
+};
 
 interface ProjectFormState {
   name: string;
@@ -100,9 +167,7 @@ function isGenericSessionTitle(title: string): boolean {
   const normalized = title.trim();
   return (
     !normalized ||
-    normalized === "New local session" ||
-    normalized === "New chat" ||
-    normalized === "新对话" ||
+    normalized === "New session" ||
     normalized.startsWith("Session ")
   );
 }
@@ -219,13 +284,43 @@ function formatRunTime(value: string): string {
     : date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
+function formatRelativeTime(value: string): string {
+  const timestamp = new Date(value).getTime();
+  if (Number.isNaN(timestamp)) {
+    return "";
+  }
+  const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (seconds < 60) {
+    return "now";
+  }
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h`;
+  }
+  const days = Math.floor(hours / 24);
+  if (days < 7) {
+    return `${days}d`;
+  }
+  return `${Math.floor(days / 7)}w`;
+}
+
+function isCapabilitySection(section: SettingsSection): section is GmScienceCapabilityKind {
+  return section === "skill" || section === "connector" || section === "specialist";
+}
+
 function ResourceItem({
   resource,
   selected,
+  onOpen,
   onToggle,
 }: {
   resource: GmScienceResource;
   selected: boolean;
+  onOpen: (resource: GmScienceResource) => void;
   onToggle: (resource: GmScienceResource) => void;
 }) {
   const marker =
@@ -243,13 +338,15 @@ function ResourceItem({
   return (
     <article className={`resource-item resource-${resource.kind}${selected ? " selected" : ""}`}>
       <div className="resource-title-row">
-        <span className="resource-marker" aria-hidden="true">
-          {marker}
-        </span>
-        <div>
-          <strong>{resource.displayName}</strong>
-          <span className="resource-kind">{formatResourceKind(resource.kind)}</span>
-        </div>
+        <button className="resource-open" aria-label={`Open ${resource.displayName}`} onClick={() => onOpen(resource)}>
+          <span className="resource-marker" aria-hidden="true">
+            {marker}
+          </span>
+          <span>
+            <strong>{resource.displayName}</strong>
+            <span className="resource-kind">{formatResourceKind(resource.kind)}</span>
+          </span>
+        </button>
         <input
           type="checkbox"
           checked={selected}
@@ -320,6 +417,13 @@ export function App() {
   const [projects, setProjects] = useState<GmScienceProject[]>([]);
   const [resources, setResources] = useState<GmScienceResource[]>([]);
   const [selectedResources, setSelectedResources] = useState<GmScienceResource[]>([]);
+  const [openResourceIds, setOpenResourceIds] = useState<string[]>([]);
+  const [activeResourceId, setActiveResourceId] = useState("");
+  const [resourceDetails, setResourceDetails] = useState<Record<string, GmScienceResourceDetail>>({});
+  const [resourceDetailLoading, setResourceDetailLoading] = useState(false);
+  const [resourceDetailError, setResourceDetailError] = useState<string | null>(null);
+  const [resourceActionError, setResourceActionError] = useState<string | null>(null);
+  const [provenanceOpen, setProvenanceOpen] = useState(false);
   const [runs, setRuns] = useState<GmScienceRun[]>([]);
   const [resourceSearch, setResourceSearch] = useState("");
   const [workspacePanel, setWorkspacePanel] = useState<WorkspacePanel>("files");
@@ -333,11 +437,21 @@ export function App() {
   const [projectError, setProjectError] = useState<string | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("skill");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [capabilities, setCapabilities] = useState<GmScienceCapability[]>([]);
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
   const [capabilitiesSaving, setCapabilitiesSaving] = useState(false);
-  const [capabilitiesDirty, setCapabilitiesDirty] = useState(false);
   const [capabilitiesError, setCapabilitiesError] = useState<string | null>(null);
+  const [scienceSettings, setScienceSettings] = useState<GmScienceSettings | null>(null);
+  const [scienceSettingsLoading, setScienceSettingsLoading] = useState(false);
+  const [scienceSettingsSaving, setScienceSettingsSaving] = useState(false);
+  const [sessionPolicy, setSessionPolicy] = useState<GmScienceSessionPolicy | null>(null);
+  const [sessionPolicyLoading, setSessionPolicyLoading] = useState(false);
+  const [sessionPolicySaving, setSessionPolicySaving] = useState(false);
+  const [sessionPolicyError, setSessionPolicyError] = useState<string | null>(null);
+  const [sessionOptionsOpen, setSessionOptionsOpen] = useState(false);
   const [sendingSessionIds, setSendingSessionIds] = useState<string[]>([]);
   const [connectionForm, setConnectionForm] = useState<ConnectionSettings>(buildConnectionSettings(null));
   const [savingConnection, setSavingConnection] = useState(false);
@@ -355,6 +469,10 @@ export function App() {
   const nextScrollBehaviorRef = useRef<ScrollBehavior>("auto");
   const selectedProjectIdRef = useRef("");
   const runsRef = useRef<GmScienceRun[]>([]);
+  const capabilitySaveInFlightRef = useRef(false);
+  const sessionPolicyRequestIdRef = useRef(0);
+  const resourceDetailRequestIdRef = useRef(0);
+  const sessionOptionsRef = useRef<HTMLDivElement | null>(null);
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === selectedProjectId) ?? null,
@@ -391,7 +509,24 @@ export function App() {
     () => new Set(selectedResources.map((resource) => resource.id)),
     [selectedResources],
   );
+  const openResources = useMemo(
+    () => openResourceIds
+      .map((resourceId) => resources.find((resource) => resource.id === resourceId))
+      .filter((resource): resource is GmScienceResource => Boolean(resource)),
+    [openResourceIds, resources],
+  );
+  const activeResource = useMemo(
+    () => resources.find((resource) => resource.id === activeResourceId) ?? null,
+    [activeResourceId, resources],
+  );
+  const activeResourceDetail = activeResourceId ? resourceDetails[activeResourceId] ?? null : null;
   const canSend = Boolean(composer.trim()) && Boolean(selectedAgentId) && Boolean(selectedProjectId) && !selectedAgentBusy;
+  const sessionPolicyActive = Boolean(
+    sessionPolicy?.delegationEnabled
+      || sessionPolicy?.autoReviewEnabled
+      || sessionPolicy?.memoryEnabled
+      || sessionPolicy?.specialistId,
+  );
 
   useEffect(() => {
     if (!window.ppxClient) {
@@ -481,11 +616,46 @@ export function App() {
   }, [composer]);
 
   useEffect(() => {
-    if (view !== "settings") {
+    setSessionOptionsOpen(false);
+    setSessionPolicySaving(false);
+    if (!selectedSessionId) {
+      sessionPolicyRequestIdRef.current += 1;
+      setSessionPolicy(null);
+      setSessionPolicyError(null);
+      setSessionPolicyLoading(false);
       return;
     }
-    void refreshCapabilities();
-  }, [view, selectedProjectId]);
+    void refreshSessionPolicy(selectedSessionId);
+  }, [selectedSessionId]);
+
+  useEffect(() => {
+    if (!sessionOptionsOpen) {
+      return;
+    }
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!sessionOptionsRef.current?.contains(event.target as Node)) {
+        setSessionOptionsOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSessionOptionsOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [sessionOptionsOpen]);
+
+  useEffect(() => {
+    if (!settingsOpen) {
+      return;
+    }
+    void Promise.all([refreshCapabilities(), refreshScienceSettings()]);
+  }, [settingsOpen, selectedProjectId]);
 
   useEffect(() => {
     runsRef.current = runs;
@@ -526,7 +696,6 @@ export function App() {
     try {
       const catalog = await window.ppxClient.listGmScienceCapabilities(selectedProjectId || undefined);
       setCapabilities(catalog.items);
-      setCapabilitiesDirty(false);
     } catch (error) {
       setCapabilitiesError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -534,47 +703,138 @@ export function App() {
     }
   }
 
-  function openSettings(section: SettingsSection): void {
-    setSettingsSection(section);
-    setView("settings");
+  async function refreshScienceSettings(): Promise<void> {
+    setScienceSettingsLoading(true);
+    setSettingsError(null);
+    try {
+      setScienceSettings(await window.ppxClient.getGmScienceSettings());
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setScienceSettingsLoading(false);
+    }
   }
 
-  function toggleCapability(capabilityId: string): void {
-    setCapabilities((current) =>
-      current.map((item) =>
-        item.id === capabilityId
-          ? { ...item, projectEnabled: !(item.projectEnabled ?? item.defaultEnabled) }
-          : item,
-      ),
-    );
-    setCapabilitiesDirty(true);
-    setCapabilitiesError(null);
+  async function refreshSessionPolicy(sessionId: string): Promise<void> {
+    const requestId = ++sessionPolicyRequestIdRef.current;
+    setSessionPolicyLoading(true);
+    setSessionPolicyError(null);
+    try {
+      const policy = await window.ppxClient.getGmScienceSessionPolicy(sessionId);
+      if (requestId === sessionPolicyRequestIdRef.current) {
+        setSessionPolicy(policy);
+      }
+    } catch (error) {
+      if (requestId === sessionPolicyRequestIdRef.current) {
+        setSessionPolicy(null);
+        setSessionPolicyError(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      if (requestId === sessionPolicyRequestIdRef.current) {
+        setSessionPolicyLoading(false);
+      }
+    }
   }
 
-  async function saveCapabilities(): Promise<void> {
-    if (!selectedProjectId) {
+  async function updateSessionPolicy(input: UpdateGmScienceSessionPolicyInput): Promise<void> {
+    if (!selectedSessionId || sessionPolicySaving) {
       return;
     }
+    const sessionId = selectedSessionId;
+    const requestId = ++sessionPolicyRequestIdRef.current;
+    setSessionPolicySaving(true);
+    setSessionPolicyError(null);
+    try {
+      const policy = await window.ppxClient.updateGmScienceSessionPolicy(sessionId, input);
+      if (requestId === sessionPolicyRequestIdRef.current) {
+        setSessionPolicy(policy);
+      }
+    } catch (error) {
+      if (requestId === sessionPolicyRequestIdRef.current) {
+        setSessionPolicyError(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      if (requestId === sessionPolicyRequestIdRef.current) {
+        setSessionPolicySaving(false);
+      }
+    }
+  }
+
+  async function updateScienceSettings(input: UpdateGmScienceSettingsInput): Promise<void> {
+    setScienceSettingsSaving(true);
+    setSettingsError(null);
+    try {
+      const updated = await window.ppxClient.updateGmScienceSettings({
+        ...input,
+        projectId: selectedProjectId || undefined,
+      });
+      setScienceSettings(updated.settings);
+      setAgents((current) => {
+        const found = current.some((agent) => agent.id === updated.agent.id);
+        return found
+          ? current.map((agent) => agent.id === updated.agent.id ? updated.agent : agent)
+          : [updated.agent, ...current];
+      });
+      if (updated.capabilities.length > 0) {
+        setCapabilities(updated.capabilities);
+      }
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : String(error));
+      throw error;
+    } finally {
+      setScienceSettingsSaving(false);
+    }
+  }
+
+  function openSettings(section: SettingsSection): void {
+    setSettingsSection(section);
+    setSettingsOpen(true);
+  }
+
+  async function toggleCapability(capabilityId: string): Promise<void> {
+    if (!selectedProjectId || capabilitySaveInFlightRef.current) {
+      return;
+    }
+    const previous = capabilities;
+    const target = previous.find((item) => item.id === capabilityId);
+    if (!target) {
+      return;
+    }
+    const checked = target.projectEnabled ?? target.defaultEnabled;
+    if (!target.available && !checked) {
+      return;
+    }
+    const next = previous.map((item) =>
+      item.id === capabilityId ? { ...item, projectEnabled: !checked } : item,
+    );
+    const projectId = selectedProjectId;
+    capabilitySaveInFlightRef.current = true;
+    setCapabilities(next);
     setCapabilitiesSaving(true);
     setCapabilitiesError(null);
     try {
-      const response = await window.ppxClient.updateGmScienceProjectCapabilities(selectedProjectId, {
-        enabledSkills: capabilities.filter((item) => item.kind === "skill" && item.projectEnabled).map((item) => item.id),
-        enabledConnectors: capabilities
+      const response = await window.ppxClient.updateGmScienceProjectCapabilities(projectId, {
+        enabledSkills: next.filter((item) => item.kind === "skill" && item.projectEnabled).map((item) => item.id),
+        enabledConnectors: next
           .filter((item) => item.kind === "connector" && item.projectEnabled)
           .map((item) => item.id),
-        enabledSpecialists: capabilities
+        enabledSpecialists: next
           .filter((item) => item.kind === "specialist" && item.projectEnabled)
           .map((item) => item.id),
       });
       setProjects((current) =>
         current.map((project) => (project.id === response.project.id ? response.project : project)),
       );
-      setCapabilities(response.capabilities);
-      setCapabilitiesDirty(false);
+      if (selectedProjectIdRef.current === projectId) {
+        setCapabilities(response.capabilities);
+      }
     } catch (error) {
-      setCapabilitiesError(error instanceof Error ? error.message : String(error));
+      if (selectedProjectIdRef.current === projectId) {
+        setCapabilities(previous);
+        setCapabilitiesError(error instanceof Error ? error.message : String(error));
+      }
     } finally {
+      capabilitySaveInFlightRef.current = false;
       setCapabilitiesSaving(false);
     }
   }
@@ -593,6 +853,100 @@ export function App() {
         setResources([]);
       }
     }
+  }
+
+  async function openResource(resource: GmScienceResource, forceRefresh = false): Promise<void> {
+    if (!selectedProjectId) {
+      return;
+    }
+    const projectId = selectedProjectId;
+    const requestId = ++resourceDetailRequestIdRef.current;
+    setFilesOpen(true);
+    setWorkspacePanel("files");
+    setOpenResourceIds((current) => current.includes(resource.id) ? current : [...current, resource.id]);
+    setActiveResourceId(resource.id);
+    setResourceDetailError(null);
+    setResourceActionError(null);
+    setProvenanceOpen(false);
+    const cached = resourceDetails[resource.id];
+    if (!forceRefresh && cached?.resource.versionOrHash === resource.versionOrHash) {
+      setResourceDetailLoading(false);
+      return;
+    }
+    setResourceDetailLoading(true);
+    try {
+      const payload = await window.ppxClient.getGmScienceResourceDetail(projectId, resource.id);
+      if (requestId !== resourceDetailRequestIdRef.current || selectedProjectIdRef.current !== projectId) {
+        return;
+      }
+      setResourceDetails((current) => ({ ...current, [resource.id]: payload.detail }));
+    } catch (error) {
+      if (requestId === resourceDetailRequestIdRef.current && selectedProjectIdRef.current === projectId) {
+        setResourceDetailError(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      if (requestId === resourceDetailRequestIdRef.current && selectedProjectIdRef.current === projectId) {
+        setResourceDetailLoading(false);
+      }
+    }
+  }
+
+  function closeResourceTab(resourceId: string): void {
+    const index = openResourceIds.indexOf(resourceId);
+    const remaining = openResourceIds.filter((id) => id !== resourceId);
+    setOpenResourceIds(remaining);
+    if (activeResourceId !== resourceId) {
+      return;
+    }
+    resourceDetailRequestIdRef.current += 1;
+    const nextId = remaining[Math.min(Math.max(index, 0), remaining.length - 1)] ?? "";
+    setActiveResourceId(nextId);
+    setResourceDetailError(null);
+    setResourceActionError(null);
+    setProvenanceOpen(false);
+    if (nextId) {
+      const nextResource = resources.find((resource) => resource.id === nextId);
+      if (nextResource && !resourceDetails[nextId]) {
+        void openResource(nextResource);
+      }
+    }
+  }
+
+  function showArtifactCatalog(): void {
+    resourceDetailRequestIdRef.current += 1;
+    setActiveResourceId("");
+    setResourceDetailLoading(false);
+    setResourceDetailError(null);
+    setResourceActionError(null);
+    setProvenanceOpen(false);
+  }
+
+  async function viewActiveResourceInContext(): Promise<void> {
+    if (!activeResourceDetail) {
+      return;
+    }
+    const sessionId = activeResourceDetail.artifact?.sessionId || activeResourceDetail.resource.sessionId;
+    if (!sessionId) {
+      setResourceActionError("This Artifact is not attached to a source Session.");
+      return;
+    }
+    const sourceSession = projectSessions.find((session) => session.id === sessionId);
+    if (!sourceSession) {
+      setResourceActionError("The source Session is no longer attached to this Project.");
+      return;
+    }
+    setResourceActionError(null);
+    setProvenanceOpen(false);
+    await switchSession(sourceSession);
+  }
+
+  function openRelatedResource(resourceId: string): void {
+    const related = resources.find((resource) => resource.id === resourceId);
+    if (!related) {
+      setResourceActionError("The related Artifact is no longer available in this Project.");
+      return;
+    }
+    void openResource(related);
   }
 
   async function refreshRuns(projectId: string, clearOnError = false): Promise<void> {
@@ -632,11 +986,20 @@ export function App() {
     setSelectedProjectId(project.id);
     setResourceSearch("");
     setSelectedResources([]);
+    resourceDetailRequestIdRef.current += 1;
+    setOpenResourceIds([]);
+    setActiveResourceId("");
+    setResourceDetails({});
+    setResourceDetailLoading(false);
+    setResourceDetailError(null);
+    setResourceActionError(null);
+    setProvenanceOpen(false);
     setRunError(null);
     runsRef.current = [];
     setRuns([]);
     setSelectedSessionId("");
     setMessages([]);
+    setFilesOpen(false);
     setView("workspace");
     const agentId = selectedAgentId || agents[0]?.id || "";
     let nextSessions = sessions;
@@ -993,158 +1356,188 @@ export function App() {
 
   return (
     <div className="app-shell science-app">
-      <aside className="nav-shell">
-        <nav className="nav-rail" aria-label="Primary">
-          <button
-            className={view === "projects" ? "nav-item active" : "nav-item"}
-            onClick={() => setView("projects")}
-            aria-label="Projects"
-            title="Projects"
-          >
-            <span className="nav-symbol">P</span>
-          </button>
-          <button
-            className={view === "workspace" ? "nav-item active" : "nav-item"}
-            onClick={() => selectedProject && setView("workspace")}
-            disabled={!selectedProject}
-            aria-label="Workspace"
-            title="Workspace"
-          >
-            <span className="nav-symbol">W</span>
-          </button>
-          <button
-            className={view === "settings" ? "nav-item active" : "nav-item"}
-            onClick={() => openSettings("skill")}
-            aria-label="设置"
-            title="设置"
-          >
-            <span className="nav-symbol">S</span>
-          </button>
-        </nav>
-      </aside>
-
       {view === "projects" ? (
-        <main className="projects-home">
-          <header className="projects-header">
-            <div>
-              <h1>gm-science</h1>
-              <p>Local personal research agent</p>
-            </div>
-            <div className="projects-actions">
-              <button className="secondary" onClick={() => void refreshProjects()}>
-                Refresh
-              </button>
-              <button className="primary" onClick={() => setProjectModalOpen(true)}>
-                + New project
-              </button>
-            </div>
-          </header>
-
-          <section className="projects-grid">
-            <div className="projects-list-panel">
-              <div className="section-title-row">
-                <h2>Projects</h2>
-                <span>{projects.length}</span>
+        <main className="science-dashboard">
+          <div className="dashboard-inner">
+            <header className="dashboard-header">
+              <div className="dashboard-brand">
+                <h1>gm-science</h1>
+                <span>Beta</span>
               </div>
-              <div className="project-list">
-                {projects.map((project) => (
-                  <button key={project.id} className="project-row" onClick={() => void openProject(project)}>
-                    <span className="project-name">{project.name}</span>
-                    <span className="project-meta">{project.sessionsCount} sessions</span>
-                    <span className="project-meta">{project.artifactsCount} artifacts</span>
-                    <time>{new Date(project.updatedAt).toLocaleDateString("zh-CN")}</time>
-                  </button>
-                ))}
-                {projects.length === 0 ? (
-                  <div className="project-empty">
-                    <strong>No projects yet</strong>
-                    <button className="primary" onClick={() => setProjectModalOpen(true)}>
-                      + New project
+              <div className="dashboard-actions">
+                <button className="icon-control" aria-label="Search" title="Search">
+                  <Search size={18} />
+                </button>
+                <button
+                  className="icon-control"
+                  aria-label="Settings"
+                  title="Settings"
+                  onClick={() => openSettings("general")}
+                >
+                  <UserRound size={18} />
+                </button>
+                <button className="command-button" onClick={() => setProjectModalOpen(true)}>
+                  <Plus size={17} />
+                  New project
+                </button>
+              </div>
+            </header>
+
+            <div className="dashboard-columns">
+              <section className="dashboard-section" aria-labelledby="projects-heading">
+                <div className="dashboard-section-title">
+                  <Folder size={18} />
+                  <h2 id="projects-heading">Projects</h2>
+                </div>
+                <div className="dashboard-list project-dashboard-list">
+                  {projects.map((project) => (
+                    <button key={project.id} className="dashboard-project-row" onClick={() => void openProject(project)}>
+                      <strong>{project.name}</strong>
+                      <span>{project.sessionsCount} {project.sessionsCount === 1 ? "session" : "sessions"}</span>
+                      <span>{project.artifactsCount} {project.artifactsCount === 1 ? "artifact" : "artifacts"}</span>
+                      <time>{formatRelativeTime(project.updatedAt)}</time>
                     </button>
-                  </div>
-                ) : null}
-              </div>
-            </div>
+                  ))}
+                  {projects.length === 0 ? (
+                    <div className="dashboard-empty">
+                      <strong>No projects yet</strong>
+                      <button className="command-button" onClick={() => setProjectModalOpen(true)}>
+                        <Plus size={17} />
+                        New project
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              </section>
 
-            <div className="recent-panel">
-              <div className="section-title-row">
-                <h2>Recent sessions</h2>
-                <span>{recentSessions.length}</span>
-              </div>
-              <div className="recent-list">
-                {recentSessions.slice(0, 5).map((session) => (
-                  <button
-                    key={session.id}
-                    className="recent-row"
-                    onClick={() => {
-                      const project = projects.find((item) => item.id === session.projectId);
-                      if (project) {
-                        void openProject(project).then(() => void switchSession(session));
-                      }
-                    }}
-                  >
-                    <strong>{session.title}</strong>
-                    <time>{new Date(session.updatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</time>
-                  </button>
-                ))}
-              </div>
+              <section className="dashboard-section" aria-labelledby="recent-heading">
+                <div className="dashboard-section-title">
+                  <Clock3 size={18} />
+                  <h2 id="recent-heading">Recent sessions</h2>
+                </div>
+                <div className="dashboard-list recent-dashboard-list">
+                  {recentSessions.slice(0, 8).map((session) => (
+                    <button
+                      key={session.id}
+                      className="dashboard-session-row"
+                      onClick={() => {
+                        const project = projects.find((item) => item.id === session.projectId);
+                        if (project) {
+                          void openProject(project).then(() => void switchSession(session));
+                        }
+                      }}
+                    >
+                      <span className="session-status-dot" aria-hidden="true" />
+                      <span>
+                        <strong>{session.title}</strong>
+                        <small>{projects.find((item) => item.id === session.projectId)?.name}</small>
+                      </span>
+                      <time>{formatRelativeTime(session.updatedAt)}</time>
+                    </button>
+                  ))}
+                  {recentSessions.length === 0 ? <div className="dashboard-empty quiet">No recent sessions</div> : null}
+                </div>
+              </section>
             </div>
-          </section>
+          </div>
         </main>
       ) : null}
 
       {view === "workspace" && selectedProject ? (
-        <>
-          <section className="sidebar-shell">
-            <aside className="sidebar science-sidebar">
-              <button className="project-back" onClick={() => setView("projects")}>
-                ← Projects
+        <main className={`science-project-shell${filesOpen ? " files-visible" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+          <aside className="project-sidebar">
+            <header className="project-sidebar-header">
+              <button className="icon-control" onClick={() => setView("projects")} aria-label="Back to dashboard" title="Back to dashboard">
+                <ArrowLeft size={18} />
               </button>
-              <div className="active-project-block">
-                <strong>{selectedProject.name}</strong>
-                <p>{selectedProject.description || "Personal research workspace"}</p>
-                <button className="project-customize" onClick={() => openSettings("skill")}>
-                  Customize
-                </button>
-              </div>
-              <div className="sidebar-section">
-                <div className="sidebar-section-header">
-                  <span>Sessions</span>
-                  <button className="secondary small" onClick={() => void handleNewSession()}>
-                    New
-                  </button>
-                </div>
-                <div className="list-stack">
-                  {projectSessions.map((session) => (
-                    <button
-                      key={session.id}
-                      className={session.id === selectedSessionId ? "list-item active" : "list-item"}
-                      onClick={() => void switchSession(session)}
-                    >
-                      <div>
-                        <strong>{session.title}</strong>
-                      </div>
-                      <time>{new Date(session.updatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</time>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </aside>
-          </section>
-
-          <section className="workspace-shell">
-            <header className="column-topbar workspace-topbar">
-              <div className="topbar-copy">
-                <strong>{selectedSession?.title ?? selectedProject.name}</strong>
-                <span>{selectedAgent?.name ?? "science-research"}</span>
-              </div>
-              <button className="topbar-pill" onClick={() => openSettings("runtime")}>
-                <span className={`runtime-dot ${runtime.state}`} />
-                {runtime.state}
+              {!sidebarCollapsed ? <strong>{selectedProject.name}</strong> : null}
+              <button
+                className="icon-control sidebar-collapse"
+                onClick={() => setSidebarCollapsed((current) => !current)}
+                aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              >
+                {sidebarCollapsed ? <Menu size={18} /> : <PanelLeftClose size={18} />}
               </button>
             </header>
-            <main className="workspace-frame chat-workspace">
-              <section className="message-stream" ref={messageStreamRef}>
+
+            {!sidebarCollapsed ? (
+              <>
+                <nav className="project-primary-nav" aria-label="Sessions">
+                  <button onClick={() => void handleNewSession()}>
+                    <Plus size={18} />
+                    New
+                  </button>
+                  <button onClick={() => openSettings("skill")}>
+                    <Box size={18} />
+                    Customize
+                  </button>
+                  <button
+                    className={filesOpen ? "active" : ""}
+                    onClick={() => {
+                      setWorkspacePanel("files");
+                      setFilesOpen((current) => !current);
+                    }}
+                  >
+                    <FileText size={18} />
+                    Files
+                  </button>
+                </nav>
+
+                <div className="sidebar-divider" />
+                <div className="session-groups">
+                  <span className="session-group-label">Recent</span>
+                  <div className="session-list">
+                    {projectSessions.map((session) => (
+                      <button
+                        key={session.id}
+                        className={session.id === selectedSessionId ? "session-row active" : "session-row"}
+                        onClick={() => void switchSession(session)}
+                      >
+                        <strong>{session.title}</strong>
+                        <time>{formatRelativeTime(session.updatedAt)}</time>
+                      </button>
+                    ))}
+                    {projectSessions.length === 0 ? <span className="session-empty">No sessions yet</span> : null}
+                  </div>
+                </div>
+                <button className="sidebar-settings" onClick={() => openSettings("general")}>
+                  <SettingsIcon size={18} />
+                  Settings
+                  <span className={`runtime-dot ${runtime.state}`} aria-label={`Runtime ${runtime.state}`} />
+                </button>
+              </>
+            ) : null}
+          </aside>
+
+          <section className="project-main">
+            <header className="project-tabbar">
+              <div className="open-tabs" role="tablist" aria-label="Open workspace tabs">
+                <button className="open-tab active" role="tab" aria-selected="true">
+                  {selectedSession?.title ?? "New session"}
+                </button>
+                <button
+                  className={filesOpen ? "open-tab active" : "open-tab"}
+                  role="tab"
+                  aria-selected={filesOpen}
+                  onClick={() => setFilesOpen((current) => !current)}
+                >
+                  <FileText size={16} />
+                  Files
+                </button>
+              </div>
+              <button
+                className="icon-control"
+                aria-label="Toggle Files pane"
+                title="Toggle Files pane"
+                onClick={() => setFilesOpen((current) => !current)}
+              >
+                {filesOpen ? <PanelRightClose size={18} /> : <Columns2 size={18} />}
+              </button>
+            </header>
+
+            <div className="conversation-surface">
+              <section className="message-stream" ref={messageStreamRef} aria-label="Conversation">
                 {messages.length ? (
                   messages.map((message, index) => {
                     const previous = messages[index - 1];
@@ -1154,13 +1547,14 @@ export function App() {
                     return <MessageBubble key={message.id} message={message} showIdentity={!compactAgentHeader} />;
                   })
                 ) : (
-                  <div className="empty-state">
+                  <div className="conversation-empty">
                     <h3>{selectedProject.name} is ready</h3>
                     <p>{selectedProject.agentContext || "Start with a research question, paper, dataset, or protocol."}</p>
                   </div>
                 )}
               </section>
-              <div className="composer-shell">
+
+              <div className="science-composer">
                 {selectedResources.length ? (
                   <div className="composer-resources" aria-label="Selected Project files">
                     <span>{selectedResources.length === 1 ? "1 file selected" : `${selectedResources.length} files selected`}</span>
@@ -1172,11 +1566,9 @@ export function App() {
                             type="button"
                             aria-label={`Remove ${resource.displayName}`}
                             title={`Remove ${resource.displayName}`}
-                            onClick={() =>
-                              setSelectedResources((current) => current.filter((item) => item.id !== resource.id))
-                            }
+                            onClick={() => setSelectedResources((current) => current.filter((item) => item.id !== resource.id))}
                           >
-                            ×
+                            <X size={13} />
                           </button>
                         </span>
                       ))}
@@ -1186,240 +1578,301 @@ export function App() {
                 <textarea
                   ref={composerRef}
                   value={composer}
-                  placeholder="向本地 agent 发送任务..."
+                  placeholder="Ask anything..."
+                  aria-label="Message"
                   onChange={(event) => setComposer(event.target.value)}
                   onKeyDown={handleComposerKeyDown}
                 />
-                <div className="composer-actions">
-                  {sendError ? <span className="composer-error">{sendError}</span> : <span />}
-                  <button className={canSend ? "send-button ready" : "send-button"} disabled={!canSend} onClick={() => void handleSend()}>
-                    {selectedAgentBusy ? "运行中" : "发送"}
-                  </button>
+                <div className="science-composer-actions">
+                  <div>
+                    <button className="icon-control" aria-label="Add to message" title="Add to message" onClick={() => setFilesOpen(true)}>
+                      <Plus size={18} />
+                    </button>
+                    <div className="session-options-anchor" ref={sessionOptionsRef}>
+                      <button
+                        className={sessionPolicyActive ? "icon-control policy-active" : "icon-control"}
+                        aria-label="Session options"
+                        aria-haspopup="menu"
+                        aria-expanded={sessionOptionsOpen}
+                        title="Session options"
+                        disabled={!selectedSessionId}
+                        onClick={() => {
+                          const nextOpen = !sessionOptionsOpen;
+                          setSessionOptionsOpen(nextOpen);
+                          if (nextOpen && selectedSessionId) {
+                            void refreshSessionPolicy(selectedSessionId);
+                          }
+                        }}
+                      >
+                        <SlidersHorizontal size={18} />
+                        {sessionPolicyActive ? <span className="policy-active-dot" aria-hidden="true" /> : null}
+                      </button>
+                      {sessionOptionsOpen ? (
+                        <SessionOptionsMenu
+                          policy={sessionPolicy}
+                          loading={sessionPolicyLoading}
+                          saving={sessionPolicySaving}
+                          error={sessionPolicyError}
+                          onChange={(input) => void updateSessionPolicy(input)}
+                        />
+                      ) : null}
+                    </div>
+                  </div>
+                  {sendError ? <span className="composer-error">{sendError}</span> : null}
+                  <div>
+                    <button className="model-button" onClick={() => openSettings("general")}>
+                      {selectedAgent?.model || "Model unavailable"}
+                      <ChevronDown size={14} />
+                    </button>
+                    <button
+                      className={canSend ? "send-button ready" : "send-button"}
+                      disabled={!canSend}
+                      onClick={() => void handleSend()}
+                      aria-label="Send"
+                      title="Send"
+                    >
+                      {selectedAgentBusy ? <RefreshCw className="spin" size={18} /> : <Send size={18} />}
+                    </button>
+                  </div>
                 </div>
               </div>
-            </main>
+            </div>
           </section>
 
-          <aside className="artifacts-shell">
-            <header className="artifacts-header">
-              <div className="workspace-panel-tabs" role="tablist" aria-label="Project workspace panel">
-                <button
-                  className={workspacePanel === "files" ? "active" : ""}
-                  role="tab"
-                  aria-selected={workspacePanel === "files"}
-                  onClick={() => setWorkspacePanel("files")}
-                >
-                  Files
+          {filesOpen ? (
+            <aside className={activeResource ? "project-files-pane inspector-active" : "project-files-pane"} aria-label="Files">
+              <header className="files-pane-header">
+                <div className="workspace-panel-tabs" role="tablist" aria-label="Project workspace panel">
+                  <button className={workspacePanel === "files" ? "active" : ""} role="tab" aria-selected={workspacePanel === "files"} onClick={() => setWorkspacePanel("files")}>Artifacts</button>
+                  <button className={workspacePanel === "data" ? "active" : ""} role="tab" aria-selected={workspacePanel === "data"} onClick={() => setWorkspacePanel("data")}>Data</button>
+                  <button className={workspacePanel === "runs" ? "active" : ""} role="tab" aria-selected={workspacePanel === "runs"} onClick={() => setWorkspacePanel("runs")}>Runs</button>
+                </div>
+                <button className="icon-control" onClick={() => setFilesOpen(false)} aria-label="Close Files" title="Close Files">
+                  <X size={18} />
                 </button>
-                <button
-                  className={workspacePanel === "data" ? "active" : ""}
-                  role="tab"
-                  aria-selected={workspacePanel === "data"}
-                  onClick={() => setWorkspacePanel("data")}
-                >
-                  Data
-                </button>
-                <button
-                  className={workspacePanel === "runs" ? "active" : ""}
-                  role="tab"
-                  aria-selected={workspacePanel === "runs"}
-                  onClick={() => setWorkspacePanel("runs")}
-                >
-                  Runs
-                </button>
-              </div>
-              <span>{workspacePanel === "files" ? resources.length : workspacePanel === "runs" ? runs.length : ""}</span>
-            </header>
-            {workspacePanel === "files" ? (
-              <>
-                <input
-                  className="artifact-search"
-                  value={resourceSearch}
-                  placeholder="Search files..."
-                  aria-label="Search files"
-                  onChange={(event) => setResourceSearch(event.target.value)}
+              </header>
+
+              {workspacePanel === "files" ? (
+                activeResource ? (
+                  <ArtifactInspector
+                    tabs={openResources}
+                    activeResourceId={activeResourceId}
+                    detail={activeResourceDetail}
+                    loading={resourceDetailLoading}
+                    error={resourceDetailError}
+                    actionError={resourceActionError}
+                    provenanceOpen={provenanceOpen}
+                    onBack={showArtifactCatalog}
+                    onSelectTab={(resource) => void openResource(resource)}
+                    onCloseTab={closeResourceTab}
+                    onRetry={() => void openResource(activeResource, true)}
+                    onViewInContext={() => void viewActiveResourceInContext()}
+                    onOpenProvenance={() => {
+                      setResourceActionError(null);
+                      setProvenanceOpen(true);
+                    }}
+                    onCloseProvenance={() => setProvenanceOpen(false)}
+                    onOpenRelation={openRelatedResource}
+                  />
+                ) : (
+                  <>
+                    <div className="files-source-row">
+                      <button className="source-button"><Library size={17} />All artifacts<ChevronDown size={14} /></button>
+                      <span>{resources.length} {resources.length === 1 ? "artifact" : "artifacts"}</span>
+                      <button className="icon-control" aria-label="Grid view" title="Grid view"><LayoutGrid size={17} /></button>
+                    </div>
+                    <label className="files-search">
+                      <Search size={17} />
+                      <input value={resourceSearch} placeholder="Search artifacts..." aria-label="Search files" onChange={(event) => setResourceSearch(event.target.value)} />
+                    </label>
+                    <div className="artifact-list">
+                      {visibleResources.map((resource) => (
+                        <ResourceItem
+                          key={resource.id}
+                          resource={resource}
+                          selected={selectedResourceIds.has(resource.id)}
+                          onOpen={(next) => void openResource(next)}
+                          onToggle={(next) => setSelectedResources((current) => current.some((item) => item.id === next.id) ? current.filter((item) => item.id !== next.id) : [...current, next])}
+                        />
+                      ))}
+                      {resources.length === 0 ? <div className="artifact-empty">No artifacts yet</div> : null}
+                      {resources.length > 0 && visibleResources.length === 0 ? <div className="artifact-empty">No matching artifacts</div> : null}
+                    </div>
+                  </>
+                )
+              ) : workspacePanel === "data" ? (
+                <DataPanel
+                  projectId={selectedProjectId}
+                  sessionId={selectedSessionId || undefined}
+                  onRunStarted={(run) => {
+                    runsRef.current = [run, ...runsRef.current.filter((item) => item.taskId !== run.taskId)];
+                    setRuns(runsRef.current);
+                  }}
+                  onWorkspaceChanged={async () => {
+                    await Promise.all([refreshResources(selectedProjectId), refreshRuns(selectedProjectId), refreshProjects()]);
+                  }}
                 />
-                <div className="artifact-list">
-                  {visibleResources.map((resource) => (
-                    <ResourceItem
-                      key={resource.id}
-                      resource={resource}
-                      selected={selectedResourceIds.has(resource.id)}
-                      onToggle={(next) =>
-                        setSelectedResources((current) =>
-                          current.some((item) => item.id === next.id)
-                            ? current.filter((item) => item.id !== next.id)
-                            : [...current, next],
-                        )
-                      }
-                    />
-                  ))}
-                  {resources.length === 0 ? <div className="artifact-empty">No files yet</div> : null}
-                  {resources.length > 0 && visibleResources.length === 0 ? (
-                    <div className="artifact-empty">No matching files</div>
-                  ) : null}
-                </div>
-              </>
-            ) : workspacePanel === "data" ? (
-              <DataPanel
-                projectId={selectedProjectId}
-                sessionId={selectedSessionId || undefined}
-                onRunStarted={(run) => {
-                  runsRef.current = [run, ...runsRef.current.filter((item) => item.taskId !== run.taskId)];
-                  setRuns(runsRef.current);
-                }}
-                onWorkspaceChanged={async () => {
-                  await Promise.all([refreshResources(selectedProjectId), refreshRuns(selectedProjectId), refreshProjects()]);
-                }}
-              />
-            ) : (
-              <>
-                <div className="science-runs-toolbar">
-                  <span>{runs.some(isActiveRun) ? "Execution in progress" : "Local Python"}</span>
-                  <button className="secondary small" onClick={openPythonRunDialog} aria-label="New Python run">
-                    + New run
-                  </button>
-                </div>
-                <div className="science-run-list">
-                  {runError ? <p className="science-runs-error">{runError}</p> : null}
-                  {runs.map((run) => (
-                    <RunItem
-                      key={run.taskId}
-                      run={run}
-                      actionPending={runActionTaskId === run.taskId}
-                      onCancel={(item) => void cancelPythonRun(item)}
-                      onRetry={(item) => void retryPythonRun(item)}
-                    />
-                  ))}
-                  {runs.length === 0 ? <div className="artifact-empty">No runs yet</div> : null}
-                </div>
-              </>
-            )}
-          </aside>
-        </>
+              ) : (
+                <>
+                  <div className="science-runs-toolbar">
+                    <span>{runs.some(isActiveRun) ? "Execution in progress" : "Local Python"}</span>
+                    <button className="secondary small" onClick={openPythonRunDialog} aria-label="New Python run"><Plus size={15} />New run</button>
+                  </div>
+                  <div className="science-run-list">
+                    {runError ? <p className="science-runs-error">{runError}</p> : null}
+                    {runs.map((run) => <RunItem key={run.taskId} run={run} actionPending={runActionTaskId === run.taskId} onCancel={(item) => void cancelPythonRun(item)} onRetry={(item) => void retryPythonRun(item)} />)}
+                    {runs.length === 0 ? <div className="artifact-empty">No runs yet</div> : null}
+                  </div>
+                </>
+              )}
+            </aside>
+          ) : null}
+        </main>
       ) : null}
 
-      {view === "settings" ? (
-        <main className="settings-shell">
-          <header className="column-topbar workspace-topbar">
-            <div className="topbar-copy">
-              <strong>Settings</strong>
-              <span>{selectedProject?.name ?? "gm-science local runtime"}</span>
-            </div>
-          </header>
-          <section className="workspace-frame settings-frame">
-            <div className="settings-layout">
-              <aside className="settings-menu" aria-label="Settings sections">
-                <span className="settings-menu-label">Capabilities</span>
-                <button className={settingsSection === "skill" ? "active" : ""} onClick={() => setSettingsSection("skill")}>
-                  Skills
-                </button>
-                <button
-                  className={settingsSection === "connector" ? "active" : ""}
-                  onClick={() => setSettingsSection("connector")}
-                >
-                  Connectors
-                </button>
-                <button
-                  className={settingsSection === "specialist" ? "active" : ""}
-                  onClick={() => setSettingsSection("specialist")}
-                >
-                  Specialists
-                </button>
-                <span className="settings-menu-label workspace-label">Workspace</span>
-                <button className={settingsSection === "runtime" ? "active" : ""} onClick={() => setSettingsSection("runtime")}>
-                  Runtime
-                </button>
-              </aside>
+      {settingsOpen ? (
+        <div className="settings-backdrop" role="presentation">
+          <section className="science-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+            <aside className="settings-sidebar">
+              <span className="settings-nav-label">Capabilities</span>
+              <button className={settingsSection === "skill" ? "active" : ""} onClick={() => setSettingsSection("skill")}><BookOpen size={18} />Skills</button>
+              <button className={settingsSection === "connector" ? "active" : ""} onClick={() => setSettingsSection("connector")}><LayoutGrid size={18} />Connectors</button>
+              <button className={settingsSection === "specialist" ? "active" : ""} onClick={() => setSettingsSection("specialist")}><UsersRound size={18} />Specialists</button>
+              <button className={settingsSection === "memory" ? "active" : ""} onClick={() => setSettingsSection("memory")}><Brain size={18} />Memory</button>
+              <button className={settingsSection === "compute" ? "active" : ""} onClick={() => setSettingsSection("compute")}><Cpu size={18} />Compute</button>
+              <button className={settingsSection === "network" ? "active" : ""} onClick={() => setSettingsSection("network")}><Network size={18} />Network</button>
+              <span className="settings-nav-label workspace-label">Workspace</span>
+              <button className={settingsSection === "permissions" ? "active" : ""} onClick={() => setSettingsSection("permissions")}><ShieldCheck size={18} />Permissions</button>
+              <button className={settingsSection === "credentials" ? "active" : ""} onClick={() => setSettingsSection("credentials")}><KeyRound size={18} />Credentials</button>
+              <button className={settingsSection === "storage" ? "active" : ""} onClick={() => setSettingsSection("storage")}><Cloud size={18} />Storage</button>
+              <button className={settingsSection === "usage" ? "active" : ""} onClick={() => setSettingsSection("usage")}><LayoutGrid size={18} />Usage</button>
+              <button className={settingsSection === "general" ? "active" : ""} onClick={() => setSettingsSection("general")}><SettingsIcon size={18} />General</button>
+            </aside>
 
-              <div className="settings-content">
-                {settingsSection !== "runtime" ? (
+            <div className="settings-main">
+              <header className="settings-dialog-header">
+                <h2 id="settings-title">{SETTINGS_SECTION_TITLES[settingsSection]}</h2>
+                <button className="icon-control" onClick={() => setSettingsOpen(false)} aria-label="Close Settings" title="Close Settings"><X size={20} /></button>
+              </header>
+
+              <div className="settings-dialog-content">
+                {isCapabilitySection(settingsSection) ? (
                   <CapabilitiesPanel
                     kind={settingsSection}
-                    projectName={selectedProject?.name ?? ""}
                     items={capabilities}
                     loading={capabilitiesLoading}
                     saving={capabilitiesSaving}
-                    dirty={capabilitiesDirty}
                     error={capabilitiesError}
-                    onToggle={toggleCapability}
-                    onSave={() => void saveCapabilities()}
+                    onToggle={(capabilityId) => void toggleCapability(capabilityId)}
                     onRefresh={() => void refreshCapabilities()}
                   />
-                ) : (
-                  <div className="settings-page runtime-settings-page">
+                ) : null}
+
+                {settingsSection === "memory" ? (
+                  <MemorySettingsPanel
+                    projectId={selectedProjectId}
+                    projectName={selectedProject?.name ?? ""}
+                    settings={scienceSettings}
+                    settingsLoading={scienceSettingsLoading}
+                    settingsSaving={scienceSettingsSaving}
+                    settingsError={settingsError}
+                    onSetGlobalEnabled={(enabled) => updateScienceSettings({ memoryEnabled: enabled })}
+                  />
+                ) : null}
+
+                {settingsSection === "compute" ? (
+                  <div className="settings-page science-settings-page">
+                    <div className="settings-page-title"><div><h3>Compute</h3><p>Choose where scientific workloads run.</p></div></div>
                     {settingsError ? <p className="composer-error">{settingsError}</p> : null}
-                    <section className="settings-card runtime-panel">
-                      <h2>Runtime</h2>
-                      <p>{runtime.summary}</p>
-                      <small>{runtime.detail}</small>
-                      <div className="runtime-actions">
-                        <button className="secondary" onClick={() => void handleRuntimeAction()}>
-                          {runtimeActionLabel(runtime.state)}
-                        </button>
-                        <button className="secondary" onClick={() => void refreshDiagnostics()}>
-                          Refresh
-                        </button>
+                    <section className="settings-section-block settings-row-section">
+                      <div><h4>Local computer</h4><p>{runtime.summary}</p><small>{runtime.detail}</small></div>
+                      <span className={`status-chip ${runtime.state}`}>{runtime.state}</span>
+                    </section>
+                    <section className="settings-section-block settings-row-section">
+                      <div><h4>SSH hosts</h4><p>Remote servers and clusters.</p></div>
+                      <span className="muted-value">Not configured</span>
+                    </section>
+                    <section className="settings-section-block settings-row-section">
+                      <div><h4>Cloud providers</h4><p>Modal and remote GPU providers.</p></div>
+                      <span className="muted-value">Not configured</span>
+                    </section>
+                    <div className="settings-actions-row">
+                      <button className="secondary" onClick={() => void handleRuntimeAction()}>{runtimeActionLabel(runtime.state)}</button>
+                      <button className="secondary" onClick={() => void refreshDiagnostics()}><RefreshCw size={15} />Refresh</button>
+                      {selectedProject ? <button className="secondary" onClick={() => { setSettingsOpen(false); setFilesOpen(true); setWorkspacePanel("runs"); }}><Play size={15} />Open runs</button> : null}
+                    </div>
+                  </div>
+                ) : null}
+
+                {settingsSection === "network" ? (
+                  <div className="settings-page science-settings-page">
+                    <div className="settings-page-title"><div><h3>Network</h3><p>Research services currently exposed through configured connectors.</p></div></div>
+                    <section className="settings-section-block">
+                      <h4>Research data sources</h4>
+                      <div className="service-list">
+                        {capabilities.filter((item) => item.kind === "connector").map((item) => (
+                          <div className="service-row" key={item.id}><span><Database size={17} /><strong>{item.name}</strong></span><span className={`status-chip ${item.status}`}>{item.status.replaceAll("_", " ")}</span></div>
+                        ))}
+                        {capabilities.every((item) => item.kind !== "connector") ? <p>No connectors discovered.</p> : null}
                       </div>
                     </section>
-
-                    <section className="settings-card">
-                      <h2>Connection</h2>
-                      <label className="settings-field">
-                        <span>Target type</span>
-                        <select
-                          value={connectionForm.targetType}
-                          onChange={(event) =>
-                            setConnectionForm((current) => ({
-                              ...current,
-                              targetType: event.target.value === "remote" ? "remote" : "local",
-                            }))
-                          }
-                        >
-                          <option value="local">local</option>
-                          <option value="remote">remote</option>
-                        </select>
-                      </label>
-                      <label className="settings-field">
-                        <span>Target name</span>
-                        <input
-                          value={connectionForm.targetName}
-                          onChange={(event) =>
-                            setConnectionForm((current) => ({ ...current, targetName: event.target.value }))
-                          }
-                        />
-                      </label>
-                      <label className="settings-field">
-                        <span>Client API URL</span>
-                        <input
-                          value={connectionForm.clientApiBaseUrl}
-                          onChange={(event) =>
-                            setConnectionForm((current) => ({ ...current, clientApiBaseUrl: event.target.value }))
-                          }
-                        />
-                      </label>
-                      <button className="primary" disabled={savingConnection} onClick={() => void handleConnectionSave()}>
-                        {savingConnection ? "Saving..." : "Save connection"}
-                      </button>
-                    </section>
-
-                    {diagnostics ? (
-                      <section className="settings-card">
-                        <h2>Diagnostics</h2>
-                        <dl className="diagnostics-list">
-                          <div><dt>Mode</dt><dd>{diagnostics.mode}</dd></div>
-                          <div><dt>Target</dt><dd>{diagnostics.target.name} ({diagnostics.target.type})</dd></div>
-                          <div><dt>Client API</dt><dd>{diagnostics.clientApiBaseUrl}</dd></div>
-                          <div><dt>Data config</dt><dd>{diagnostics.globalConfigPath}</dd></div>
-                        </dl>
-                      </section>
-                    ) : null}
+                    <section className="settings-section-block settings-row-section"><div><h4>Package mirrors</h4><p>Conda and Python mirrors use the host environment.</p></div><span className="muted-value">System default</span></section>
                   </div>
-                )}
+                ) : null}
+
+                {settingsSection === "permissions" ? (
+                  <div className="settings-page science-settings-page">
+                    <div className="settings-page-title"><div><h3>Permissions</h3><p>Control persistent agent and capability changes.</p></div></div>
+                    <div className="settings-notice"><ShieldCheck size={19} /><div><strong>Trusted local mode</strong><p>gm-science currently runs on your computer without a sandbox or per-action grant registry.</p></div></div>
+                    <section className="settings-section-block"><h4>Registry writes</h4><div className="permission-list">{["Update project capabilities", "Create project sessions", "Create local artifacts", "Run local analyses"].map((label) => <div key={label}><span>{label}</span><span className="status-chip">Local</span></div>)}</div></section>
+                  </div>
+                ) : null}
+
+                {settingsSection === "credentials" ? (
+                  <CredentialsSettingsPanel
+                    settings={scienceSettings}
+                    loading={scienceSettingsLoading}
+                    saving={scienceSettingsSaving}
+                    error={settingsError}
+                    onUpdate={updateScienceSettings}
+                  />
+                ) : null}
+
+                {settingsSection === "storage" ? (
+                  <div className="settings-page science-settings-page">
+                    <div className="settings-page-title"><div><h3>Storage</h3><p>Local locations used for projects, files, and history.</p></div></div>
+                    <section className="settings-section-block settings-row-section"><div><h4>Data location</h4><p className="path-value">{diagnostics?.globalConfigPath || "Local gm-science configuration"}</p></div><HardDrive size={20} /></section>
+                    <section className="settings-section-block"><h4>Workspace data</h4><div className="storage-grid"><span><Folder size={18} />Projects<strong>{projects.length}</strong></span><span><MessageSquarePlus size={18} />Sessions<strong>{sessions.length}</strong></span><span><FileText size={18} />Artifacts<strong>{resources.length}</strong></span><span><Play size={18} />Runs<strong>{runs.length}</strong></span></div></section>
+                    <section className="settings-section-block settings-row-section"><div><h4>Cloud storage</h4><p>Browse and manage bucket connections.</p></div><span className="muted-value">Not configured</span></section>
+                  </div>
+                ) : null}
+
+                {settingsSection === "usage" ? (
+                  <div className="settings-page science-settings-page">
+                    <div className="settings-page-title"><div><h3>Usage</h3><p>Runtime and model usage for this local workspace.</p></div></div>
+                    <section className="settings-section-block"><h4>Where tokens go</h4><p>Detailed token accounting is not yet reported by the configured provider adapter.</p><div className="usage-placeholder"><Zap size={24} /><span>No usage data available</span></div></section>
+                  </div>
+                ) : null}
+
+                {settingsSection === "general" ? (
+                  <GeneralSettingsPanel
+                    settings={scienceSettings}
+                    loading={scienceSettingsLoading}
+                    saving={scienceSettingsSaving}
+                    error={settingsError}
+                    runtime={runtime}
+                    diagnostics={diagnostics}
+                    connectionForm={connectionForm}
+                    savingConnection={savingConnection}
+                    onUpdateModel={(model) => updateScienceSettings({ model })}
+                    onConnectionFormChange={setConnectionForm}
+                    onSaveConnection={handleConnectionSave}
+                  />
+                ) : null}
               </div>
             </div>
           </section>
-        </main>
+        </div>
       ) : null}
 
       {projectModalOpen ? (

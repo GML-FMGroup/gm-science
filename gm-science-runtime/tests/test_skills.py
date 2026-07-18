@@ -7,8 +7,9 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from openppx.tooling.skills_adapter import SkillRegistry, list_skills, read_skill
+from openppx.tooling.skills_adapter import SkillRegistry, get_registry, list_skills, read_skill
 
 
 class SkillRegistryTests(unittest.TestCase):
@@ -140,6 +141,91 @@ class SkillRegistryTests(unittest.TestCase):
             "xlsx",
         }
         self.assertTrue(expected.issubset(names))
+
+    def test_allowlists_filter_builtins_and_keep_only_selected_workspace_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            builtin_dir = root / "builtins"
+            workspace = root / "agent"
+            for parent, name in (
+                (builtin_dir, "literature-review"),
+                (builtin_dir, "docx"),
+                (workspace / "skills", "personal-analysis"),
+                (workspace / "skills", "personal-hidden"),
+            ):
+                skill_dir = parent / name
+                skill_dir.mkdir(parents=True, exist_ok=True)
+                (skill_dir / "SKILL.md").write_text(
+                    f"---\nname: {name}\ndescription: {name}\n---\n\n# {name}\n",
+                    encoding="utf-8",
+                )
+
+            registry = SkillRegistry(
+                agent_home=workspace,
+                builtin_skills_dir=builtin_dir,
+                builtin_skill_allowlist={"literature-review"},
+                skill_allowlist={"literature-review", "personal-analysis"},
+            )
+
+            self.assertEqual(
+                {item.name for item in registry.list_skills()},
+                {"literature-review", "personal-analysis"},
+            )
+
+    def test_gm_science_registry_enforces_product_and_project_skill_boundaries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            builtin_dir = root / "builtins"
+            workspace = root / "agent"
+            for parent, name in (
+                (builtin_dir, "literature-review"),
+                (builtin_dir, "docx"),
+                (workspace / "skills", "personal-analysis"),
+            ):
+                skill_dir = parent / name
+                skill_dir.mkdir(parents=True, exist_ok=True)
+                (skill_dir / "SKILL.md").write_text(
+                    f"---\nname: {name}\ndescription: {name}\n---\n\n# {name}\n",
+                    encoding="utf-8",
+                )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "GM_SCIENCE_MODE": "1",
+                    "GM_SCIENCE_ENABLED_SKILLS_JSON": json.dumps(
+                        ["literature-review", "personal-analysis"]
+                    ),
+                    "OPENPPX_AGENT_HOME": str(workspace),
+                    "OPENPPX_BUILTIN_SKILLS_DIR": str(builtin_dir),
+                },
+                clear=False,
+            ):
+                names = {item.name for item in get_registry().list_skills()}
+
+            self.assertEqual(names, {"literature-review", "personal-analysis"})
+
+    def test_gm_science_registry_distinguishes_explicit_empty_project_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            builtin_dir = Path(tmp) / "builtins"
+            skill_dir = builtin_dir / "literature-review"
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\nname: literature-review\ndescription: review\n---\n",
+                encoding="utf-8",
+            )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "GM_SCIENCE_MODE": "1",
+                    "GM_SCIENCE_ENABLED_SKILLS_JSON": "[]",
+                    "OPENPPX_AGENT_HOME": str(Path(tmp) / "agent"),
+                    "OPENPPX_BUILTIN_SKILLS_DIR": str(builtin_dir),
+                },
+                clear=False,
+            ):
+                self.assertEqual(get_registry().list_skills(), [])
 
     def test_default_user_global_skills_use_openppx_dir_not_codex_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

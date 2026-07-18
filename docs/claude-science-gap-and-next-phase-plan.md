@@ -64,9 +64,9 @@ gm-science 当前设计和实现已经正确吸收了以下产品结构：
 采用两套口径：
 
 - **已有路线完成度**：Phase 1 到 Phase 7C 的基础闭环约完成 96%。
-- **科研工作台语义完成度**：按 Claude Science 的核心产品结构估算，目前约完成 60%。
+- **科研工作台语义完成度**：按 Claude Science 的核心产品结构估算，目前约完成 82%。
 
-第二个口径较低，主要因为动态能力注册、统一 Files、会话级调度、Memory 和治理层尚未完成，而不是因为已有科研流程不可用。
+第二个口径仍低于已有路线完成度，主要因为 Permissions、Network、多 Compute Target 和能力安装/编辑尚未完成，而不是因为已有科研流程不可用。可审阅 Memory、Credentials、Session Policy 和只读 Artifact inspection 已完成第一版。
 
 ### 2.4 2026-07-18 Specialist 实机补充结论
 
@@ -105,7 +105,7 @@ gm-science 当前设计和实现已经正确吸收了以下产品结构：
 | P0 | 动态能力注册 | gm-science catalog 硬编码少量能力 | 从 openppx 动态发现并投影 Skill、MCP Connector 和 Specialist |
 | P0 | 统一 Files 与引用 | Artifacts、Data、Runs 分离，Composer 只有纯文本 | 统一资源浏览，并使用结构化引用进入消息上下文 |
 | P0 | 会话级调度 | 主要依赖 Project 默认值和主控自动判断 | Session 可选择 Delegation、Specialist、Memory、Compute 和 Review Policy |
-| P1 | Memory 产品层 | openppx 有底座，gm-science 无可见管理界面 | 用户和 Project 记忆可查看、编辑、禁用和追溯 |
+| P1 | Memory 产品层 | 第一版完成：User/Project scope、人工 note、候选审批、召回审计 | 后续补充分类治理、批量导入导出和更强检索，不建立第二套 Memory |
 | P1 | 凭据与审批 | 主要依赖配置文件 | 敏感凭据加密保存，连接器和注册表写操作可审批 |
 | P1 | Compute Target | 已有本地 Python TaskRun | 将执行目标与 TaskRun 状态机分离，先支持 Local |
 | P2 | Network 管理 | 文献源配置存在，无统一界面 | 配置镜像、CA 和连接器域名策略，沙箱级强制后置 |
@@ -346,7 +346,7 @@ TaskRun
   - Review Policy 选择。
 - Project 保存默认策略，新 Session 复制默认值；后续修改 Session 时不反向修改 Project。
 - 主控 agent 根据显式 Session Policy 和请求意图进行调度。
-- 支持显式“Request review”，将当前结果或选定 Artifact 交给 Reviewer。
+- Session Policy 支持 Auto-review；用户要求评审指定 Artifact 时，通过普通会话显式引用该 Artifact 交给 Reviewer，不新增独立 `Request review` 操作。
 - Specialist 接收结构化任务包：目标、输入引用、约束和期望输出 schema。
 - 将主控、Specialist 和 Reviewer 的事件统一投影到现有运行流，不创建新的会话事实源。
 - 明确自动调度和用户显式选择冲突时，以用户选择优先。
@@ -356,7 +356,7 @@ TaskRun
 - 关闭 Delegation 后不会启动 Specialist。
 - 显式选择 Specialist 后可观察其开始、结束、失败和输出 Artifact。
 - Session 选择只影响当前 Session。
-- Request review 可审查指定 Artifact，并保存 critique provenance。
+- Auto-review 开启时可观察 Reviewer 产物；普通会话显式评审继续保存 critique provenance。
 - Specialist 不能使用未分配或未附加的 Skill/Connector。
 
 #### 测试
@@ -365,7 +365,7 @@ TaskRun
 - 调度优先级和 capability enforcement 测试。
 - Specialist 失败、取消和重试测试。
 - 主控到 Specialist 的结构化上下文测试。
-- Reviewer 显式触发的真实桌面验收。
+- Reviewer Auto-review 和普通会话显式评审的真实桌面验收。
 
 ### Phase 8D：可审阅 Memory
 
@@ -408,10 +408,12 @@ TaskRun
 
 Credentials：
 
-- 非敏感配置继续保存在统一配置文件。
-- secret 使用系统安全存储或加密 vault，配置中只保存 credential reference。
-- 支持 OpenAI、GitHub、OpenAlex、云计算服务和自定义 API key 元数据。
-- UI 只显示已配置状态、用途和更新时间，不回显完整 secret。
+- 配置统一保存在本机私有配置文件中，由后端校验并以原子方式写入，文件权限限制为当前用户读写。
+- UI 只显示配置状态和安全的来源分类；secret 只允许替换或显式删除，不从后端回传，也不进入 renderer 持久化状态。
+- 第一版支持 OpenAI Codex、OpenAI API、Google Gemini、Anthropic、Custom OpenAI-compatible、vLLM、PubMed 和 OpenAlex。
+- OpenAI Codex OAuth Token 继续使用 provider 自身的 OAuth cache，不复制到 gm-science 配置。
+- 当前单用户本机产品不引入第二套 vault。未来进入多用户、云端同步或企业托管时，再评估系统密钥链或加密 vault。
+- 所有人工注册、登录、授权和 API Key 准备要求集中维护在 `manual-registration-and-credentials.md`。
 
 Permissions：
 
@@ -428,7 +430,7 @@ Network：
 
 #### 验收标准
 
-- 配置文件和日志中不出现明文 secret。
+- 公共 API、renderer 状态、日志和 diagnostics 中不出现 secret；secret 只存在于权限受限的本机配置或 provider OAuth cache。
 - 未授权的 registry write 和 credential use 会生成明确审批请求。
 - Project 授权不能自动升级为 Global 授权。
 - Connector 的 skip approvals 状态可见、可撤销。
@@ -495,7 +497,7 @@ Usage：
 
 General：
 
-- 默认模型、reasoning effort、subagent model 和 provider route。
+- 默认模型和 provider route 已完成；reasoning effort 与 subagent model 待后续迭代。
 - Skill license/use intent。
 - UI 语言、主题、更新和 diagnostics。
 - 设置写回统一配置，并通过 runtime reload 或明确重启生效。
@@ -580,6 +582,47 @@ Phase 8A.3 于 2026-07-18 实施：
 
 实机补充验证还表明，Claude Science 支持对 Specialist 已分配 Connector 的内部工具继续做启用/禁用。Phase 8A.3 当前只实现 Connector 级白名单；工具级白名单需要先扩展 openppx MCP registry 的稳定工具描述和过滤契约，再进入 Specialist 编辑 UI，不能由前端维护第二份工具名清单。
 
+### 7.4 Phase 8C.1 实施状态
+
+Phase 8C 的会话策略核心于 2026-07-18 完成第一版：
+
+- Project 保存 `session_policy_defaults`，每个新 Session 在关联 Project 时复制独立快照；修改 Session 不会反向修改 Project，也不会影响同一 Project 的其他 Session。
+- Session Policy 当前包含 Delegation、Auto-review、Memory、Specialist、Reviewer model 和 Compute。首版只提供真实可用的 `Reviewer model=Default` 与 `Compute=Local`，没有展示不可执行的远程候选项。
+- client-api 提供 Session-scoped GET/PATCH 契约，并按当前 Project 的 Specialist attachment 和 readiness 校验 Paper Reader、Research Reviewer 等候选项。无效或已失效的选择会在运行前失败，不会静默回退。
+- Composer 的 Session options 已改为与 Claude Science 同类的轻量菜单，不再错误跳转到全局 Specialists 设置。开关和候选项通过 Electron IPC、preload 和 typed adapter 写入当前 Session。
+- worker 在导入 ADK root agent 前接收并校验 Session Policy。Delegation 只开放自动委派候选；显式 Specialist 是用户直接路由，优先于 Delegation 开关。
+- Memory 开关直接控制 Google ADK `PreloadMemoryTool` 是否进入该 Session 的 root tools。此处只完成读取入口控制，不等同于可审阅 Memory 产品层。
+- Auto-review 开关控制现有 host-side Research Reviewer gate。关闭时不再隐式评审；开启时 Reviewer 的 critique 继续使用已有 Artifact/provenance 机制。
+- 主控提示词只描述本 Session 实际可用的委派、Memory 和 Review 行为，Project 未启用或策略未选择的 Specialist 不会被提示词暗示为可用。
+
+验证结果：
+
+- 完整后端回归通过 `1308 passed, 111 skipped, 15 subtests passed`。
+- 完整桌面回归通过 `89 passed`，TypeScript 检查与 renderer/Electron 生产构建通过。
+- 使用隔离数据目录完成真实 client-api 验收：Project 默认 `memory=true` 被新 Session 继承；更新 Delegation、Auto-review、Memory 和 Paper Reader 后，重启 client-api 再读取仍保持一致。
+- 使用隔离数据目录完成真实 Electron 视觉与交互验收：菜单稳定附着在 Composer 上方，不遮挡消息输入和模型选择；Delegation、Auto-review、Memory 可独立切换，Specialist 只展示当前 Project 中真实可用的 `Paper Reader`。关闭并重新打开菜单后，所有选择保持一致。
+
+Phase 8C 尚未全部完成。以下内容继续保留为后续小迭代：Reviewer 独立模型候选、Specialist 生命周期的专用可视化与失败重试，以及 Project 默认策略编辑 UI。Claude Science 实机不存在独立 `Request review` 操作，因此不再把该按钮或额外状态模型列为缺口。
+
+### 7.5 Phase 8D 实施状态
+
+Phase 8D 的可审阅 Memory 核心于 2026-07-19 完成第一版：
+
+- Google ADK `SQLiteMemoryService` 继续作为唯一长期记忆存储和召回底座；批准 note 与候选生命周期共用同一个 `memory.db`。
+- 产品层区分 User Memory 和当前 Project Memory。worker 为当前 Project 合并两个 scope 的召回结果，其他 Project 的 note 不可见。
+- gm-science 禁用继承的自动会话事实提取。模型只能通过 ADK 原生 `science_propose_memory` 工具提出候选，候选在用户批准前不进入召回集合。
+- Memory 设置页支持全局开关、User/Project scope、人工添加、编辑、删除、清理、候选批准/拒绝、来源和召回次数。Session Memory 开关与全局开关取逻辑与；关闭不会删除已有 note。
+- 批准候选保留来源 Session、模型、理由和候选 ID；每次召回记录使用次数与 Session，从而可定位回答使用过的 note。
+- Electron IPC、preload、typed adapter、mock 和 client-api 使用同一 Project-scoped 契约；包含冒号的稳定领域 ID 由客户端 URL 编码、服务端逐段解码。
+
+验证结果：
+
+- 完整后端回归通过 `1328 passed, 111 skipped, 15 subtests passed`。
+- 完整桌面回归通过 `96 passed`，TypeScript 检查与 renderer/Electron 生产构建通过。
+- 隔离数据目录验收确认：全局开关和 note 重启保持；Project A note 不会出现在 Project B；真实模型提出候选后，批准前不可召回，批准后新 Session 准确召回指定标记。
+- 真实 Electron 验收完成 User note 新增/编辑、Project candidate 拒绝、来源与召回次数展示；最小宽度窗口中的列表和编辑器无重叠或不可达操作。
+- 实测发现并修复 TaskRun 状态在输出 Artifact 提升前暴露 `completed` 的竞态；现在任何对外可见的终态都先完成产物注册。
+
 ## 8. 测试与验收策略
 
 每个阶段至少覆盖以下层次：
@@ -618,7 +661,7 @@ Phase 8A.3 于 2026-07-18 实施：
 
 | 风险 | 表现 | 控制方式 |
 | --- | --- | --- |
-| 继续堆科研功能 | 工具越来越多，注册和权限仍是硬编码 | Phase 8A 到 8C 完成前限制新增专业工具 |
+| 继续堆科研功能 | 工具越来越多，注册和权限仍不完整 | Permissions、Network 和 Compute 治理完成前限制新增专业工具 |
 | 过度统一 schema | Skill、Connector、Specialist 失去各自语义 | 只共享公共 header，保留 kind-specific detail |
 | runtime 分裂 | gm-science 建立第二套 registry 或 Run 状态 | openppx registry/TaskRun/Memory 是唯一事实源 |
 | UI 先于后端 | 页面看起来完整但没有真实状态 | 只展示有 client-api 契约和测试的操作 |
@@ -650,10 +693,10 @@ Phase 8A.3 于 2026-07-18 实施：
 | 本地执行与数据分析 | 第一版完成 |
 | 动态能力注册与组合 | Skill、MCP Connector 和配置驱动 Specialist 第一版完成；安装/编辑与治理待后续阶段 |
 | 统一 Files 与上下文引用 | 统一目录、搜索、Files 选择和 ADK 原生结构化资源上下文完成；内容预览、Composer 命令和附加目录待后续迭代 |
-| 会话级调度控制 | 部分完成 |
-| 可审阅 Memory | 底座存在，产品层未完成 |
-| Credentials / Permissions / Network | 未形成产品闭环 |
+| 会话级调度控制 | Session Policy、继承、ADK Specialist 路由、Memory 读取门控和 Auto-review 第一版完成；Reviewer 模型候选与专用生命周期 UI 待完成 |
+| 可审阅 Memory | User/Project note、候选审批、全局/Session 开关、来源和召回审计第一版完成；批量导入导出与更强检索待后续阶段 |
+| Credentials / Permissions / Network | Credentials 第一版完成，包含模型、PubMed、OpenAlex、安全投影和独立注册说明；Permissions 与 Network 待完成 |
 | 多 Compute Target | 仅完成 Local Run 基础 |
 | 专业科研生态 | 等框架冻结后扩展 |
 
-近期目标不是把科研工具数量做大，而是先完成前三个 P0 项，使以后新增一个 Skill、Connector 或 Specialist 不再需要修改多个硬编码清单和专用 UI。
+近期目标不是把科研工具数量做大，而是基于已经完成的前三个 P0 项，补齐 Permissions、Network 和 Compute Target 治理，使以后安装或修改一个 Skill、Connector 或 Specialist 时具备明确的授权、连接和执行位置合同。

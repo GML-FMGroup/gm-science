@@ -71,6 +71,41 @@ class PromptLayeringTests(unittest.TestCase):
         self.assertLess(text.index("You are openppx"), text.index("# Runtime Context"))
         self.assertLess(text.index("# Runtime Context"), text.index("Available skills:"))
 
+    def test_gm_science_policy_owns_identity_and_scientific_contract(self) -> None:
+        with patch.dict(os.environ, {"GM_SCIENCE_MODE": "1"}, clear=False):
+            text = build_static_policy_instruction()
+
+        self.assertIn("You are gm-science", text)
+        self.assertIn("local personal scientific research agent", text)
+        self.assertIn("Do not fabricate citations", text)
+        self.assertIn("explicit user approval", text)
+        self.assertNotIn("You are openppx", text)
+        self.assertNotIn("message_image", text)
+        self.assertNotIn("cron", text)
+        self.assertNotIn("start_gui_task", text)
+
+    def test_gm_science_startup_context_uses_scientific_routing_without_gui(self) -> None:
+        registry = Mock()
+        registry.build_summary.return_value = "- literature-review: cited synthesis"
+        with patch("openppx.gm_science.prompt.get_registry", return_value=registry):
+            with patch.dict(
+                os.environ,
+                {
+                    "GM_SCIENCE_MODE": "1",
+                    "OPENPPX_WORKSPACE": "science-workspace",
+                },
+                clear=False,
+            ):
+                text = build_startup_runtime_context()
+
+        self.assertIn("# gm-science Runtime Context", text)
+        self.assertIn("science_search", text)
+        self.assertIn("science_plan_data_analysis", text)
+        self.assertIn("- literature-review: cited synthesis", text)
+        self.assertNotIn("start_gui_task", text)
+        self.assertNotIn("computer_use", text)
+        self.assertNotIn("desktop_gui", text)
+
     def test_root_agent_uses_adk_static_instruction_for_stable_policy(self) -> None:
         from openppx import agent
 

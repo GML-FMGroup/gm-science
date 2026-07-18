@@ -89,6 +89,50 @@ def test_project_session_association_counts_and_rejects_cross_project_relink(tmp
         )
 
 
+def test_project_session_copies_defaults_and_updates_only_its_policy(tmp_path: Path) -> None:
+    store = GmScienceStore(tmp_path)
+    project = store.create_project(
+        name="Policy project",
+        description="",
+        agent_context="",
+        session_policy_defaults={
+            "delegation_enabled": True,
+            "auto_review_enabled": False,
+            "memory_enabled": True,
+            "specialist_id": "",
+            "reviewer_model": "default",
+            "compute_target": "local",
+        },
+    )
+
+    first = store.link_project_session(
+        project_id=project.id,
+        session_id="session-1",
+        agent_id="science-research",
+    )
+    updated = store.update_project_session_policy(
+        first.session_id,
+        {**first.policy, "delegation_enabled": False, "specialist_id": "paper_reader"},
+    )
+    changed_project = store.update_project_session_policy_defaults(
+        project.id,
+        {**project.session_policy_defaults, "auto_review_enabled": True},
+    )
+    second = store.link_project_session(
+        project_id=project.id,
+        session_id="session-2",
+        agent_id="science-research",
+    )
+
+    assert first.policy["delegation_enabled"] is True
+    assert updated.policy["delegation_enabled"] is False
+    assert updated.policy["specialist_id"] == "paper_reader"
+    assert store.get_project_session(first.session_id) == updated
+    assert changed_project.session_policy_defaults["auto_review_enabled"] is True
+    assert second.policy["auto_review_enabled"] is True
+    assert store.get_project_session(first.session_id).policy["auto_review_enabled"] is False
+
+
 def test_create_and_list_project_artifacts_round_trips_metadata(tmp_path: Path) -> None:
     store = GmScienceStore(tmp_path)
     project = store.create_project(

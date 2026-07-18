@@ -134,6 +134,31 @@ describe("gm-science local adapter helpers", () => {
     });
   });
 
+  it("projects explicit new-Session defaults into the runtime contract", () => {
+    expect(
+      buildCreateGmScienceProjectPayload({
+        name: "Reviewed study",
+        sessionPolicyDefaults: {
+          delegationEnabled: true,
+          autoReviewEnabled: true,
+          memoryEnabled: false,
+          specialistId: "paper_reader",
+          reviewerModel: "default",
+          computeTarget: "local",
+        },
+      }),
+    ).toMatchObject({
+      session_policy_defaults: {
+        delegation_enabled: true,
+        auto_review_enabled: true,
+        memory_enabled: false,
+        specialist_id: "paper_reader",
+        reviewer_model: "default",
+        compute_target: "local",
+      },
+    });
+  });
+
   it("keeps the original agent run endpoint when no project id is present", () => {
     expect(
       buildClientApiRunPath({

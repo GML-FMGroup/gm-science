@@ -275,14 +275,15 @@ class ScienceExecutionService:
         task = self._synchronized_task(record.task_id)
         if task is None:
             raise RuntimeError(f"Task '{record.task_id}' was not found.")
-        if task.status in TASK_TERMINAL_STATUSES or task.status == "interrupted":
-            self._promote_artifacts(record, task.status)
-        else:
-            self._ensure_source_artifact(record)
         shown = self.controller.show_task(record.task_id)
         if not shown.get("ok"):
             raise RuntimeError(str(shown.get("error") or f"Task '{record.task_id}' was not found."))
         task_payload = dict(shown["task"])
+        shown_status = str(task_payload.get("status") or task.status)
+        if shown_status in TASK_TERMINAL_STATUSES or shown_status == "interrupted":
+            self._promote_artifacts(record, shown_status)
+        else:
+            self._ensure_source_artifact(record)
         artifacts = self._gm_artifacts_for_task(record.project_id, record.task_id)
         payload = {
             "task_id": record.task_id,

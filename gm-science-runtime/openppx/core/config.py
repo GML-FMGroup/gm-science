@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -789,13 +790,7 @@ def save_config(config: dict[str, Any], config_path: Path | None = None) -> Path
     legacy_env = config_to_write.pop("env", None)
     path.parent.mkdir(parents=True, exist_ok=True)
     normalized = normalize_config(config_to_write)
-    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
-    # Best effort: keep local secrets private on POSIX systems.
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
+    _write_private_json_atomically(path, normalized)
 
     # Backward compatibility: migrate legacy config.json `env` into runtime.json.
     if isinstance(legacy_env, dict):
@@ -816,13 +811,36 @@ def save_runtime_config(config: dict[str, Any], runtime_config_path: Path | None
     path = runtime_config_path or get_runtime_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     normalized = normalize_runtime_config(config)
-    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
+    _write_private_json_atomically(path, normalized)
     return path
+
+
+def _write_private_json_atomically(path: Path, payload: dict[str, Any]) -> None:
+    """Replace one private JSON file only after its complete content is durable."""
+
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            handle.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            temporary_path.chmod(0o600)
+        except OSError:
+            pass
+        os.replace(temporary_path, path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def _resolve_enabled_channels(channels: dict[str, Any]) -> str:

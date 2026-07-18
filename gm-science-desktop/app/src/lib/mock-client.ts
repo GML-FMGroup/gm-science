@@ -8,14 +8,24 @@ import type {
   CreateGmScienceArtifactInput,
   CreateGmSciencePythonRunInput,
   CreateGmScienceProjectInput,
+  CreateGmScienceMemoryNoteInput,
   GmScienceArtifact,
   GmScienceAnalysis,
   GmScienceCapability,
   GmScienceCapabilityCatalog,
   GmScienceProject,
   GmScienceResource,
+  GmScienceResourceDetail,
   GmScienceDataset,
   GmScienceRun,
+  GmScienceSessionPolicy,
+  GmScienceSessionPolicyValues,
+  GmScienceSettings,
+  GmScienceSettingsUpdateResult,
+  GmScienceMemoryCandidate,
+  GmScienceMemoryNote,
+  GmScienceMemoryScope,
+  GmScienceMemoryWorkspace,
   ImportGmScienceDatasetInput,
   MessagePart,
   RuntimeCommand,
@@ -24,11 +34,16 @@ import type {
   SendMessageInput,
   SessionSummary,
   UpdateGmScienceCapabilitiesInput,
+  UpdateGmScienceSessionPolicyInput,
+  UpdateGmScienceSettingsInput,
+  UpdateGmScienceMemoryNoteInput,
 } from "../types";
 
 interface StoreState {
   runtime: RuntimeStatus;
   agents: AgentProfile[];
+  settings: GmScienceSettings;
+  memoryByProject: Record<string, GmScienceMemoryWorkspace>;
   projects: GmScienceProject[];
   artifactsByProject: Record<string, GmScienceArtifact[]>;
   datasetsByProject: Record<string, GmScienceDataset[]>;
@@ -36,6 +51,7 @@ interface StoreState {
   runsByProject: Record<string, GmScienceRun[]>;
   sessionsByAgent: Record<string, SessionSummary[]>;
   messagesBySession: Record<string, ChatMessage[]>;
+  sessionPoliciesBySession: Record<string, GmScienceSessionPolicyValues>;
   selectedAgentId: string;
   selectedSessionId: string;
 }
@@ -56,16 +72,30 @@ function isGenericSessionTitle(title: string): boolean {
   const normalized = title.trim();
   return (
     !normalized ||
-    normalized === "New local session" ||
-    normalized === "New chat" ||
-    normalized === "新对话" ||
+    normalized === "New session" ||
     normalized.startsWith("Session ")
   );
 }
 
-const firstAgentId = "builder";
-const firstSessionId = "builder-session-1";
+const firstAgentId = "science-research";
+const firstSessionId = "science-research-session-1";
 const firstProjectId = "proj_mock_research";
+let memoryNoteSequence = 0;
+
+const DEFAULT_SESSION_POLICY: GmScienceSessionPolicyValues = {
+  delegationEnabled: false,
+  autoReviewEnabled: false,
+  memoryEnabled: false,
+  specialistId: "",
+  reviewerModel: "default",
+  computeTarget: "local",
+};
+
+function cloneSessionPolicyValues(
+  policy: Partial<GmScienceSessionPolicyValues> = {},
+): GmScienceSessionPolicyValues {
+  return { ...DEFAULT_SESSION_POLICY, ...policy };
+}
 
 const state: StoreState = {
   runtime: {
@@ -75,27 +105,61 @@ const state: StoreState = {
       name: "This Mac",
     },
     state: "healthy",
-    summary: "Local openppx runtime is ready.",
-    detail: "Renderer talks to Electron host API. Runtime adapter is local-only in v1.",
+    summary: "Local gm-science runtime is ready.",
+    detail: "The local personal research agent is ready.",
   },
   agents: [
     {
-      id: "builder",
-      name: "Builder",
-      description: "General local execution agent for planning and implementation.",
+      id: firstAgentId,
+      name: "gm-science",
+      description: "Local personal research agent.",
+      provider: "openai_codex",
+      model: "openai-codex/gpt-5.5",
       enabled: true,
       status: "healthy",
-      tags: ["default", "coding"],
-    },
-    {
-      id: "operator",
-      name: "Operator",
-      description: "Operational agent focused on diagnostics and orchestration.",
-      enabled: true,
-      status: "idle",
-      tags: ["ops", "runtime"],
+      tags: ["local", "science"],
     },
   ],
+  settings: {
+    model: { provider: "openai_codex", model: "openai-codex/gpt-5.5" },
+    memory: { enabled: true },
+    providers: [
+      { id: "openai_codex", name: "OpenAI Codex", defaultModel: "openai-codex/gpt-5.5", authType: "oauth", credentialRequired: true, credentialConfigured: true, credentialSource: "oauth_cache", active: true },
+      { id: "openai", name: "OpenAI", defaultModel: "openai/gpt-5.4", authType: "api_key", credentialRequired: true, credentialConfigured: false, credentialSource: "none", active: false },
+      { id: "google", name: "Google Gemini", defaultModel: "gemini-3-flash-preview", authType: "api_key", credentialRequired: true, credentialConfigured: false, credentialSource: "none", active: false },
+      { id: "anthropic", name: "Anthropic", defaultModel: "claude-3-7-sonnet", authType: "api_key", credentialRequired: true, credentialConfigured: false, credentialSource: "none", active: false },
+      { id: "custom", name: "Custom OpenAI-Compatible", defaultModel: "openai/gpt-5.4", authType: "optional_api_key", credentialRequired: false, credentialConfigured: false, credentialSource: "none", active: false },
+      { id: "vllm", name: "vLLM/Local", defaultModel: "meta-llama/Llama-3.1-8B-Instruct", authType: "optional_api_key", credentialRequired: false, credentialConfigured: false, credentialSource: "none", active: false },
+    ],
+    literature: {
+      arxiv: { status: "ready", statusDetail: "" },
+      pubmed: { email: "", apiKeyConfigured: false, status: "needs_configuration", statusDetail: "Add a PubMed contact email." },
+      openalex: { apiKeyConfigured: false, status: "needs_configuration", statusDetail: "Add an OpenAlex API key." },
+    },
+  },
+  memoryByProject: {
+    [firstProjectId]: {
+      projectId: firstProjectId,
+      notes: [],
+      candidates: [
+        {
+          id: "memory-candidate-1",
+          scope: "project",
+          category: "Project context",
+          text: "Use GRCh38 for genome references.",
+          rationale: "A durable convention stated for this Project.",
+          status: "pending",
+          projectId: firstProjectId,
+          sourceSessionId: firstSessionId,
+          model: "openai-codex/gpt-5.5",
+          approvedNoteId: "",
+          createdAt: now(),
+          reviewedAt: "",
+        },
+      ],
+      categories: ["Project context"],
+    },
+  },
   projects: [
     {
       id: firstProjectId,
@@ -108,6 +172,7 @@ const state: StoreState = {
       enabledSkills: ["literature-review"],
       enabledConnectors: ["arxiv", "pubmed", "openalex"],
       enabledSpecialists: ["paper_reader", "research_reviewer"],
+      sessionPolicyDefaults: cloneSessionPolicyValues(),
       createdAt: now(),
       updatedAt: now(),
     },
@@ -125,23 +190,14 @@ const state: StoreState = {
     [firstProjectId]: [],
   },
   sessionsByAgent: {
-    builder: [
+    [firstAgentId]: [
       {
         id: firstSessionId,
-        agentId: "builder",
+        agentId: firstAgentId,
         projectId: firstProjectId,
-        title: "Build the first ppx-client shell",
+        title: "Review recent literature",
         updatedAt: now(),
-        lastMessagePreview: "Start from a local-first Electron desktop shell.",
-      },
-    ],
-    operator: [
-      {
-        id: "operator-session-1",
-        agentId: "operator",
-        title: "Runtime diagnostics",
-        updatedAt: now(),
-        lastMessagePreview: "Local runtime is healthy and waiting.",
+        lastMessagePreview: "Find and compare the most relevant evidence.",
       },
     ],
   },
@@ -156,33 +212,21 @@ const state: StoreState = {
         parts: [
           {
             type: "markdown",
-            text: "### Ready for local mode\n\nChoose an agent, open a session, and send a task. This first version keeps the machine model but runs everything locally.",
+            text: "### Ready for research\n\nStart with a research question, paper, dataset, or protocol.",
           },
           {
             type: "step_ref",
             stepId: "boot-local",
-            title: "Local adapter online",
+            title: "Research workspace ready",
             status: "completed",
-            detail: "The initial client uses an Electron-hosted local adapter so the UI contract stays stable while the real runtime API is added.",
+            detail: "Project files, scientific sources, specialists, and reviewed analyses are available in this workspace.",
           },
         ],
       },
     ],
-    "operator-session-1": [
-      {
-        id: "msg-operator",
-        sessionId: "operator-session-1",
-        role: "assistant",
-        status: "completed",
-        createdAt: now(),
-        parts: [
-          {
-            type: "markdown",
-            text: "Runtime diagnostics are available here. The first version focuses on status, sessions, and chat.",
-          },
-        ],
-      },
-    ],
+  },
+  sessionPoliciesBySession: {
+    [firstSessionId]: cloneSessionPolicyValues(),
   },
   selectedAgentId: firstAgentId,
   selectedSessionId: firstSessionId,
@@ -269,7 +313,7 @@ export async function runRuntimeCommand(command: RuntimeCommand): Promise<Runtim
     state.runtime = {
       ...state.runtime,
       state: "healthy",
-      summary: "Local openppx runtime is running.",
+      summary: "Local gm-science runtime is running.",
       detail: "The local adapter is ready to serve sessions and message streams.",
       lastError: undefined,
     };
@@ -277,14 +321,14 @@ export async function runRuntimeCommand(command: RuntimeCommand): Promise<Runtim
     state.runtime = {
       ...state.runtime,
       state: "stopped",
-      summary: "Local openppx runtime is stopped.",
+      summary: "Local gm-science runtime is stopped.",
       detail: "Start it again from the runtime card to continue chatting.",
     };
   } else {
     state.runtime = {
       ...state.runtime,
       state: "healthy",
-      summary: "Local openppx runtime restarted.",
+      summary: "Local gm-science runtime restarted.",
       detail: "The runtime card restarted the local adapter successfully.",
       lastError: undefined,
     };
@@ -297,12 +341,14 @@ export async function createSession(agentId: string, projectId?: string): Promis
     id: `${agentId}-${crypto.randomUUID()}`,
     agentId,
     projectId,
-    title: "新对话",
+    title: "New session",
     updatedAt: now(),
     lastMessagePreview: "",
   };
   state.sessionsByAgent[agentId] = [session, ...(state.sessionsByAgent[agentId] ?? [])];
   state.messagesBySession[session.id] = [];
+  const project = state.projects.find((item) => item.id === projectId);
+  state.sessionPoliciesBySession[session.id] = cloneSessionPolicyValues(project?.sessionPolicyDefaults);
   state.selectedAgentId = agentId;
   state.selectedSessionId = session.id;
   if (projectId) {
@@ -365,6 +411,7 @@ export async function createGmScienceProject(
     enabledSkills: input.enabledSkills ?? ["literature-review"],
     enabledConnectors: input.enabledConnectors ?? ["arxiv", "pubmed", "openalex"],
     enabledSpecialists: input.enabledSpecialists ?? ["paper_reader", "research_reviewer"],
+    sessionPolicyDefaults: cloneSessionPolicyValues(input.sessionPolicyDefaults),
     createdAt: now(),
     updatedAt: now(),
   };
@@ -384,6 +431,52 @@ export async function getGmScienceProject(projectId: string): Promise<{ project:
   return { project: { ...project } };
 }
 
+function buildMockSessionPolicy(sessionId: string): GmScienceSessionPolicy {
+  const session = Object.values(state.sessionsByAgent).flat().find((item) => item.id === sessionId);
+  const project = state.projects.find((item) => item.id === session?.projectId);
+  const policy = state.sessionPoliciesBySession[sessionId];
+  if (!session || !project || !policy) {
+    throw new Error(`Session ${sessionId} is not attached to a Project.`);
+  }
+  const specialists = capabilityDefinitions
+    .filter((item) => item.kind === "specialist" && item.id !== "research_reviewer")
+    .filter((item) => project.enabledSpecialists.includes(item.id) && item.available && item.status === "ready")
+    .map((item) => ({ id: item.id, name: item.name, description: item.description, status: item.status }));
+  const reviewer = capabilityDefinitions.find((item) => item.id === "research_reviewer");
+  return {
+    sessionId,
+    projectId: project.id,
+    ...cloneSessionPolicyValues(policy),
+    specialists,
+    reviewerAvailable: Boolean(
+      reviewer && project.enabledSpecialists.includes(reviewer.id) && reviewer.available && reviewer.status === "ready",
+    ),
+    reviewerModels: [{ id: "default", name: "Default" }],
+    computeTargets: [{ id: "local", name: "Local" }],
+    issues: [],
+  };
+}
+
+export async function getGmScienceSessionPolicy(sessionId: string): Promise<GmScienceSessionPolicy> {
+  return buildMockSessionPolicy(sessionId);
+}
+
+export async function updateGmScienceSessionPolicy(
+  sessionId: string,
+  input: UpdateGmScienceSessionPolicyInput,
+): Promise<GmScienceSessionPolicy> {
+  const current = buildMockSessionPolicy(sessionId);
+  const next = cloneSessionPolicyValues({ ...current, ...input });
+  if (next.specialistId && !current.specialists.some((item) => item.id === next.specialistId)) {
+    throw new Error(`Specialist '${next.specialistId}' is not ready for this Project.`);
+  }
+  if (next.autoReviewEnabled && !current.reviewerAvailable) {
+    throw new Error("Research Reviewer is not ready for this Project.");
+  }
+  state.sessionPoliciesBySession[sessionId] = next;
+  return buildMockSessionPolicy(sessionId);
+}
+
 const capabilityDefinitions: Omit<GmScienceCapability, "projectEnabled">[] = [
   {
     id: "literature-review",
@@ -398,22 +491,32 @@ const capabilityDefinitions: Omit<GmScienceCapability, "projectEnabled">[] = [
     defaultEnabled: true,
     status: "ready",
     statusDetail: "",
-    metadata: { registry_source: "builtin", file_count: 1, files_truncated: false },
+    metadata: {
+      registry_source: "builtin",
+      catalog_group: "featured",
+      implementation_status: "installed",
+      file_count: 1,
+      files_truncated: false,
+    },
   },
   {
-    id: "docx",
+    id: "boltz",
     kind: "skill",
-    name: "DOCX",
-    description: "Create and edit Word documents.",
+    name: "Boltz",
+    description: "Predict biomolecular structures and interactions with Boltz.",
     source: "built_in",
     version: "",
-    license: "Proprietary",
-    files: ["LICENSE.txt", "SKILL.md"],
-    available: true,
+    license: "",
+    files: [],
+    available: false,
     defaultEnabled: false,
-    status: "ready",
-    statusDetail: "",
-    metadata: { registry_source: "builtin", file_count: 2, files_truncated: false },
+    status: "disabled",
+    statusDetail: "Not available in this gm-science build.",
+    metadata: {
+      registry_source: "product_catalog",
+      catalog_group: "featured",
+      implementation_status: "not_installed",
+    },
   },
   {
     id: "local-analysis",
@@ -428,14 +531,39 @@ const capabilityDefinitions: Omit<GmScienceCapability, "projectEnabled">[] = [
     defaultEnabled: false,
     status: "ready",
     statusDetail: "",
-    metadata: { registry_source: "workspace", file_count: 2, files_truncated: false },
+    metadata: {
+      registry_source: "workspace",
+      catalog_group: "personal",
+      implementation_status: "installed",
+      file_count: 2,
+      files_truncated: false,
+    },
+  },
+  {
+    id: "biomart",
+    kind: "connector",
+    name: "BioMart",
+    description: "Query federated biological datasets through BioMart.",
+    source: "built_in",
+    version: "",
+    license: "",
+    files: [],
+    available: false,
+    defaultEnabled: false,
+    status: "disabled",
+    statusDetail: "Not available in this gm-science build.",
+    metadata: {
+      registry_source: "product_catalog",
+      catalog_group: "featured",
+      implementation_status: "not_installed",
+    },
   },
   {
     id: "arxiv",
     kind: "connector",
     name: "arXiv",
     description: "Search open-access preprints across scientific and technical fields.",
-    source: "built_in",
+    source: "external",
     version: "",
     license: "",
     files: [],
@@ -443,14 +571,14 @@ const capabilityDefinitions: Omit<GmScienceCapability, "projectEnabled">[] = [
     defaultEnabled: true,
     status: "ready",
     statusDetail: "",
-    metadata: {},
+    metadata: { catalog_group: "native", implementation_status: "native" },
   },
   {
     id: "pubmed",
     kind: "connector",
     name: "PubMed",
     description: "Search biomedical literature indexed by the NCBI PubMed service.",
-    source: "built_in",
+    source: "external",
     version: "",
     license: "",
     files: [],
@@ -458,14 +586,14 @@ const capabilityDefinitions: Omit<GmScienceCapability, "projectEnabled">[] = [
     defaultEnabled: true,
     status: "needs_configuration",
     statusDetail: "Set science.literature.pubmed.email.",
-    metadata: {},
+    metadata: { catalog_group: "directory", implementation_status: "native" },
   },
   {
     id: "openalex",
     kind: "connector",
     name: "OpenAlex",
     description: "Search scholarly works and citation metadata from OpenAlex.",
-    source: "built_in",
+    source: "external",
     version: "",
     license: "",
     files: [],
@@ -473,7 +601,7 @@ const capabilityDefinitions: Omit<GmScienceCapability, "projectEnabled">[] = [
     defaultEnabled: true,
     status: "needs_configuration",
     statusDetail: "Set science.literature.openalex.apiKey.",
-    metadata: {},
+    metadata: { catalog_group: "native", implementation_status: "native" },
   },
   {
     id: "mcp:filesystem",
@@ -504,6 +632,7 @@ const capabilityDefinitions: Omit<GmScienceCapability, "projectEnabled">[] = [
       configured_env_names: ["FILESYSTEM_TOKEN", "WORKSPACE_ROOT"],
       configured_header_names: [],
       runtime_header_names: ["X-Project-Id"],
+      catalog_group: "custom",
     },
   },
   {
@@ -519,7 +648,7 @@ const capabilityDefinitions: Omit<GmScienceCapability, "projectEnabled">[] = [
     defaultEnabled: true,
     status: "ready",
     statusDetail: "",
-    metadata: { auto_dispatch: true, read_only: true },
+    metadata: { catalog_group: "built_in", auto_dispatch: true, read_only: true },
   },
   {
     id: "research_reviewer",
@@ -534,7 +663,7 @@ const capabilityDefinitions: Omit<GmScienceCapability, "projectEnabled">[] = [
     defaultEnabled: true,
     status: "ready",
     statusDetail: "",
-    metadata: { auto_dispatch: true, read_only: true },
+    metadata: { catalog_group: "built_in", auto_dispatch: true, read_only: true },
   },
   {
     id: "literature_scout",
@@ -551,6 +680,7 @@ const capabilityDefinitions: Omit<GmScienceCapability, "projectEnabled">[] = [
     statusDetail: "",
     metadata: {
       registry_source: "custom",
+      catalog_group: "custom",
       auto_dispatch: false,
       read_only: true,
       network_access: true,
@@ -587,6 +717,203 @@ export async function listGmScienceCapabilities(projectId?: string): Promise<GmS
       projectEnabled: project ? projectCapabilityIds(project, item.kind).includes(item.id) : null,
     })),
   };
+}
+
+function cloneSettings(): GmScienceSettings {
+  return structuredClone(state.settings);
+}
+
+export async function getGmScienceSettings(): Promise<GmScienceSettings> {
+  return cloneSettings();
+}
+
+function applyMockSecretMutation(
+  configured: boolean,
+  mutation: UpdateGmScienceSettingsInput["providerApiKey"],
+): boolean {
+  if (!mutation) {
+    return configured;
+  }
+  return mutation.operation === "replace";
+}
+
+export async function updateGmScienceSettings(
+  input: UpdateGmScienceSettingsInput,
+): Promise<GmScienceSettingsUpdateResult> {
+  if (input.memoryEnabled !== undefined) {
+    state.settings.memory.enabled = input.memoryEnabled;
+  }
+  if (input.model) {
+    const selected = state.settings.providers.find((provider) => provider.id === input.model?.provider);
+    if (!selected || !input.model.model.trim()) {
+      throw new Error("Unsupported provider or model.");
+    }
+    state.settings.model = { ...input.model, model: input.model.model.trim() };
+    state.settings.providers = state.settings.providers.map((provider) => ({
+      ...provider,
+      active: provider.id === input.model?.provider,
+    }));
+    state.agents = state.agents.map((agent) => ({
+      ...agent,
+      provider: input.model?.provider ?? agent.provider,
+      model: input.model?.model.trim() ?? agent.model,
+    }));
+  }
+
+  const activeProvider = state.settings.providers.find((provider) => provider.active);
+  if (activeProvider && input.providerApiKey) {
+    activeProvider.credentialConfigured = applyMockSecretMutation(
+      activeProvider.credentialConfigured,
+      input.providerApiKey,
+    );
+    activeProvider.credentialSource = activeProvider.credentialConfigured ? "local_config" : "none";
+  }
+  if (input.pubmedEmail !== undefined) {
+    state.settings.literature.pubmed.email = input.pubmedEmail.trim();
+  }
+  state.settings.literature.pubmed.apiKeyConfigured = applyMockSecretMutation(
+    state.settings.literature.pubmed.apiKeyConfigured,
+    input.pubmedApiKey,
+  );
+  state.settings.literature.openalex.apiKeyConfigured = applyMockSecretMutation(
+    state.settings.literature.openalex.apiKeyConfigured,
+    input.openalexApiKey,
+  );
+
+  const pubmedReady = Boolean(state.settings.literature.pubmed.email);
+  state.settings.literature.pubmed.status = pubmedReady ? "ready" : "needs_configuration";
+  state.settings.literature.pubmed.statusDetail = pubmedReady ? "" : "Add a PubMed contact email.";
+  const openalexReady = state.settings.literature.openalex.apiKeyConfigured;
+  state.settings.literature.openalex.status = openalexReady ? "ready" : "needs_configuration";
+  state.settings.literature.openalex.statusDetail = openalexReady ? "" : "Add an OpenAlex API key.";
+  for (const capability of capabilityDefinitions) {
+    if (capability.id === "pubmed") {
+      capability.status = state.settings.literature.pubmed.status;
+      capability.statusDetail = state.settings.literature.pubmed.statusDetail;
+    }
+    if (capability.id === "openalex") {
+      capability.status = state.settings.literature.openalex.status;
+      capability.statusDetail = state.settings.literature.openalex.statusDetail;
+    }
+  }
+
+  const capabilities = (await listGmScienceCapabilities(input.projectId)).items;
+  return {
+    settings: cloneSettings(),
+    agent: { ...state.agents[0] },
+    projectId: input.projectId ?? "",
+    capabilities,
+  };
+}
+
+function memoryWorkspace(projectId: string): GmScienceMemoryWorkspace {
+  if (!state.projects.some((project) => project.id === projectId)) {
+    throw new Error(`Project ${projectId} was not found.`);
+  }
+  state.memoryByProject[projectId] ??= {
+    projectId,
+    notes: [],
+    candidates: [],
+    categories: [],
+  };
+  return state.memoryByProject[projectId];
+}
+
+export async function getGmScienceMemory(projectId: string): Promise<GmScienceMemoryWorkspace> {
+  return structuredClone(memoryWorkspace(projectId));
+}
+
+export async function createGmScienceMemoryNote(
+  projectId: string,
+  input: CreateGmScienceMemoryNoteInput,
+): Promise<GmScienceMemoryNote> {
+  const workspace = memoryWorkspace(projectId);
+  const timestamp = now();
+  const note: GmScienceMemoryNote = {
+    id: `memory-note-${++memoryNoteSequence}`,
+    scope: input.scope,
+    category: input.category.trim(),
+    text: input.text.trim(),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    provenance: {
+      source: "manual",
+      projectId: input.scope === "project" ? projectId : "",
+      sessionId: "",
+      model: "",
+      candidateId: "",
+      rationale: "",
+    },
+    usage: { count: 0, sessionIds: [], lastUsedAtMs: 0 },
+  };
+  workspace.notes.unshift(note);
+  workspace.categories = [...new Set([...workspace.categories, note.category])].sort();
+  return structuredClone(note);
+}
+
+export async function updateGmScienceMemoryNote(
+  projectId: string,
+  noteId: string,
+  input: UpdateGmScienceMemoryNoteInput,
+): Promise<GmScienceMemoryNote> {
+  const workspace = memoryWorkspace(projectId);
+  const note = workspace.notes.find((item) => item.id === noteId);
+  if (!note) {
+    throw new Error("Memory note was not found in this Project.");
+  }
+  note.category = input.category.trim();
+  note.text = input.text.trim();
+  note.updatedAt = now();
+  workspace.categories = [...new Set([...workspace.categories, note.category])].sort();
+  return structuredClone(note);
+}
+
+export async function deleteGmScienceMemoryNote(projectId: string, noteId: string): Promise<void> {
+  const workspace = memoryWorkspace(projectId);
+  const before = workspace.notes.length;
+  workspace.notes = workspace.notes.filter((item) => item.id !== noteId);
+  if (workspace.notes.length === before) {
+    throw new Error("Memory note was not found in this Project.");
+  }
+}
+
+export async function clearGmScienceMemory(
+  projectId: string,
+  scope: GmScienceMemoryScope,
+): Promise<number> {
+  const workspace = memoryWorkspace(projectId);
+  const before = workspace.notes.length;
+  workspace.notes = workspace.notes.filter((item) => item.scope !== scope);
+  return before - workspace.notes.length;
+}
+
+export async function reviewGmScienceMemoryCandidate(
+  projectId: string,
+  candidateId: string,
+  decision: "approve" | "reject",
+): Promise<GmScienceMemoryCandidate> {
+  const workspace = memoryWorkspace(projectId);
+  const candidate = workspace.candidates.find((item) => item.id === candidateId);
+  if (!candidate || candidate.status !== "pending") {
+    throw new Error("Memory candidate is unavailable for review.");
+  }
+  candidate.status = decision === "approve" ? "approved" : "rejected";
+  candidate.reviewedAt = now();
+  if (decision === "approve") {
+    const note = await createGmScienceMemoryNote(projectId, {
+      scope: candidate.scope,
+      category: candidate.category,
+      text: candidate.text,
+    });
+    const storedNote = workspace.notes.find((item) => item.id === note.id)!;
+    storedNote.provenance.source = "candidate_review";
+    storedNote.provenance.candidateId = candidate.id;
+    storedNote.provenance.sessionId = candidate.sourceSessionId;
+    storedNote.provenance.model = candidate.model;
+    storedNote.provenance.rationale = candidate.rationale;
+    candidate.approvedNoteId = note.id;
+  }
+  return structuredClone(candidate);
 }
 
 export async function updateGmScienceProjectCapabilities(
@@ -635,7 +962,7 @@ export async function listGmScienceResources(
     source: "artifact",
     artifactId: artifact.id,
     relativePath: "",
-    url: /^https?:\/\//i.test(artifact.pathOrUrl) ? artifact.pathOrUrl : "",
+    url: safePublicUrl(artifact.pathOrUrl),
     sizeBytes: null,
     createdAt: artifact.createdAt,
     updatedAt: artifact.updatedAt,
@@ -649,6 +976,110 @@ export async function listGmScienceResources(
         )
       : resources,
   };
+}
+
+const SAFE_DETAIL_METADATA_KEYS = new Set([
+  "abstract",
+  "authors",
+  "canonical_id",
+  "citation_artifact_ids",
+  "dataset_artifact_id",
+  "dataset_artifact_ids",
+  "doi",
+  "evidence_scope",
+  "findings",
+  "paper_artifact_id",
+  "paper_artifact_ids",
+  "pmid",
+  "report_artifact_id",
+  "science_run_role",
+  "source_artifact_id",
+  "source_artifact_ids",
+  "status",
+  "summary",
+  "target_artifact_id",
+  "task_id",
+  "title",
+  "venue",
+  "year",
+]);
+const SAFE_DETAIL_PROVENANCE_KEYS = new Set([
+  "created_by",
+  "model",
+  "query",
+  "session_id",
+  "source_artifact_id",
+  "source_artifact_ids",
+  "sources",
+  "specialist_id",
+  "target_artifact_id",
+  "task_id",
+  "trigger",
+]);
+
+export async function getGmScienceResourceDetail(
+  projectId: string,
+  resourceId: string,
+): Promise<{ detail: GmScienceResourceDetail }> {
+  if (!state.projects.some((project) => project.id === projectId)) {
+    throw new Error(`Project ${projectId} was not found.`);
+  }
+  const resources = (await listGmScienceResources(projectId)).resources;
+  const resource = resources.find((item) => item.id === resourceId);
+  if (!resource) {
+    throw new Error(`Resource ${resourceId} was not found.`);
+  }
+  const artifact = (state.artifactsByProject[projectId] ?? []).find((item) => item.id === resource.artifactId);
+  const contentStatus = resource.accessMode === "external"
+    ? "external_descriptor_only"
+    : resource.accessMode === "metadata_only"
+      ? "metadata_descriptor_only"
+      : "binary_descriptor_only";
+  return {
+    detail: {
+      resource,
+      preview: {
+        content: "",
+        contentStatus,
+        contentIncluded: false,
+        contentChars: 0,
+        truncated: false,
+      },
+      artifact: artifact
+        ? {
+            id: artifact.id,
+            sessionId: artifact.sessionId,
+            type: artifact.type,
+            title: artifact.title,
+            mimeType: artifact.mimeType,
+            metadata: pickSafeDetailFields(artifact.metadata, SAFE_DETAIL_METADATA_KEYS),
+            provenance: pickSafeDetailFields(artifact.provenance, SAFE_DETAIL_PROVENANCE_KEYS),
+            createdAt: artifact.createdAt,
+            updatedAt: artifact.updatedAt,
+          }
+        : null,
+      relations: [],
+    },
+  };
+}
+
+function pickSafeDetailFields(
+  source: Record<string, unknown>,
+  allowedKeys: Set<string>,
+): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(source).filter(([key]) => allowedKeys.has(key)));
+}
+
+function safePublicUrl(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return "";
+    }
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+  } catch {
+    return "";
+  }
 }
 
 export async function createGmScienceArtifact(

@@ -8,10 +8,15 @@ import type {
   CreateGmScienceArtifactInput,
   CreateGmSciencePythonRunInput,
   CreateGmScienceProjectInput,
+  CreateGmScienceMemoryNoteInput,
   ImportGmScienceDatasetInput,
   RuntimeCommand,
   SendMessageInput,
   UpdateGmScienceCapabilitiesInput,
+  UpdateGmScienceSessionPolicyInput,
+  UpdateGmScienceSettingsInput,
+  UpdateGmScienceMemoryNoteInput,
+  GmScienceMemoryScope,
 } from "../../app/src/types";
 import { OpenPpxLocalAdapter } from "./openppx-local-adapter";
 
@@ -110,12 +115,58 @@ app.whenReady().then(() => {
     async (_event, projectId: string, input: UpdateGmScienceCapabilitiesInput) =>
       adapter!.updateGmScienceProjectCapabilities(projectId, input),
   );
+  ipcMain.handle("ppx-client:get-gm-science-settings", async () => adapter!.getGmScienceSettings());
+  ipcMain.handle(
+    "ppx-client:update-gm-science-settings",
+    async (_event, input: UpdateGmScienceSettingsInput) => adapter!.updateGmScienceSettings(input),
+  );
+  ipcMain.handle("ppx-client:get-gm-science-memory", async (_event, projectId: string) =>
+    adapter!.getGmScienceMemory(projectId),
+  );
+  ipcMain.handle(
+    "ppx-client:create-gm-science-memory-note",
+    async (_event, projectId: string, input: CreateGmScienceMemoryNoteInput) =>
+      adapter!.createGmScienceMemoryNote(projectId, input),
+  );
+  ipcMain.handle(
+    "ppx-client:update-gm-science-memory-note",
+    async (_event, projectId: string, noteId: string, input: UpdateGmScienceMemoryNoteInput) =>
+      adapter!.updateGmScienceMemoryNote(projectId, noteId, input),
+  );
+  ipcMain.handle(
+    "ppx-client:delete-gm-science-memory-note",
+    async (_event, projectId: string, noteId: string) =>
+      adapter!.deleteGmScienceMemoryNote(projectId, noteId),
+  );
+  ipcMain.handle(
+    "ppx-client:clear-gm-science-memory",
+    async (_event, projectId: string, scope: GmScienceMemoryScope) =>
+      adapter!.clearGmScienceMemory(projectId, scope),
+  );
+  ipcMain.handle(
+    "ppx-client:review-gm-science-memory-candidate",
+    async (_event, projectId: string, candidateId: string, decision: "approve" | "reject") =>
+      adapter!.reviewGmScienceMemoryCandidate(projectId, candidateId, decision),
+  );
+  ipcMain.handle("ppx-client:get-gm-science-session-policy", async (_event, sessionId: string) =>
+    adapter!.getGmScienceSessionPolicy(sessionId),
+  );
+  ipcMain.handle(
+    "ppx-client:update-gm-science-session-policy",
+    async (_event, sessionId: string, input: UpdateGmScienceSessionPolicyInput) =>
+      adapter!.updateGmScienceSessionPolicy(sessionId, input),
+  );
   ipcMain.handle("ppx-client:list-gm-science-artifacts", async (_event, projectId: string) =>
     adapter!.listGmScienceArtifacts(projectId),
   );
   ipcMain.handle(
     "ppx-client:list-gm-science-resources",
     async (_event, projectId: string, query?: string) => adapter!.listGmScienceResources(projectId, query),
+  );
+  ipcMain.handle(
+    "ppx-client:get-gm-science-resource-detail",
+    async (_event, projectId: string, resourceId: string) =>
+      adapter!.getGmScienceResourceDetail(projectId, resourceId),
   );
   ipcMain.handle(
     "ppx-client:create-gm-science-artifact",

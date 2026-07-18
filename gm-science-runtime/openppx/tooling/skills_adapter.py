@@ -7,7 +7,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Collection
 
 from loguru import logger
 
@@ -37,6 +37,8 @@ class SkillRegistry:
         workspace: Path | None = None,
         builtin_skills_dir: Path | None = None,
         agent_home: Path | None = None,
+        builtin_skill_allowlist: Collection[str] | None = None,
+        skill_allowlist: Collection[str] | None = None,
     ):
         root = agent_home or workspace or Path.cwd()
         self.agent_home = root.resolve()
@@ -51,6 +53,10 @@ class SkillRegistry:
             if openppx_builtin_dir.resolve() not in dirs:
                 dirs.append(openppx_builtin_dir.resolve())
             self.builtin_skills_dirs = dirs
+        self.builtin_skill_allowlist = _normalize_skill_allowlist(
+            builtin_skill_allowlist
+        )
+        self.skill_allowlist = _normalize_skill_allowlist(skill_allowlist)
 
     def list_skills(self) -> list[SkillInfo]:
         """List workspace + bundled skills, builtin taking precedence on name collisions."""
@@ -58,9 +64,13 @@ class SkillRegistry:
 
         for builtin_dir in self.builtin_skills_dirs:
             for info in self._scan(builtin_dir, source="builtin"):
+                if not self._skill_is_allowed(info):
+                    continue
                 discovered[info.name] = info
 
         for info in self._scan(self.workspace_skills_dir, source="workspace"):
+            if not self._skill_is_allowed(info):
+                continue
             if info.name in discovered:
                 # Workspace skills are not allowed to shadow bundled skills.
                 # Keep bundled behavior deterministic and ignore conflicting local copies.
@@ -89,6 +99,18 @@ class SkillRegistry:
                 ),
             )
         return items
+
+    def _skill_is_allowed(self, info: SkillInfo) -> bool:
+        """Return whether one discovered Skill passes configured boundaries."""
+
+        name = info.name.casefold()
+        if (
+            info.source == "builtin"
+            and self.builtin_skill_allowlist is not None
+            and info.path.parent.name.casefold() not in self.builtin_skill_allowlist
+        ):
+            return False
+        return self.skill_allowlist is None or name in self.skill_allowlist
 
     def read_skill(self, name: str) -> str:
         """Read full SKILL.md content by skill name."""
@@ -174,7 +196,25 @@ def get_registry() -> SkillRegistry:
     """Build registry from configured agent home or current directory."""
     builtin_env = os.getenv("OPENPPX_BUILTIN_SKILLS_DIR")
     builtin_skills_dir = Path(builtin_env).expanduser() if builtin_env else None
-    return SkillRegistry(agent_home=get_agent_home_dir(), builtin_skills_dir=builtin_skills_dir)
+    builtin_skill_allowlist: Collection[str] | None = None
+    skill_allowlist: Collection[str] | None = None
+    if env_enabled("GM_SCIENCE_MODE", default=False):
+        from ..gm_science.catalog import (
+            BUILTIN_SCIENCE_SKILL_IDS,
+            GM_SCIENCE_ENABLED_SKILLS_ENV,
+        )
+
+        builtin_skill_allowlist = BUILTIN_SCIENCE_SKILL_IDS
+        if GM_SCIENCE_ENABLED_SKILLS_ENV in os.environ:
+            skill_allowlist = _parse_skill_allowlist_json(
+                os.getenv(GM_SCIENCE_ENABLED_SKILLS_ENV, "[]")
+            )
+    return SkillRegistry(
+        agent_home=get_agent_home_dir(),
+        builtin_skills_dir=builtin_skills_dir,
+        builtin_skill_allowlist=builtin_skill_allowlist,
+        skill_allowlist=skill_allowlist,
+    )
 
 
 def list_skills() -> str:
@@ -223,6 +263,28 @@ def read_skill(name: str) -> str:
 
 def _xml_escape(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _normalize_skill_allowlist(
+    values: Collection[str] | None,
+) -> frozenset[str] | None:
+    """Normalize an optional Skill allowlist while preserving absent vs empty."""
+
+    if values is None:
+        return None
+    return frozenset(str(value).strip().casefold() for value in values if str(value).strip())
+
+
+def _parse_skill_allowlist_json(raw: str) -> frozenset[str]:
+    """Parse the trusted worker Skill selection and fail closed on invalid input."""
+
+    try:
+        values = json.loads(raw)
+    except (TypeError, ValueError):
+        return frozenset()
+    if not isinstance(values, list):
+        return frozenset()
+    return _normalize_skill_allowlist(values) or frozenset()
 
 
 def _debug_enabled() -> bool:

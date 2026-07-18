@@ -9,10 +9,21 @@ import type {
   GmScienceProject,
   GmScienceResource,
   GmScienceResourceAccessMode,
+  GmScienceArtifactRelationDirection,
+  GmScienceResourceContentStatus,
+  GmScienceResourceDetail,
   GmScienceResourceKind,
   GmScienceResourceSource,
   GmScienceRun,
   GmScienceRunStatus,
+  GmScienceSessionPolicy,
+  GmScienceSessionPolicyOption,
+  GmScienceSessionPolicySpecialist,
+  GmScienceSessionPolicyValues,
+  GmScienceSettings,
+  GmScienceMemoryCandidate,
+  GmScienceMemoryNote,
+  GmScienceMemoryWorkspace,
   MessagePart,
   MessageRole,
   MessageStatus,
@@ -209,6 +220,9 @@ export function normalizeGmScienceProject(payload: unknown): GmScienceProject | 
   if (!project) {
     return null;
   }
+  const sessionPolicyDefaults = normalizeSessionPolicyValues(
+    project.session_policy_defaults ?? project.sessionPolicyDefaults,
+  );
   return {
     id: asString(project.id),
     name: asString(project.name),
@@ -220,8 +234,70 @@ export function normalizeGmScienceProject(payload: unknown): GmScienceProject | 
     enabledSkills: asStringList(project.enabled_skills ?? project.enabledSkills),
     enabledConnectors: asStringList(project.enabled_connectors ?? project.enabledConnectors),
     enabledSpecialists: asStringList(project.enabled_specialists ?? project.enabledSpecialists),
+    sessionPolicyDefaults,
     createdAt: asString(project.created_at ?? project.createdAt, new Date().toISOString()),
     updatedAt: asString(project.updated_at ?? project.updatedAt, new Date().toISOString()),
+  };
+}
+
+function normalizeSessionPolicyValues(payload: unknown): GmScienceSessionPolicyValues {
+  const policy = asRecord(payload) ?? {};
+  return {
+    delegationEnabled: policy.delegation_enabled === true || policy.delegationEnabled === true,
+    autoReviewEnabled: policy.auto_review_enabled === true || policy.autoReviewEnabled === true,
+    memoryEnabled: policy.memory_enabled === true || policy.memoryEnabled === true,
+    specialistId: asString(policy.specialist_id ?? policy.specialistId),
+    reviewerModel: "default",
+    computeTarget: "local",
+  };
+}
+
+export function normalizeGmScienceSessionPolicy(payload: unknown): GmScienceSessionPolicy | null {
+  const policy = asRecord(payload);
+  if (!policy || !Array.isArray(policy.specialists) || !Array.isArray(policy.reviewer_models ?? policy.reviewerModels)
+      || !Array.isArray(policy.compute_targets ?? policy.computeTargets)) {
+    return null;
+  }
+  if ((policy.reviewer_model ?? policy.reviewerModel) !== "default"
+      || (policy.compute_target ?? policy.computeTarget) !== "local") {
+    return null;
+  }
+  const specialists = policy.specialists.map((item) => {
+    const specialist = asRecord(item);
+    const status = normalizeCapabilityStatus(specialist?.status);
+    if (!specialist || !status) {
+      return null;
+    }
+    return {
+      id: asString(specialist.id),
+      name: asString(specialist.name),
+      description: asString(specialist.description),
+      status,
+    };
+  });
+  const normalizeOptions = (items: unknown[]): GmScienceSessionPolicyOption[] | null => {
+    const options = items.map((item) => {
+      const option = asRecord(item);
+      return option ? { id: asString(option.id), name: asString(option.name) } : null;
+    });
+    return options.some((item) => item === null)
+      ? null
+      : options as GmScienceSessionPolicyOption[];
+  };
+  const reviewerModels = normalizeOptions((policy.reviewer_models ?? policy.reviewerModels) as unknown[]);
+  const computeTargets = normalizeOptions((policy.compute_targets ?? policy.computeTargets) as unknown[]);
+  if (specialists.some((item) => item === null) || !reviewerModels || !computeTargets) {
+    return null;
+  }
+  return {
+    sessionId: asString(policy.session_id ?? policy.sessionId),
+    projectId: asString(policy.project_id ?? policy.projectId),
+    ...normalizeSessionPolicyValues(policy),
+    specialists: specialists as GmScienceSessionPolicySpecialist[],
+    reviewerAvailable: policy.reviewer_available === true || policy.reviewerAvailable === true,
+    reviewerModels,
+    computeTargets,
+    issues: asStringList(policy.issues),
   };
 }
 
@@ -263,6 +339,173 @@ export function normalizeGmScienceCapability(payload: unknown): GmScienceCapabil
   };
 }
 
+const GM_SCIENCE_CAPABILITY_STATUSES = new Set(["ready", "needs_configuration", "disabled"] as const);
+const GM_SCIENCE_PROVIDER_AUTH_TYPES = new Set(["oauth", "api_key", "optional_api_key"] as const);
+const GM_SCIENCE_CREDENTIAL_SOURCES = new Set(["none", "local_config", "environment", "oauth_cache"] as const);
+
+function normalizeCapabilityStatus(value: unknown): GmScienceCapability["status"] | null {
+  const status = asString(value) as GmScienceCapability["status"];
+  return GM_SCIENCE_CAPABILITY_STATUSES.has(status) ? status : null;
+}
+
+export function normalizeGmScienceSettings(payload: unknown): GmScienceSettings | null {
+  const settings = asRecord(payload);
+  const model = asRecord(settings?.model);
+  const memory = asRecord(settings?.memory);
+  const literature = asRecord(settings?.literature);
+  const arxiv = asRecord(literature?.arxiv);
+  const pubmed = asRecord(literature?.pubmed);
+  const openalex = asRecord(literature?.openalex);
+  if (!settings || !model || !memory || !literature || !arxiv || !pubmed || !openalex || !Array.isArray(settings.providers)) {
+    return null;
+  }
+
+  const arxivStatus = normalizeCapabilityStatus(arxiv.status);
+  const pubmedStatus = normalizeCapabilityStatus(pubmed.status);
+  const openalexStatus = normalizeCapabilityStatus(openalex.status);
+  if (!arxivStatus || !pubmedStatus || !openalexStatus) {
+    return null;
+  }
+
+  const providers = settings.providers.map((item) => {
+    const provider = asRecord(item);
+    if (!provider) {
+      return null;
+    }
+    const authType = asString(provider.auth_type ?? provider.authType) as GmScienceSettings["providers"][number]["authType"];
+    const credentialSource = asString(
+      provider.credential_source ?? provider.credentialSource,
+    ) as GmScienceSettings["providers"][number]["credentialSource"];
+    if (!GM_SCIENCE_PROVIDER_AUTH_TYPES.has(authType) || !GM_SCIENCE_CREDENTIAL_SOURCES.has(credentialSource)) {
+      return null;
+    }
+    return {
+      id: asString(provider.id),
+      name: asString(provider.name),
+      defaultModel: asString(provider.default_model ?? provider.defaultModel),
+      authType,
+      credentialRequired: provider.credential_required === true || provider.credentialRequired === true,
+      credentialConfigured: provider.credential_configured === true || provider.credentialConfigured === true,
+      credentialSource,
+      active: provider.active === true,
+    };
+  });
+  if (providers.some((provider) => provider === null)) {
+    return null;
+  }
+
+  return {
+    model: {
+      provider: asString(model.provider),
+      model: asString(model.model),
+    },
+    memory: {
+      enabled: memory.enabled === true,
+    },
+    providers: providers as GmScienceSettings["providers"],
+    literature: {
+      arxiv: {
+        status: arxivStatus,
+        statusDetail: asString(arxiv.status_detail ?? arxiv.statusDetail),
+      },
+      pubmed: {
+        email: asString(pubmed.email),
+        apiKeyConfigured: pubmed.api_key_configured === true || pubmed.apiKeyConfigured === true,
+        status: pubmedStatus,
+        statusDetail: asString(pubmed.status_detail ?? pubmed.statusDetail),
+      },
+      openalex: {
+        apiKeyConfigured: openalex.api_key_configured === true || openalex.apiKeyConfigured === true,
+        status: openalexStatus,
+        statusDetail: asString(openalex.status_detail ?? openalex.statusDetail),
+      },
+    },
+  };
+}
+
+const GM_SCIENCE_MEMORY_SCOPES = new Set(["user", "project"] as const);
+const GM_SCIENCE_MEMORY_CANDIDATE_STATUSES = new Set(["pending", "approved", "rejected"] as const);
+
+export function normalizeGmScienceMemoryNote(payload: unknown): GmScienceMemoryNote | null {
+  const note = asRecord(payload);
+  const provenance = asRecord(note?.provenance);
+  const usage = asRecord(note?.usage);
+  const scope = asString(note?.scope) as GmScienceMemoryNote["scope"];
+  if (!note || !provenance || !usage || !GM_SCIENCE_MEMORY_SCOPES.has(scope)) {
+    return null;
+  }
+  const sessionIds = Array.isArray(usage.session_ids ?? usage.sessionIds)
+    ? (usage.session_ids ?? usage.sessionIds) as unknown[]
+    : [];
+  return {
+    id: asString(note.id),
+    scope,
+    category: asString(note.category),
+    text: asString(note.text),
+    createdAt: asString(note.created_at ?? note.createdAt),
+    updatedAt: asString(note.updated_at ?? note.updatedAt),
+    provenance: {
+      source: asString(provenance.source),
+      projectId: asString(provenance.project_id ?? provenance.projectId),
+      sessionId: asString(provenance.session_id ?? provenance.sessionId),
+      model: asString(provenance.model),
+      candidateId: asString(provenance.candidate_id ?? provenance.candidateId),
+      rationale: asString(provenance.rationale),
+    },
+    usage: {
+      count: asNumber(usage.count),
+      sessionIds: sessionIds.map((item) => asString(item)).filter(Boolean),
+      lastUsedAtMs: asNumber(usage.last_used_at_ms ?? usage.lastUsedAtMs),
+    },
+  };
+}
+
+export function normalizeGmScienceMemoryCandidate(payload: unknown): GmScienceMemoryCandidate | null {
+  const candidate = asRecord(payload);
+  const scope = asString(candidate?.scope) as GmScienceMemoryCandidate["scope"];
+  const status = asString(candidate?.status) as GmScienceMemoryCandidate["status"];
+  if (
+    !candidate
+    || !GM_SCIENCE_MEMORY_SCOPES.has(scope)
+    || !GM_SCIENCE_MEMORY_CANDIDATE_STATUSES.has(status)
+  ) {
+    return null;
+  }
+  return {
+    id: asString(candidate.id),
+    scope,
+    category: asString(candidate.category),
+    text: asString(candidate.text),
+    rationale: asString(candidate.rationale),
+    status,
+    projectId: asString(candidate.project_id ?? candidate.projectId),
+    sourceSessionId: asString(candidate.source_session_id ?? candidate.sourceSessionId),
+    model: asString(candidate.model),
+    approvedNoteId: asString(candidate.approved_note_id ?? candidate.approvedNoteId),
+    createdAt: asString(candidate.created_at ?? candidate.createdAt),
+    reviewedAt: asString(candidate.reviewed_at ?? candidate.reviewedAt),
+  };
+}
+
+export function normalizeGmScienceMemoryWorkspace(payload: unknown): GmScienceMemoryWorkspace | null {
+  const workspace = asRecord(payload);
+  if (!workspace || !Array.isArray(workspace.notes) || !Array.isArray(workspace.candidates)) {
+    return null;
+  }
+  const notes = workspace.notes.map(normalizeGmScienceMemoryNote);
+  const candidates = workspace.candidates.map(normalizeGmScienceMemoryCandidate);
+  if (notes.some((item) => item === null) || candidates.some((item) => item === null)) {
+    return null;
+  }
+  const categories = Array.isArray(workspace.categories) ? workspace.categories : [];
+  return {
+    projectId: asString(workspace.project_id ?? workspace.projectId),
+    notes: notes as GmScienceMemoryNote[],
+    candidates: candidates as GmScienceMemoryCandidate[],
+    categories: categories.map((item) => asString(item)).filter(Boolean),
+  };
+}
+
 export function normalizeGmScienceArtifact(payload: unknown): GmScienceArtifact | null {
   const artifact = asRecord(payload);
   if (!artifact) {
@@ -295,6 +538,14 @@ const GM_SCIENCE_RESOURCE_ACCESS_MODES = new Set<GmScienceResourceAccessMode>([
   "metadata_only",
 ]);
 const GM_SCIENCE_RESOURCE_SOURCES = new Set<GmScienceResourceSource>(["artifact", "workspace"]);
+const GM_SCIENCE_RESOURCE_CONTENT_STATUSES = new Set<GmScienceResourceContentStatus>([
+  "included",
+  "binary_descriptor_only",
+  "external_descriptor_only",
+  "metadata_descriptor_only",
+  "budget_exhausted_descriptor_only",
+  "unavailable_descriptor_only",
+]);
 
 export function normalizeGmScienceResource(payload: unknown): GmScienceResource | null {
   const resource = asRecord(payload);
@@ -329,6 +580,67 @@ export function normalizeGmScienceResource(payload: unknown): GmScienceResource 
     createdAt: asString(resource.created_at ?? resource.createdAt),
     updatedAt: asString(resource.updated_at ?? resource.updatedAt),
     metadata: asLooseRecord(resource.metadata),
+  };
+}
+
+export function normalizeGmScienceResourceDetail(payload: unknown): GmScienceResourceDetail | null {
+  const detail = asRecord(payload);
+  const preview = asRecord(detail?.preview);
+  const resource = normalizeGmScienceResource(detail?.resource);
+  if (!detail || !preview || !resource || !Array.isArray(detail.relations)) {
+    return null;
+  }
+  const contentStatus = asString(preview.content_status ?? preview.contentStatus) as GmScienceResourceContentStatus;
+  if (!GM_SCIENCE_RESOURCE_CONTENT_STATUSES.has(contentStatus)) {
+    return null;
+  }
+  const rawArtifact = detail.artifact;
+  const artifact = rawArtifact === null ? null : asRecord(rawArtifact);
+  if (rawArtifact !== null && !artifact) {
+    return null;
+  }
+  const relations = detail.relations.map((rawRelation) => {
+    const relation = asRecord(rawRelation);
+    const direction = asString(relation?.direction) as GmScienceArtifactRelationDirection;
+    if (!relation || (direction !== "outgoing" && direction !== "incoming")) {
+      return null;
+    }
+    return {
+      artifactId: asString(relation.artifact_id ?? relation.artifactId),
+      resourceId: asString(relation.resource_id ?? relation.resourceId),
+      sessionId: asString(relation.session_id ?? relation.sessionId),
+      title: asString(relation.title),
+      artifactType: asString(relation.artifact_type ?? relation.artifactType),
+      relation: asString(relation.relation),
+      direction,
+    };
+  });
+  if (relations.some((relation) => relation === null)) {
+    return null;
+  }
+  return {
+    resource,
+    preview: {
+      content: asString(preview.content),
+      contentStatus,
+      contentIncluded: preview.content_included === true || preview.contentIncluded === true,
+      contentChars: asNumber(preview.content_chars ?? preview.contentChars),
+      truncated: preview.truncated === true,
+    },
+    artifact: artifact
+      ? {
+          id: asString(artifact.id),
+          sessionId: asString(artifact.session_id ?? artifact.sessionId),
+          type: asString(artifact.type),
+          title: asString(artifact.title),
+          mimeType: asString(artifact.mime_type ?? artifact.mimeType),
+          metadata: asLooseRecord(artifact.metadata),
+          provenance: asLooseRecord(artifact.provenance),
+          createdAt: asString(artifact.created_at ?? artifact.createdAt),
+          updatedAt: asString(artifact.updated_at ?? artifact.updatedAt),
+        }
+      : null,
+    relations: relations.filter((relation): relation is NonNullable<typeof relation> => relation !== null),
   };
 }
 

@@ -4,20 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Mapping
+from typing import Any, Mapping
 
 from .config import ResourceCatalogConfig
-from .models import ResourceRef, ResourceSelection
+from .models import ResourceContentStatus, ResourceRef, ResourceSelection
 from .service import ResourceCatalogService
-
-ResourceContentStatus = Literal[
-    "included",
-    "binary_descriptor_only",
-    "external_descriptor_only",
-    "metadata_descriptor_only",
-    "budget_exhausted_descriptor_only",
-    "unavailable_descriptor_only",
-]
 
 _TEXT_APPLICATION_MIME_TYPES = {
     "application/csv",

@@ -3,8 +3,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from openppx.gm_science.bootstrap import ensure_gm_science_initialized
-from openppx.gm_science.capabilities import build_capability_catalog
+from openppx.gm_science.capabilities import (
+    build_capability_catalog,
+    normalize_capability_selection,
+)
+from openppx.gm_science.catalog import BUILTIN_SCIENCE_SKILLS, SCIENCE_CONNECTORS
 from openppx.tooling.skills_adapter import SkillRegistry
 
 
@@ -46,9 +52,10 @@ def test_capability_catalog_projects_discovered_skills_without_absolute_paths(tm
     reference_file.write_text("# Guide\n", encoding="utf-8")
     _write_skill(
         bundled_dir,
-        "docx",
-        description="Create and edit Word documents.",
+        "alphafold2",
+        description="Predict protein structure with AlphaFold2.",
     )
+    _write_skill(bundled_dir, "weather", description="Get the weather.")
     _write_skill(
         initialized.config_path.parent / "skills",
         "local-analysis",
@@ -66,7 +73,10 @@ def test_capability_catalog_projects_discovered_skills_without_absolute_paths(tm
     )
 
     skills = [item for item in catalog if item["kind"] == "skill"]
-    assert [item["id"] for item in skills] == ["docx", "literature-review", "local-analysis"]
+    assert [item["id"] for item in skills] == [
+        *(definition.id for definition in BUILTIN_SCIENCE_SKILLS),
+        "local-analysis",
+    ]
     by_id = {item["id"]: item for item in skills}
     assert by_id["literature-review"] == {
         "id": "literature-review",
@@ -84,12 +94,18 @@ def test_capability_catalog_projects_discovered_skills_without_absolute_paths(tm
         "status_detail": "",
         "metadata": {
             "registry_source": "builtin",
+            "catalog_group": "featured",
+            "implementation_status": "installed",
             "file_count": 2,
             "files_truncated": False,
         },
     }
-    assert by_id["docx"]["name"] == "DOCX"
-    assert by_id["docx"]["source"] == "built_in"
+    assert by_id["alphafold2"]["name"] == "AlphaFold2"
+    assert by_id["alphafold2"]["source"] == "built_in"
+    assert by_id["boltz"]["available"] is False
+    assert by_id["boltz"]["status"] == "disabled"
+    assert by_id["boltz"]["metadata"]["implementation_status"] == "not_installed"
+    assert "weather" not in by_id
     assert by_id["local-analysis"]["source"] == "local"
     assert by_id["local-analysis"]["license"] == "Private"
     assert by_id["local-analysis"]["default_enabled"] is False
@@ -97,7 +113,7 @@ def test_capability_catalog_projects_discovered_skills_without_absolute_paths(tm
     assert str(tmp_path) not in serialized
 
 
-def test_capability_catalog_marks_skill_aliases_without_exposing_the_target_path(tmp_path: Path) -> None:
+def test_capability_catalog_excludes_non_product_builtin_skills_and_aliases(tmp_path: Path) -> None:
     initialized = ensure_gm_science_initialized(root_dir=tmp_path / "data")
     bundled_dir = tmp_path / "bundled-skills"
     _write_skill(
@@ -116,9 +132,17 @@ def test_capability_catalog_marks_skill_aliases_without_exposing_the_target_path
     )
 
     skills = {item["id"]: item for item in catalog if item["kind"] == "skill"}
-    assert skills["memory"]["metadata"]["alias_of"] == "self-observe"
-    assert "alias_of" not in skills["self-observe"]["metadata"]
+    assert "memory" not in skills
+    assert "self-observe" not in skills
     assert str(tmp_path) not in json.dumps(skills)
+
+
+def test_capability_selection_rejects_known_but_unavailable_product_candidate(tmp_path: Path) -> None:
+    initialized = ensure_gm_science_initialized(root_dir=tmp_path / "data")
+    catalog = build_capability_catalog(config_path=initialized.config_path)
+
+    with pytest.raises(ValueError, match="Unavailable skill capability: boltz"):
+        normalize_capability_selection(kind="skill", values=["boltz"], catalog=catalog)
 
 
 def test_capability_catalog_projects_configured_mcp_connectors_with_redacted_metadata(tmp_path: Path) -> None:
@@ -156,9 +180,7 @@ def test_capability_catalog_projects_configured_mcp_connectors_with_redacted_met
 
     connectors = [item for item in catalog if item["kind"] == "connector"]
     assert [item["id"] for item in connectors] == [
-        "arxiv",
-        "pubmed",
-        "openalex",
+        *(definition.id for definition in SCIENCE_CONNECTORS),
         "mcp:broken-server",
         "mcp:disabled-server",
         "mcp:filesystem",
@@ -167,6 +189,12 @@ def test_capability_catalog_projects_configured_mcp_connectors_with_redacted_met
         "mcp:windows-command",
     ]
     by_id = {item["id"]: item for item in connectors}
+    assert by_id["pubmed"]["source"] == "external"
+    assert by_id["pubmed"]["metadata"]["catalog_group"] == "directory"
+    assert by_id["arxiv"]["metadata"]["catalog_group"] == "native"
+    assert by_id["biomart"]["available"] is False
+    assert by_id["biomart"]["status"] == "disabled"
+    assert by_id["biomart"]["metadata"]["catalog_group"] == "featured"
     assert by_id["mcp:filesystem"]["source"] == "local"
     assert by_id["mcp:filesystem"]["available"] is True
     assert by_id["mcp:filesystem"]["default_enabled"] is False
@@ -187,6 +215,7 @@ def test_capability_catalog_projects_configured_mcp_connectors_with_redacted_met
         "configured_env_names": ["FILESYSTEM_TOKEN", "WORKSPACE_ROOT"],
         "configured_header_names": [],
         "runtime_header_names": [],
+        "catalog_group": "custom",
     }
     assert by_id["mcp:remote-lab"]["metadata"]["transport"] == "http"
     assert by_id["mcp:remote-lab"]["metadata"]["endpoint_origin"] == "https://mcp.example.test"

@@ -15,7 +15,11 @@ from typing import Any
 
 from google.adk.agents.run_config import RunConfig
 
+from openppx.gm_science.catalog import GM_SCIENCE_ENABLED_SKILLS_ENV
+from openppx.gm_science.memory import GM_SCIENCE_PROJECT_ID_ENV
+from openppx.gm_science.paths import get_gm_science_data_dir
 from openppx.gm_science.resources import ResolvedResourceContext, ResourceCatalogService, ResourceContextService
+from openppx.gm_science.session_policy import default_session_policy, normalize_session_policy, write_session_policy_env
 from openppx.gm_science.specialists.config import load_specialist_config
 from openppx.gm_science.store import GmScienceStore
 from openppx.runtime.run_config import build_run_config
@@ -45,6 +49,27 @@ def _build_interactive_run_config(project_id: str) -> RunConfig:
     )
 
 
+def _build_project_memory_service(
+    *,
+    project_id: str,
+    session_id: str,
+    data_dir: Path,
+) -> Any | None:
+    """Build the gm-science scoped ADK MemoryService for Project runs only."""
+
+    normalized_project_id = str(project_id or "").strip()
+    if not normalized_project_id:
+        return None
+    from openppx.gm_science.memory import ProjectScopedMemoryService
+    from openppx.runtime.sqlite_memory_service import SQLiteMemoryService
+
+    return ProjectScopedMemoryService(
+        backend=SQLiteMemoryService(db_path=data_dir / "database" / "memory.db"),
+        project_id=normalized_project_id,
+        session_id=str(session_id or "").strip(),
+    )
+
+
 def _emit(payload: dict[str, Any]) -> None:
     """Write one NDJSON payload to stdout."""
 
@@ -60,9 +85,28 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--message", default="")
     parser.add_argument("--user-id", default="ppx-client-user")
     parser.add_argument("--project-id", default="")
+    parser.add_argument("--enabled-skills-json", default=None)
     parser.add_argument("--enabled-mcp-servers-json", default=None)
     parser.add_argument("--resource-refs-json", default=None)
+    parser.add_argument("--session-policy-json", default=None)
     return parser.parse_args()
+
+
+def _configure_session_policy_env(raw_policy: str | None) -> dict[str, Any]:
+    """Validate and expose the Session policy before root Agent import."""
+
+    if raw_policy is None:
+        policy = default_session_policy()
+    else:
+        try:
+            parsed = json.loads(raw_policy)
+        except ValueError as exc:
+            raise ValueError("--session-policy-json must contain valid JSON.") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError("--session-policy-json must contain a JSON object.")
+        policy = normalize_session_policy(parsed)
+    write_session_policy_env(policy)
+    return policy
 
 
 def _restrict_mcp_servers_env(enabled_servers_json: str) -> None:
@@ -82,6 +126,29 @@ def _restrict_mcp_servers_env(enabled_servers_json: str) -> None:
     filtered = {name: config for name, config in raw_servers.items() if str(name) in enabled}
     os.environ["OPENPPX_MCP_SERVERS_JSON"] = json.dumps(
         filtered,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _restrict_project_skills_env(enabled_skills_json: str) -> None:
+    """Expose the explicit Project Skill selection to the ADK root Agent."""
+
+    try:
+        raw_enabled = json.loads(enabled_skills_json)
+    except (TypeError, ValueError):
+        raw_enabled = []
+    enabled = []
+    seen: set[str] = set()
+    if isinstance(raw_enabled, list):
+        for value in raw_enabled:
+            name = str(value).strip()
+            if not name or name.casefold() in seen:
+                continue
+            seen.add(name.casefold())
+            enabled.append(name)
+    os.environ[GM_SCIENCE_ENABLED_SKILLS_ENV] = json.dumps(
+        enabled,
         ensure_ascii=False,
         separators=(",", ":"),
     )
@@ -313,8 +380,12 @@ async def _run() -> int:
     from openppx.core.config import bootstrap_env_from_config
 
     bootstrap_env_from_config(config_path)
+    if args.enabled_skills_json is not None:
+        _restrict_project_skills_env(args.enabled_skills_json)
     if args.enabled_mcp_servers_json is not None:
         _restrict_mcp_servers_env(args.enabled_mcp_servers_json)
+    session_policy = _configure_session_policy_env(args.session_policy_json)
+    os.environ[GM_SCIENCE_PROJECT_ID_ENV] = str(args.project_id or "")
 
     from openppx.app.agent import root_agent
     from openppx.runtime.adk_utils import run_text_async
@@ -417,7 +488,20 @@ async def _run() -> int:
         _emit({"type": "error", "message": str(exc)})
         return 1
     request = _build_adk_user_content(prompt, resource_contexts)
-    runner, _service = create_runner(agent=root_agent, app_name=app_name, session_service=session_service)
+    memory_service = _build_project_memory_service(
+        project_id=args.project_id,
+        session_id=args.session_id,
+        data_dir=get_gm_science_data_dir(),
+    )
+    runner_options: dict[str, Any] = {}
+    if memory_service is not None:
+        runner_options["memory_service"] = memory_service
+    runner, _service = create_runner(
+        agent=root_agent,
+        app_name=app_name,
+        session_service=session_service,
+        **runner_options,
+    )
     before_artifact_ids: set[str] = set()
     if args.project_id:
         before_artifact_ids = {
@@ -441,14 +525,19 @@ async def _run() -> int:
         run_config=_build_interactive_run_config(args.project_id),
     )
 
-    if args.project_id:
+    if args.project_id and session_policy["auto_review_enabled"]:
+        reviewer_tool = _find_reviewer_tool(root_agent)
+        if reviewer_tool is None:
+            from openppx.gm_science.specialists.agents import build_specialist_tools
+
+            reviewer_tool = _find_reviewer_tool(SimpleNamespace(tools=build_specialist_tools()))
         gate = await run_report_review_gate(
             project_id=args.project_id,
             session_id=args.session_id,
             user_id=args.user_id,
             app_name=app_name,
             before_artifact_ids=before_artifact_ids,
-            reviewer_tool=_find_reviewer_tool(root_agent),
+            reviewer_tool=reviewer_tool,
         )
         final_text = append_review_gate_note(final_text, gate)
 

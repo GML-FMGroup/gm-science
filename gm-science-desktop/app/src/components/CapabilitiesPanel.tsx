@@ -1,16 +1,14 @@
 import { useMemo, useState } from "react";
+import { RefreshCw } from "lucide-react";
 import type { GmScienceCapability, GmScienceCapabilityKind } from "../types";
 
 interface CapabilitiesPanelProps {
   kind: GmScienceCapabilityKind;
-  projectName: string;
   items: GmScienceCapability[];
   loading: boolean;
   saving: boolean;
-  dirty: boolean;
   error: string | null;
   onToggle: (capabilityId: string) => void;
-  onSave: () => void;
   onRefresh: () => void;
 }
 
@@ -20,13 +18,37 @@ const headings: Record<GmScienceCapabilityKind, string> = {
   specialist: "Specialists",
 };
 
-const sourceOrder: GmScienceCapability["source"][] = ["built_in", "local", "external"];
-
-const sourceLabels: Record<GmScienceCapability["source"], string> = {
-  built_in: "Built-in",
-  local: "Local",
-  external: "External",
+const groupOrder: Record<GmScienceCapabilityKind, string[]> = {
+  skill: ["featured", "imported", "personal"],
+  connector: ["featured", "directory", "native", "organization", "custom"],
+  specialist: ["built_in", "organization", "custom"],
 };
+
+const groupLabels: Record<GmScienceCapabilityKind, Record<string, string>> = {
+  skill: { featured: "Featured", imported: "Imported", personal: "Personal" },
+  connector: {
+    featured: "Featured",
+    directory: "Directory",
+    native: "Native",
+    organization: "Organization",
+    custom: "Custom",
+  },
+  specialist: { built_in: "Built-in", organization: "Organization", custom: "Custom" },
+};
+
+function capabilityGroup(item: GmScienceCapability, kind: GmScienceCapabilityKind): string {
+  const explicit = metadataText(item, "catalog_group");
+  if (explicit && groupOrder[kind].includes(explicit)) {
+    return explicit;
+  }
+  if (kind === "skill") {
+    return item.source === "built_in" ? "featured" : item.source === "external" ? "imported" : "personal";
+  }
+  if (kind === "connector") {
+    return item.source === "built_in" ? "featured" : item.source === "external" ? "directory" : "custom";
+  }
+  return item.source === "built_in" ? "built_in" : item.source === "external" ? "organization" : "custom";
+}
 
 function statusLabel(status: GmScienceCapability["status"]): string {
   if (status === "needs_configuration") {
@@ -226,29 +248,34 @@ function SpecialistDetails({ item }: { item: GmScienceCapability }) {
 
 export function CapabilitiesPanel({
   kind,
-  projectName,
   items,
   loading,
   saving,
-  dirty,
   error,
   onToggle,
-  onSave,
   onRefresh,
 }: CapabilitiesPanelProps) {
   const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const normalizedQuery = query.trim().toLocaleLowerCase();
+  const kindItems = useMemo(() => items.filter((item) => item.kind === kind), [items, kind]);
   const visibleItems = useMemo(
     () =>
-      items.filter((item) => {
-        if (item.kind !== kind) {
+      kindItems.filter((item) => {
+        if (statusFilter === "available" && !item.available) {
+          return false;
+        }
+        if (statusFilter === "needs_configuration" && item.status !== "needs_configuration") {
+          return false;
+        }
+        if (statusFilter === "unavailable" && item.available) {
           return false;
         }
         if (!normalizedQuery) {
           return true;
         }
-        return `${item.name} ${item.id} ${item.description} ${sourceLabels[item.source]} ${metadataText(
+        return `${item.name} ${item.id} ${item.description} ${groupLabels[kind][capabilityGroup(item, kind)]} ${metadataText(
           item,
           "server_name",
         )} ${metadataText(item, "transport")} ${metadataList(item, "assigned_skills").join(" ")} ${metadataList(
@@ -258,37 +285,34 @@ export function CapabilitiesPanel({
           .toLocaleLowerCase()
           .includes(normalizedQuery);
       }),
-    [items, kind, normalizedQuery],
+    [kindItems, kind, normalizedQuery, statusFilter],
   );
-  const groups = sourceOrder
-    .map((source) => ({ source, items: visibleItems.filter((item) => item.source === source) }))
+  const groups = groupOrder[kind]
+    .map((groupId) => ({
+      id: groupId,
+      label: groupLabels[kind][groupId],
+      items: visibleItems.filter((item) => capabilityGroup(item, kind) === groupId),
+    }))
     .filter((group) => group.items.length > 0);
-  const hasProject = Boolean(projectName);
+  const hasProject = items.some((item) => item.projectEnabled !== null);
   const searchLabel = `Search ${headings[kind].toLocaleLowerCase()}`;
 
   return (
-    <section className="capabilities-panel" aria-labelledby="capabilities-heading">
-      <header className="capabilities-panel-header">
-        <div>
-          <h2 id="capabilities-heading">{headings[kind]}</h2>
-          <p>{hasProject ? projectName : "Global capability status"}</p>
-        </div>
-        <div className="capability-actions">
-          <button className="secondary" onClick={onRefresh} disabled={loading || saving}>
-            Refresh
-          </button>
-          {hasProject ? (
-            <button className="primary" onClick={onSave} disabled={!dirty || saving || loading}>
-              {saving ? "Saving..." : "Save changes"}
-            </button>
-          ) : null}
-        </div>
-      </header>
-
+    <section className="capabilities-panel" aria-label={headings[kind]}>
       {error ? <p className="composer-error capability-error">{error}</p> : null}
       {loading ? <div className="capability-empty">Loading capabilities...</div> : null}
       {!loading ? (
         <div className="capability-toolbar">
+          <select
+            aria-label={`Filter ${headings[kind].toLocaleLowerCase()}`}
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value)}
+          >
+            <option value="all">All ({kindItems.length})</option>
+            <option value="available">Available</option>
+            <option value="needs_configuration">Needs configuration</option>
+            <option value="unavailable">Unavailable</option>
+          </select>
           <input
             type="search"
             value={query}
@@ -296,7 +320,16 @@ export function CapabilitiesPanel({
             placeholder={`${searchLabel}...`}
             onChange={(event) => setQuery(event.target.value)}
           />
-          <span>{visibleItems.length} shown</span>
+          <button
+            className="icon-control"
+            type="button"
+            aria-label={`Refresh ${headings[kind].toLocaleLowerCase()}`}
+            title={`Refresh ${headings[kind].toLocaleLowerCase()}`}
+            onClick={onRefresh}
+            disabled={loading || saving}
+          >
+            <RefreshCw size={16} />
+          </button>
         </div>
       ) : null}
       {!loading && visibleItems.length === 0 ? (
@@ -309,11 +342,11 @@ export function CapabilitiesPanel({
         {groups.map((group) => (
           <section
             className="capability-group"
-            key={group.source}
-            aria-labelledby={`${kind}-${group.source}-heading`}
+            key={group.id}
+            aria-labelledby={`${kind}-${group.id}-heading`}
           >
-            <h3 id={`${kind}-${group.source}-heading`}>
-              <span>{sourceLabels[group.source]}</span>
+            <h3 id={`${kind}-${group.id}-heading`}>
+              <span>{group.label}</span>
               <small>{group.items.length}</small>
             </h3>
             <div className="capability-list">
@@ -328,7 +361,7 @@ export function CapabilitiesPanel({
                     <div className="capability-copy">
                       <div className="capability-title-row">
                         <strong>{item.name}</strong>
-                        <span className={`capability-source ${item.source}`}>{sourceLabels[item.source]}</span>
+                        <span className={`capability-source ${item.source}`}>{group.label}</span>
                         <span className={`capability-status ${item.status}`}>{statusLabel(item.status)}</span>
                         {item.metadata.auto_dispatch === true ? <span className="capability-tag">Auto</span> : null}
                       </div>

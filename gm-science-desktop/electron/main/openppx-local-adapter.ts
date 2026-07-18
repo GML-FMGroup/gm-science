@@ -9,6 +9,7 @@ import {
   createGmScienceArtifact as mockCreateGmScienceArtifact,
   createGmSciencePythonRun as mockCreateGmSciencePythonRun,
   createGmScienceProject as mockCreateGmScienceProject,
+  createGmScienceMemoryNote as mockCreateGmScienceMemoryNote,
   createSession as mockCreateSession,
   cancelGmScienceRun as mockCancelGmScienceRun,
   getGmScienceRun as mockGetGmScienceRun,
@@ -16,6 +17,10 @@ import {
   getGmScienceDataset as mockGetGmScienceDataset,
   importGmScienceDataset as mockImportGmScienceDataset,
   getGmScienceProject as mockGetGmScienceProject,
+  getGmScienceResourceDetail as mockGetGmScienceResourceDetail,
+  getGmScienceSessionPolicy as mockGetGmScienceSessionPolicy,
+  getGmScienceSettings as mockGetGmScienceSettings,
+  getGmScienceMemory as mockGetGmScienceMemory,
   listGmScienceCapabilities as mockListGmScienceCapabilities,
   listGmScienceArtifacts as mockListGmScienceArtifacts,
   listGmScienceAnalyses as mockListGmScienceAnalyses,
@@ -30,6 +35,12 @@ import {
   runGmScienceAnalysis as mockRunGmScienceAnalysis,
   sendMessage as mockSendMessage,
   updateGmScienceProjectCapabilities as mockUpdateGmScienceProjectCapabilities,
+  updateGmScienceSessionPolicy as mockUpdateGmScienceSessionPolicy,
+  updateGmScienceSettings as mockUpdateGmScienceSettings,
+  updateGmScienceMemoryNote as mockUpdateGmScienceMemoryNote,
+  deleteGmScienceMemoryNote as mockDeleteGmScienceMemoryNote,
+  clearGmScienceMemory as mockClearGmScienceMemory,
+  reviewGmScienceMemoryCandidate as mockReviewGmScienceMemoryCandidate,
   subscribe as subscribeMock,
 } from "../../app/src/lib/mock-client";
 import {
@@ -42,8 +53,14 @@ import {
   normalizeGmScienceCapability,
   normalizeGmScienceProject,
   normalizeGmScienceResource,
+  normalizeGmScienceResourceDetail,
   normalizeGmScienceDataset,
   normalizeGmScienceRun,
+  normalizeGmScienceSessionPolicy,
+  normalizeGmScienceSettings,
+  normalizeGmScienceMemoryCandidate,
+  normalizeGmScienceMemoryNote,
+  normalizeGmScienceMemoryWorkspace,
 } from "../../app/src/lib/client-api-projection";
 import { mergeAssistantParts } from "../../app/src/lib/openppx-projection";
 import {
@@ -70,15 +87,24 @@ import type {
   CreateGmScienceArtifactInput,
   CreateGmSciencePythonRunInput,
   CreateGmScienceProjectInput,
+  CreateGmScienceMemoryNoteInput,
   GmScienceArtifact,
   GmScienceAnalysis,
   GmScienceCapability,
   GmScienceCapabilityCatalog,
   GmScienceProject,
   GmScienceResource,
+  GmScienceResourceDetail,
   GmScienceDataset,
   GmScienceDatasetFileSelection,
   GmScienceRun,
+  GmScienceSessionPolicy,
+  GmScienceSettings,
+  GmScienceSettingsUpdateResult,
+  GmScienceMemoryCandidate,
+  GmScienceMemoryNote,
+  GmScienceMemoryScope,
+  GmScienceMemoryWorkspace,
   ImportGmScienceDatasetInput,
   MessagePart,
   PpxClientApi,
@@ -88,6 +114,9 @@ import type {
   SendMessageInput,
   SessionSummary,
   UpdateGmScienceCapabilitiesInput,
+  UpdateGmScienceSessionPolicyInput,
+  UpdateGmScienceSettingsInput,
+  UpdateGmScienceMemoryNoteInput,
 } from "../../app/src/types";
 
 type EventSink = (event: RunEvent) => void;
@@ -171,7 +200,9 @@ function normalizeAgentProfile(payload: Record<string, unknown>): AgentProfile {
   return {
     id: String(payload.id ?? ""),
     name: String(payload.name ?? payload.id ?? ""),
-    description: String(payload.description ?? "Local openppx agent"),
+    description: String(payload.description ?? "Local gm-science research agent"),
+    provider: String(payload.provider ?? ""),
+    model: String(payload.model ?? ""),
     enabled: payload.enabled !== false,
     status: (String(payload.status ?? "healthy") as AgentProfile["status"]) || "healthy",
     tags: Array.isArray(payload.tags) ? payload.tags.map((tag) => String(tag)) : [],
@@ -531,10 +562,12 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
       return {
         id: name,
         name,
-        description: workspace ? `Workspace: ${workspace}` : "Local openppx agent",
+        description: workspace ? `Workspace: ${workspace}` : "Local gm-science research agent",
+        provider: "",
+        model: "",
         enabled: true,
         status: "healthy",
-        tags: ["local", "openppx"],
+        tags: ["local", "science"],
       };
     });
     return agents.filter((item): item is AgentProfile => item !== null);
@@ -554,8 +587,8 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
       return {
         target: this.target,
         state: "error",
-        summary: "openppx root was not found.",
-        detail: "Set OPENPPX_ROOT or keep gm-science-desktop beside gm-science-runtime.",
+        summary: "gm-science runtime files were not found.",
+        detail: "Reinstall gm-science or keep gm-science-desktop beside gm-science-runtime.",
         lastError: "OPENPPX_ROOT_NOT_FOUND",
       };
     }
@@ -563,14 +596,14 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
       return {
         target: this.target,
         state: "starting",
-        summary: "openppx config is not initialized yet.",
+        summary: "gm-science configuration is not initialized yet.",
         detail: "Run gm-science setup first so ~/.gm-science/global_config.json exists.",
       };
     }
     return {
       target: this.target,
       state: "healthy",
-      summary: "Local openppx runtime is available.",
+      summary: "Local gm-science runtime is available.",
       detail: "The desktop client uses the managed local client-api gateway.",
     };
   }
@@ -744,6 +777,242 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
     return { project, capabilities };
   }
 
+  public async getGmScienceSettings(): Promise<GmScienceSettings> {
+    if (this.shouldUseMock()) {
+      return mockGetGmScienceSettings();
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson("/api/v1/gm-science/settings");
+    const settings = normalizeGmScienceSettings(
+      (payload.data as Record<string, unknown> | undefined)?.settings,
+    );
+    if (!settings) {
+      throw new Error("Client API returned an invalid settings payload.");
+    }
+    return settings;
+  }
+
+  public async updateGmScienceSettings(
+    input: UpdateGmScienceSettingsInput,
+  ): Promise<GmScienceSettingsUpdateResult> {
+    if (this.shouldUseMock()) {
+      return mockUpdateGmScienceSettings(input);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson("/api/v1/gm-science/settings", {
+      method: "PATCH",
+      body: JSON.stringify({
+        project_id: input.projectId,
+        memory_enabled: input.memoryEnabled,
+        model: input.model,
+        provider_api_key: input.providerApiKey,
+        pubmed_email: input.pubmedEmail,
+        pubmed_api_key: input.pubmedApiKey,
+        openalex_api_key: input.openalexApiKey,
+      }),
+    });
+    const data = (payload.data as Record<string, unknown> | undefined) ?? {};
+    const settings = normalizeGmScienceSettings(data.settings);
+    const agentPayload = data.agent;
+    const agent = agentPayload && typeof agentPayload === "object" && !Array.isArray(agentPayload)
+      ? normalizeAgentProfile(agentPayload as Record<string, unknown>)
+      : null;
+    const capabilities = (Array.isArray(data.capabilities) ? data.capabilities : [])
+      .map((item) => normalizeGmScienceCapability(item))
+      .filter((item): item is GmScienceCapability => item !== null);
+    if (!settings || !agent) {
+      throw new Error("Client API returned an invalid settings update payload.");
+    }
+    return {
+      settings,
+      agent,
+      projectId: String(data.project_id ?? ""),
+      capabilities,
+    };
+  }
+
+  public async getGmScienceMemory(projectId: string): Promise<GmScienceMemoryWorkspace> {
+    if (this.shouldUseMock()) {
+      return mockGetGmScienceMemory(projectId);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/memory`,
+    );
+    const workspace = normalizeGmScienceMemoryWorkspace(
+      (payload.data as Record<string, unknown> | undefined)?.memory,
+    );
+    if (!workspace) {
+      throw new Error("Client API returned an invalid Memory workspace payload.");
+    }
+    return workspace;
+  }
+
+  public async createGmScienceMemoryNote(
+    projectId: string,
+    input: CreateGmScienceMemoryNoteInput,
+  ): Promise<GmScienceMemoryNote> {
+    if (this.shouldUseMock()) {
+      return mockCreateGmScienceMemoryNote(projectId, input);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/memory/notes`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    );
+    const note = normalizeGmScienceMemoryNote(
+      (payload.data as Record<string, unknown> | undefined)?.note,
+    );
+    if (!note) {
+      throw new Error("Client API returned an invalid Memory note payload.");
+    }
+    return note;
+  }
+
+  public async updateGmScienceMemoryNote(
+    projectId: string,
+    noteId: string,
+    input: UpdateGmScienceMemoryNoteInput,
+  ): Promise<GmScienceMemoryNote> {
+    if (this.shouldUseMock()) {
+      return mockUpdateGmScienceMemoryNote(projectId, noteId, input);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/memory/notes/${encodeURIComponent(noteId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(input),
+      },
+    );
+    const note = normalizeGmScienceMemoryNote(
+      (payload.data as Record<string, unknown> | undefined)?.note,
+    );
+    if (!note) {
+      throw new Error("Client API returned an invalid Memory note payload.");
+    }
+    return note;
+  }
+
+  public async deleteGmScienceMemoryNote(projectId: string, noteId: string): Promise<void> {
+    if (this.shouldUseMock()) {
+      return mockDeleteGmScienceMemoryNote(projectId, noteId);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    await this.fetchClientApiJson(
+      `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/memory/notes/${encodeURIComponent(noteId)}`,
+      { method: "DELETE" },
+    );
+  }
+
+  public async clearGmScienceMemory(projectId: string, scope: GmScienceMemoryScope): Promise<number> {
+    if (this.shouldUseMock()) {
+      return mockClearGmScienceMemory(projectId, scope);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/memory?scope=${encodeURIComponent(scope)}`,
+      { method: "DELETE" },
+    );
+    return Number((payload.data as Record<string, unknown> | undefined)?.deleted_count ?? 0);
+  }
+
+  public async reviewGmScienceMemoryCandidate(
+    projectId: string,
+    candidateId: string,
+    decision: "approve" | "reject",
+  ): Promise<GmScienceMemoryCandidate> {
+    if (this.shouldUseMock()) {
+      return mockReviewGmScienceMemoryCandidate(projectId, candidateId, decision);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/memory/candidates/${encodeURIComponent(candidateId)}/review`,
+      {
+        method: "POST",
+        body: JSON.stringify({ decision }),
+      },
+    );
+    const candidate = normalizeGmScienceMemoryCandidate(
+      (payload.data as Record<string, unknown> | undefined)?.candidate,
+    );
+    if (!candidate) {
+      throw new Error("Client API returned an invalid Memory candidate payload.");
+    }
+    return candidate;
+  }
+
+  public async getGmScienceSessionPolicy(sessionId: string): Promise<GmScienceSessionPolicy> {
+    if (this.shouldUseMock()) {
+      return mockGetGmScienceSessionPolicy(sessionId);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/sessions/${encodeURIComponent(sessionId)}/policy`,
+    );
+    const policy = normalizeGmScienceSessionPolicy(
+      (payload.data as Record<string, unknown> | undefined)?.policy,
+    );
+    if (!policy) {
+      throw new Error("Client API returned an invalid Session policy payload.");
+    }
+    return policy;
+  }
+
+  public async updateGmScienceSessionPolicy(
+    sessionId: string,
+    input: UpdateGmScienceSessionPolicyInput,
+  ): Promise<GmScienceSessionPolicy> {
+    if (this.shouldUseMock()) {
+      return mockUpdateGmScienceSessionPolicy(sessionId, input);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/sessions/${encodeURIComponent(sessionId)}/policy`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          delegation_enabled: input.delegationEnabled,
+          auto_review_enabled: input.autoReviewEnabled,
+          memory_enabled: input.memoryEnabled,
+          specialist_id: input.specialistId,
+          reviewer_model: input.reviewerModel,
+          compute_target: input.computeTarget,
+        }),
+      },
+    );
+    const policy = normalizeGmScienceSessionPolicy(
+      (payload.data as Record<string, unknown> | undefined)?.policy,
+    );
+    if (!policy) {
+      throw new Error("Client API returned an invalid Session policy update payload.");
+    }
+    return policy;
+  }
+
   public async listGmScienceArtifacts(projectId: string): Promise<{ artifacts: GmScienceArtifact[] }> {
     if (this.shouldUseMock()) {
       return mockListGmScienceArtifacts(projectId);
@@ -818,6 +1087,28 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
         .map((item) => normalizeGmScienceResource(item))
         .filter((item): item is GmScienceResource => item !== null),
     };
+  }
+
+  public async getGmScienceResourceDetail(
+    projectId: string,
+    resourceId: string,
+  ): Promise<{ detail: GmScienceResourceDetail }> {
+    if (this.shouldUseMock()) {
+      return mockGetGmScienceResourceDetail(projectId, resourceId);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/resource-detail?resource_id=${encodeURIComponent(resourceId)}`,
+    );
+    const detail = normalizeGmScienceResourceDetail(
+      (payload.data as Record<string, unknown> | undefined)?.detail,
+    );
+    if (!detail) {
+      throw new Error("Client API returned an invalid resource detail payload.");
+    }
+    return { detail };
   }
 
   public async listGmScienceRuns(projectId: string): Promise<{ runs: GmScienceRun[] }> {

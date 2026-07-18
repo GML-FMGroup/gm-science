@@ -17,7 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from ..core.config import get_data_dir
+from ..core.config import config_to_env, get_data_dir, load_config
 from ..core.logging_utils import debug_logging_enabled, emit_debug
 from ..gm_science.bootstrap import GM_SCIENCE_DEFAULT_AGENT_NAME, ensure_gm_science_initialized
 from ..gm_science.capabilities import (
@@ -29,8 +29,16 @@ from ..gm_science.analysis import AnalysisService
 from ..gm_science.data import DatasetService
 from ..gm_science.execution import ScienceExecutionService
 from ..gm_science.literature.config import load_literature_config, select_literature_sources
-from ..gm_science.models import ArtifactRecord, ProjectRecord
-from ..gm_science.resources import ResourceCatalogService, ResourceContextService, ResourceSelection
+from ..gm_science.memory import GmScienceMemoryService
+from ..gm_science.models import ArtifactRecord, ProjectRecord, ProjectSessionRecord
+from ..gm_science.resources import (
+    ResourceCatalogService,
+    ResourceContextService,
+    ResourceDetailService,
+    ResourceSelection,
+)
+from ..gm_science.session_policy import normalize_session_policy, update_session_policy
+from ..gm_science.settings import GmScienceSettingsService
 from ..gm_science.specialists.config import load_specialist_config
 from ..gm_science.store import GmScienceStore
 from .access_policy import AccessPolicy
@@ -49,6 +57,30 @@ def _iso_now() -> str:
     """Return the current timestamp as an ISO 8601 string."""
 
     return dt.datetime.now().astimezone().isoformat()
+
+
+def _worker_process_env(
+    base_env: dict[str, str] | None = None,
+    *,
+    startup_cwd: Path | None = None,
+) -> dict[str, str]:
+    """Build a worker environment with cwd-independent runtime imports."""
+
+    env = dict(os.environ if base_env is None else base_env)
+    origin = (startup_cwd or Path.cwd()).resolve(strict=False)
+    package_root = Path(__file__).resolve().parents[2]
+    python_paths = [package_root]
+    for raw in str(env.get("PYTHONPATH") or "").split(os.pathsep):
+        if not raw.strip():
+            continue
+        candidate = Path(raw).expanduser()
+        if not candidate.is_absolute():
+            candidate = origin / candidate
+        candidate = candidate.resolve(strict=False)
+        if candidate not in python_paths:
+            python_paths.append(candidate)
+    env["PYTHONPATH"] = os.pathsep.join(str(path) for path in python_paths)
+    return env
 
 
 def _json_bytes(payload: dict[str, Any]) -> bytes:
@@ -121,7 +153,11 @@ def _default_capability_ids(kind: str, catalog: list[dict[str, Any]]) -> tuple[s
     return tuple(
         str(item["id"])
         for item in catalog
-        if item.get("kind") == kind and item.get("default_enabled") is True
+        if (
+            item.get("kind") == kind
+            and item.get("default_enabled") is True
+            and item.get("available") is True
+        )
     )
 
 
@@ -226,31 +262,31 @@ def list_enabled_agent_names(data_dir: Path | None = None) -> list[str]:
     return names
 
 
-def _read_json_file(path: Path) -> dict[str, Any] | None:
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    return raw if isinstance(raw, dict) else None
-
-
 def build_agent_profile(agent_name: str, data_dir: Path | None = None) -> dict[str, Any]:
     """Build one client-facing agent profile from config files."""
 
     config_path = agent_config_path(agent_name, data_dir)
-    cfg = _read_json_file(config_path) or {}
+    cfg = load_config(config_path=config_path)
     agent_cfg = cfg.get("agent") if isinstance(cfg.get("agent"), dict) else {}
     workspace = str(agent_cfg.get("workspace") or "").strip()
-    description = f"Workspace: {workspace}" if workspace else "Local openppx agent"
+    runtime_env = config_to_env(cfg)
+    is_science_agent = _gm_science_mode_enabled() and agent_name == GM_SCIENCE_DEFAULT_AGENT_NAME
+    description = (
+        "Local personal research agent"
+        if is_science_agent
+        else f"Workspace: {workspace}" if workspace else "Local openppx agent"
+    )
     return {
         "id": agent_name,
-        "name": agent_name,
+        "name": "gm-science" if is_science_agent else agent_name,
         "description": description,
+        "provider": runtime_env.get("OPENPPX_PROVIDER", ""),
+        "model": runtime_env.get("OPENPPX_MODEL", ""),
         "enabled": True,
         "status": "healthy" if config_path.exists() else "disabled",
         "workspace": workspace or None,
         "avatar": None,
-        "tags": ["local", "openppx"],
+        "tags": ["local", "science"] if is_science_agent else ["local", "openppx"],
     }
 
 
@@ -314,6 +350,7 @@ def _gm_science_project_payload(
         "enabled_skills": list(project.enabled_skills),
         "enabled_connectors": list(project.enabled_connectors),
         "enabled_specialists": list(project.enabled_specialists),
+        "session_policy_defaults": dict(project.session_policy_defaults),
         "sessions_count": sessions_count,
         "artifacts_count": artifacts_count,
     }
@@ -344,6 +381,7 @@ def _gm_science_project_context_message(
     session_id: str,
     source_statuses: dict[str, str],
     specialist_statuses: dict[str, str],
+    session_policy: dict[str, Any],
 ) -> str:
     """Build a run message with project context prepended."""
 
@@ -358,6 +396,7 @@ def _gm_science_project_context_message(
         f"<workspace>{project.workspace_path}</workspace>\n"
         f"<literature_sources>{sources}</literature_sources>\n"
         f"<specialists>{specialists}</specialists>\n"
+        f"<session_policy>{json.dumps(session_policy, ensure_ascii=False, separators=(',', ':'))}</session_policy>\n"
         "</gm_science_context>\n\n"
     )
     project_context = f"Project context:\n{context}\n\n" if context else ""
@@ -370,6 +409,83 @@ def _gm_science_project_context_message(
         "User request:\n"
         f"{user_text}"
     )
+
+
+def _session_policy_issues(
+    policy: dict[str, Any],
+    catalog: list[dict[str, Any]],
+) -> list[str]:
+    """Return capability issues that would make one Session policy unenforceable."""
+
+    specialists = {
+        str(item.get("id") or ""): item
+        for item in catalog
+        if item.get("kind") == "specialist"
+    }
+    issues: list[str] = []
+    selected = str(policy.get("specialist_id") or "")
+    if selected:
+        item = specialists.get(selected)
+        if selected == "research_reviewer":
+            issues.append("Research Reviewer is controlled by Auto-review, not Specialist routing.")
+        elif item is None:
+            issues.append(f"Specialist '{selected}' is not registered.")
+        elif item.get("project_enabled") is not True:
+            issues.append(f"Specialist '{selected}' is not enabled for this Project.")
+        elif item.get("available") is not True or item.get("status") != "ready":
+            issues.append(f"Specialist '{selected}' is not ready.")
+    if policy.get("auto_review_enabled") is True:
+        reviewer = specialists.get("research_reviewer")
+        if reviewer is None or reviewer.get("project_enabled") is not True:
+            issues.append("Research Reviewer is not enabled for this Project.")
+        elif reviewer.get("available") is not True or reviewer.get("status") != "ready":
+            issues.append("Research Reviewer is not ready.")
+    return issues
+
+
+def _gm_science_session_policy_payload(
+    association: ProjectSessionRecord,
+    catalog: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Project one Session policy and its currently valid product candidates."""
+
+    candidates = [
+        {
+            "id": str(item["id"]),
+            "name": str(item["name"]),
+            "description": str(item["description"]),
+            "status": str(item["status"]),
+        }
+        for item in catalog
+        if item.get("kind") == "specialist"
+        and item.get("id") != "research_reviewer"
+        and item.get("project_enabled") is True
+        and item.get("available") is True
+        and item.get("status") == "ready"
+    ]
+    reviewer = next(
+        (
+            item
+            for item in catalog
+            if item.get("kind") == "specialist" and item.get("id") == "research_reviewer"
+        ),
+        None,
+    )
+    return {
+        "session_id": association.session_id,
+        "project_id": association.project_id,
+        **dict(association.policy),
+        "specialists": candidates,
+        "reviewer_available": bool(
+            reviewer
+            and reviewer.get("project_enabled") is True
+            and reviewer.get("available") is True
+            and reviewer.get("status") == "ready"
+        ),
+        "reviewer_models": [{"id": "default", "name": "Default"}],
+        "compute_targets": [{"id": "local", "name": "Local"}],
+        "issues": _session_policy_issues(association.policy, catalog),
+    }
 
 
 def _strip_request_time_prefix(text: str) -> str:
@@ -799,12 +915,13 @@ class ClientApiCoordinator:
             identity_store=self._identity_store,
             agent_access_store=self._agent_access_store,
         )
+        local_memory_db_path = self.data_dir / "database" / "memory.db"
+        self._gm_science_memory_backend = SQLiteMemoryService(db_path=local_memory_db_path)
         if memory_query_service is None:
-            local_memory_db_path = self.data_dir / "database" / "memory.db"
             self._memory_query_service = MemoryQueryService(
                 identity_store=self._identity_store,
                 access_policy=self._access_policy,
-                memory_service=SQLiteMemoryService(db_path=local_memory_db_path),
+                memory_service=self._gm_science_memory_backend,
                 audit_db_path=local_memory_db_path,
             )
         else:
@@ -816,9 +933,16 @@ class ClientApiCoordinator:
         self._sessions_cache: dict[tuple[str, str], _TimedCacheEntry] = {}
         self._messages_cache: dict[tuple[str, str], _TimedCacheEntry] = {}
         self._gm_science_store = GmScienceStore(self.data_dir)
+        self._gm_science_memory = GmScienceMemoryService(
+            store=self._gm_science_store,
+            backend=self._gm_science_memory_backend,
+        )
         self._science_execution = ScienceExecutionService(
             data_dir=self.data_dir,
             store=self._gm_science_store,
+            config_path=agent_config_path(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir),
+        )
+        self._gm_science_settings = GmScienceSettingsService(
             config_path=agent_config_path(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir),
         )
         self._dataset_service = DatasetService(
@@ -830,6 +954,10 @@ class ClientApiCoordinator:
             config_path=agent_config_path(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir),
         )
         self._resource_context = ResourceContextService(catalog=self._resource_catalog)
+        self._resource_detail = ResourceDetailService(
+            catalog=self._resource_catalog,
+            context=self._resource_context,
+        )
         self._analysis_service = AnalysisService(
             store=self._gm_science_store,
             dataset_service=self._dataset_service,
@@ -1288,6 +1416,11 @@ class ClientApiCoordinator:
                     ),
                     catalog=catalog,
                 ),
+                session_policy_defaults=normalize_session_policy(
+                    body.get("session_policy_defaults")
+                    or body.get("sessionPolicyDefaults")
+                    or None
+                ),
             )
         except ValueError as exc:
             return _error("INVALID_REQUEST", str(exc))
@@ -1324,6 +1457,199 @@ class ClientApiCoordinator:
                 "items": build_capability_catalog(config_path=config_path, project=project),
             }
         )
+
+    def get_gm_science_session_policy(self, session_id: str) -> dict[str, Any]:
+        """Return one Project Session's effective policy and valid candidates."""
+
+        association = self._gm_science_store.get_project_session(session_id)
+        if association is None:
+            return _error(
+                "SESSION_NOT_IN_PROJECT",
+                f"Session '{session_id}' is not attached to a Project.",
+            )
+        project = self._gm_science_store.get_project(association.project_id)
+        if project is None:
+            return _error("PROJECT_NOT_FOUND", f"Project '{association.project_id}' was not found.")
+        catalog = build_capability_catalog(
+            config_path=agent_config_path(association.agent_id, self.data_dir),
+            project=project,
+        )
+        return _ok({"policy": _gm_science_session_policy_payload(association, catalog)})
+
+    def update_gm_science_session_policy(
+        self,
+        session_id: str,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Validate and replace mutable fields in one Project Session policy."""
+
+        association = self._gm_science_store.get_project_session(session_id)
+        if association is None:
+            return _error(
+                "SESSION_NOT_IN_PROJECT",
+                f"Session '{session_id}' is not attached to a Project.",
+            )
+        project = self._gm_science_store.get_project(association.project_id)
+        if project is None:
+            return _error("PROJECT_NOT_FOUND", f"Project '{association.project_id}' was not found.")
+        try:
+            policy = update_session_policy(association.policy, body)
+        except ValueError as exc:
+            return _error("INVALID_REQUEST", str(exc))
+        catalog = build_capability_catalog(
+            config_path=agent_config_path(association.agent_id, self.data_dir),
+            project=project,
+        )
+        issues = _session_policy_issues(policy, catalog)
+        if issues:
+            return _error("SESSION_POLICY_UNAVAILABLE", " ".join(issues))
+        updated = self._gm_science_store.update_project_session_policy(session_id, policy)
+        return _ok({"policy": _gm_science_session_policy_payload(updated, catalog)})
+
+    def get_gm_science_settings(self) -> dict[str, Any]:
+        """Return renderer-safe global settings for the gm-science agent."""
+
+        return _ok({"settings": self._gm_science_settings.get_settings()})
+
+    def update_gm_science_settings(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Persist global settings and return refreshed runtime projections."""
+
+        project_id = str(body.get("project_id") or body.get("projectId") or "").strip()
+        project = self._gm_science_store.get_project(project_id) if project_id else None
+        if project_id and project is None:
+            return _error("PROJECT_NOT_FOUND", f"Project '{project_id}' was not found.")
+        settings_update = {
+            key: value
+            for key, value in body.items()
+            if key not in {"project_id", "projectId"}
+        }
+        try:
+            settings = self._gm_science_settings.update_settings(settings_update)
+        except ValueError as exc:
+            return _error("INVALID_REQUEST", str(exc))
+
+        config_path = agent_config_path(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir)
+        return _ok(
+            {
+                "settings": settings,
+                "agent": build_agent_profile(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir),
+                "project_id": project_id or None,
+                "capabilities": build_capability_catalog(config_path=config_path, project=project),
+            }
+        )
+
+    def get_gm_science_memory(self, project_id: str, *, user_id: str) -> dict[str, Any]:
+        """Return reviewable User and current-Project Memory state."""
+
+        try:
+            workspace = self._gm_science_memory.get_workspace(
+                project_id=project_id,
+                user_id=user_id,
+            )
+        except ValueError as exc:
+            return _error("PROJECT_NOT_FOUND", str(exc))
+        return _ok({"memory": workspace})
+
+    def create_gm_science_memory_note(
+        self,
+        project_id: str,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Create one explicitly approved User or Project Memory note."""
+
+        try:
+            note = self._gm_science_memory.create_note(
+                project_id=project_id,
+                user_id=str(body.get("user_id") or "ppx-client-user"),
+                scope=str(body.get("scope") or ""),
+                category=str(body.get("category") or ""),
+                text=str(body.get("text") or ""),
+            )
+        except ValueError as exc:
+            code = "PROJECT_NOT_FOUND" if self._gm_science_store.get_project(project_id) is None else "INVALID_REQUEST"
+            return _error(code, str(exc))
+        return _ok({"note": note})
+
+    def update_gm_science_memory_note(
+        self,
+        project_id: str,
+        note_id: str,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Update one note visible in the current Memory workspace."""
+
+        try:
+            note = self._gm_science_memory.update_note(
+                project_id=project_id,
+                user_id=str(body.get("user_id") or "ppx-client-user"),
+                note_id=note_id,
+                category=str(body.get("category") or ""),
+                text=str(body.get("text") or ""),
+            )
+        except ValueError as exc:
+            code = "PROJECT_NOT_FOUND" if self._gm_science_store.get_project(project_id) is None else "MEMORY_NOTE_NOT_FOUND"
+            return _error(code, str(exc))
+        return _ok({"note": note})
+
+    def delete_gm_science_memory_note(
+        self,
+        project_id: str,
+        note_id: str,
+        *,
+        user_id: str,
+    ) -> dict[str, Any]:
+        """Delete one note visible in the current Memory workspace."""
+
+        try:
+            self._gm_science_memory.delete_note(
+                project_id=project_id,
+                user_id=user_id,
+                note_id=note_id,
+            )
+        except ValueError as exc:
+            code = "PROJECT_NOT_FOUND" if self._gm_science_store.get_project(project_id) is None else "MEMORY_NOTE_NOT_FOUND"
+            return _error(code, str(exc))
+        return _ok({"deleted": True, "note_id": note_id})
+
+    def clear_gm_science_memory(
+        self,
+        project_id: str,
+        *,
+        user_id: str,
+        scope: str,
+    ) -> dict[str, Any]:
+        """Clear approved notes from exactly one selected Memory scope."""
+
+        try:
+            deleted_count = self._gm_science_memory.clear_scope(
+                project_id=project_id,
+                user_id=user_id,
+                scope=scope,
+            )
+        except ValueError as exc:
+            code = "PROJECT_NOT_FOUND" if self._gm_science_store.get_project(project_id) is None else "INVALID_REQUEST"
+            return _error(code, str(exc))
+        return _ok({"deleted_count": deleted_count, "scope": scope})
+
+    def review_gm_science_memory_candidate(
+        self,
+        project_id: str,
+        candidate_id: str,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Approve or reject one pending Memory candidate."""
+
+        try:
+            candidate = self._gm_science_memory.review_candidate(
+                project_id=project_id,
+                user_id=str(body.get("user_id") or "ppx-client-user"),
+                candidate_id=candidate_id,
+                decision=str(body.get("decision") or ""),
+            )
+        except ValueError as exc:
+            code = "PROJECT_NOT_FOUND" if self._gm_science_store.get_project(project_id) is None else "INVALID_REQUEST"
+            return _error(code, str(exc))
+        return _ok({"candidate": candidate})
 
     def update_gm_science_project_capabilities(
         self,
@@ -1430,6 +1756,21 @@ class ClientApiCoordinator:
         except ValueError as exc:
             return _error("INVALID_REQUEST", str(exc))
         return _ok({"items": [resource.to_dict() for resource in resources]})
+
+    def get_gm_science_resource_detail(self, project_id: str, resource_id: str) -> dict[str, Any]:
+        """Return bounded preview and provenance for one Project resource."""
+
+        if self._gm_science_store.get_project(project_id) is None:
+            return _error("PROJECT_NOT_FOUND", f"Project '{project_id}' was not found.")
+        if not self._resource_catalog.config.enabled:
+            return _error("RESOURCE_CATALOG_UNAVAILABLE", "Project resource catalog is disabled by configuration.")
+        try:
+            detail = self._resource_detail.get_detail(project_id, resource_id)
+        except LookupError as exc:
+            return _error("RESOURCE_NOT_FOUND", str(exc))
+        except ValueError as exc:
+            return _error("INVALID_REQUEST", str(exc))
+        return _ok({"detail": detail.to_dict()})
 
     def list_gm_science_datasets(self, project_id: str) -> dict[str, Any]:
         """Return imported datasets for one gm-science Project."""
@@ -1658,6 +1999,22 @@ class ClientApiCoordinator:
             config_path=agent_config_path(agent_id, self.data_dir),
             project=project,
         )
+        policy_issues = _session_policy_issues(association.policy, capability_catalog)
+        if policy_issues:
+            return _error("SESSION_POLICY_UNAVAILABLE", " ".join(policy_issues))
+        routed_specialists = (
+            {str(association.policy["specialist_id"])}
+            if association.policy.get("specialist_id")
+            else set(project.enabled_specialists)
+            if association.policy.get("delegation_enabled")
+            else set()
+        )
+        if association.policy.get("auto_review_enabled"):
+            routed_specialists.add("research_reviewer")
+        specialist_statuses = {
+            name: status if name in routed_specialists else "disabled"
+            for name, status in specialist_statuses.items()
+        }
         enabled_mcp_servers = selected_mcp_server_names(
             project.enabled_connectors,
             capability_catalog,
@@ -1668,6 +2025,7 @@ class ClientApiCoordinator:
             session_id=session_id,
             source_statuses=source_statuses,
             specialist_statuses=specialist_statuses,
+            session_policy=association.policy,
         )
         return self.create_run(
             agent_id,
@@ -1675,8 +2033,10 @@ class ClientApiCoordinator:
             message,
             user_id=user_id,
             project_id=project.id,
+            enabled_skills=list(project.enabled_skills),
             enabled_mcp_servers=enabled_mcp_servers,
             resource_refs=resource_selections,
+            session_policy=association.policy,
         )
 
     def list_sessions(self, agent_id: str, *, user_id: str = "ppx-client-user") -> dict[str, Any]:
@@ -1811,7 +2171,7 @@ class ClientApiCoordinator:
                     "agent_id": agent_id,
                     "project_id": normalized_project_id,
                     "subject_principal_id": requester.principal_id,
-                    "title": "新对话",
+                    "title": "New session",
                     "updated_at": updated_at,
                     "last_message_preview": "",
                     "archived": False,
@@ -2366,8 +2726,10 @@ class ClientApiCoordinator:
         *,
         user_id: str = "ppx-client-user",
         project_id: str = "",
+        enabled_skills: list[str] | None = None,
         enabled_mcp_servers: list[str] | None = None,
         resource_refs: list[ResourceSelection] | None = None,
+        session_policy: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create one streaming run and start consuming worker events in background."""
 
@@ -2413,6 +2775,13 @@ class ClientApiCoordinator:
         ]
         if project_id:
             cmd.extend(["--project-id", project_id])
+        if enabled_skills is not None:
+            cmd.extend(
+                [
+                    "--enabled-skills-json",
+                    json.dumps(enabled_skills, ensure_ascii=False, separators=(",", ":")),
+                ]
+            )
         if enabled_mcp_servers is not None:
             cmd.extend(
                 [
@@ -2433,9 +2802,21 @@ class ClientApiCoordinator:
                     ),
                 ]
             )
+        if session_policy is not None:
+            cmd.extend(
+                [
+                    "--session-policy-json",
+                    json.dumps(
+                        normalize_session_policy(session_policy),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                ]
+            )
         process = subprocess.Popen(
             cmd,
             cwd=str(config_path.parent),
+            env=_worker_process_env(),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -2976,12 +3357,26 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
         if not raw:
             return {}
         parsed = json.loads(raw.decode("utf-8"))
-        return parsed if isinstance(parsed, dict) else {}
+        if not isinstance(parsed, dict):
+            raise ValueError("JSON request body must be an object.")
+        return parsed
+
+    def _read_json_body_or_error(self) -> dict[str, Any] | None:
+        """Read one JSON object body or send a stable client error response."""
+
+        try:
+            return self._read_json_body()
+        except (UnicodeDecodeError, ValueError):
+            self._send_json(
+                400,
+                _error("INVALID_REQUEST", "Request body must contain a valid JSON object."),
+            )
+            return None
 
     def _parse(self) -> tuple[str, list[str], dict[str, str]]:
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path or "/"
-        segments = [segment for segment in path.split("/") if segment]
+        segments = [urllib.parse.unquote(segment) for segment in path.split("/") if segment]
         query = {key: values[-1] for key, values in urllib.parse.parse_qs(parsed.query).items() if values}
         return path, segments, query
 
@@ -2999,11 +3394,25 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
         if segments == ["api", "v1", "gm-science", "capabilities"]:
             self._send_json(200, self.coordinator.list_gm_science_capabilities())
             return
+        if segments == ["api", "v1", "gm-science", "settings"]:
+            self._send_json(200, self.coordinator.get_gm_science_settings())
+            return
         if segments == ["api", "v1", "gm-science", "projects"]:
             self._send_json(200, self.coordinator.list_gm_science_projects())
             return
         if len(segments) == 5 and segments[:4] == ["api", "v1", "gm-science", "projects"]:
             payload = self.coordinator.get_gm_science_project(segments[4])
+            self._send_json(200 if payload.get("ok") else 404, payload)
+            return
+        if (
+            len(segments) == 6
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "memory"
+        ):
+            payload = self.coordinator.get_gm_science_memory(
+                segments[4],
+                user_id=str(query.get("user_id") or "ppx-client-user"),
+            )
             self._send_json(200 if payload.get("ok") else 404, payload)
             return
         if (
@@ -3024,6 +3433,21 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
             if not payload.get("ok"):
                 code = payload.get("error", {}).get("code")
                 status = 404 if code == "PROJECT_NOT_FOUND" else 503 if code == "RESOURCE_CATALOG_UNAVAILABLE" else 400
+            self._send_json(status, payload)
+            return
+        if (
+            len(segments) == 6
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "resource-detail"
+        ):
+            payload = self.coordinator.get_gm_science_resource_detail(
+                segments[4],
+                query.get("resource_id", ""),
+            )
+            status = 200
+            if not payload.get("ok"):
+                code = payload.get("error", {}).get("code")
+                status = 404 if code in {"PROJECT_NOT_FOUND", "RESOURCE_NOT_FOUND"} else 503 if code == "RESOURCE_CATALOG_UNAVAILABLE" else 400
             self._send_json(status, payload)
             return
         if (
@@ -3086,6 +3510,14 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
             and segments[5] == "capabilities"
         ):
             payload = self.coordinator.list_gm_science_capabilities(segments[4])
+            self._send_json(200 if payload.get("ok") else 404, payload)
+            return
+        if (
+            len(segments) == 6
+            and segments[:4] == ["api", "v1", "gm-science", "sessions"]
+            and segments[5] == "policy"
+        ):
+            payload = self.coordinator.get_gm_science_session_policy(segments[4])
             self._send_json(200 if payload.get("ok") else 404, payload)
             return
         if len(segments) == 5 and segments[:3] == ["api", "v1", "agents"] and segments[4] == "sessions":
@@ -3172,7 +3604,35 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
 
     def do_PATCH(self) -> None:  # noqa: N802
         path, segments, _query = self._parse()
-        body = self._read_json_body()
+        body = self._read_json_body_or_error()
+        if body is None:
+            return
+        if segments == ["api", "v1", "gm-science", "settings"]:
+            payload = self.coordinator.update_gm_science_settings(body)
+            status = 200 if payload.get("ok") else 400
+            if not payload.get("ok") and payload.get("error", {}).get("code") == "PROJECT_NOT_FOUND":
+                status = 404
+            self._send_json(status, payload)
+            return
+        if (
+            len(segments) == 8
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "memory"
+            and segments[6] == "notes"
+        ):
+            payload = self.coordinator.update_gm_science_memory_note(
+                segments[4],
+                segments[7],
+                body,
+            )
+            status = 200 if payload.get("ok") else 400
+            if not payload.get("ok") and payload.get("error", {}).get("code") in {
+                "PROJECT_NOT_FOUND",
+                "MEMORY_NOTE_NOT_FOUND",
+            }:
+                status = 404
+            self._send_json(status, payload)
+            return
         if (
             len(segments) == 6
             and segments[:4] == ["api", "v1", "gm-science", "projects"]
@@ -3184,14 +3644,58 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
                 status = 404
             self._send_json(status, payload)
             return
+        if (
+            len(segments) == 6
+            and segments[:4] == ["api", "v1", "gm-science", "sessions"]
+            and segments[5] == "policy"
+        ):
+            payload = self.coordinator.update_gm_science_session_policy(segments[4], body)
+            status = 200 if payload.get("ok") else 400
+            if not payload.get("ok") and payload.get("error", {}).get("code") in {
+                "SESSION_NOT_IN_PROJECT",
+                "PROJECT_NOT_FOUND",
+            }:
+                status = 404
+            self._send_json(status, payload)
+            return
         self._send_json(404, _error("NOT_FOUND", f"Unknown path: {path}"))
 
     def do_POST(self) -> None:  # noqa: N802
         path, segments, _query = self._parse()
-        body = self._read_json_body()
+        body = self._read_json_body_or_error()
+        if body is None:
+            return
         if segments == ["api", "v1", "gm-science", "projects"]:
             payload = self.coordinator.create_gm_science_project(body)
             self._send_json(200 if payload.get("ok") else 400, payload)
+            return
+        if (
+            len(segments) == 7
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5:] == ["memory", "notes"]
+        ):
+            payload = self.coordinator.create_gm_science_memory_note(segments[4], body)
+            status = 200 if payload.get("ok") else 400
+            if not payload.get("ok") and payload.get("error", {}).get("code") == "PROJECT_NOT_FOUND":
+                status = 404
+            self._send_json(status, payload)
+            return
+        if (
+            len(segments) == 9
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "memory"
+            and segments[6] == "candidates"
+            and segments[8] == "review"
+        ):
+            payload = self.coordinator.review_gm_science_memory_candidate(
+                segments[4],
+                segments[7],
+                body,
+            )
+            status = 200 if payload.get("ok") else 400
+            if not payload.get("ok") and payload.get("error", {}).get("code") == "PROJECT_NOT_FOUND":
+                status = 404
+            self._send_json(status, payload)
             return
         if (
             len(segments) == 6
@@ -3381,6 +3885,40 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:  # noqa: N802
         path, segments, query = self._parse()
+        if (
+            len(segments) == 8
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "memory"
+            and segments[6] == "notes"
+        ):
+            payload = self.coordinator.delete_gm_science_memory_note(
+                segments[4],
+                segments[7],
+                user_id=str(query.get("user_id") or "ppx-client-user"),
+            )
+            status = 200 if payload.get("ok") else 400
+            if not payload.get("ok") and payload.get("error", {}).get("code") in {
+                "PROJECT_NOT_FOUND",
+                "MEMORY_NOTE_NOT_FOUND",
+            }:
+                status = 404
+            self._send_json(status, payload)
+            return
+        if (
+            len(segments) == 6
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "memory"
+        ):
+            payload = self.coordinator.clear_gm_science_memory(
+                segments[4],
+                user_id=str(query.get("user_id") or "ppx-client-user"),
+                scope=str(query.get("scope") or ""),
+            )
+            status = 200 if payload.get("ok") else 400
+            if not payload.get("ok") and payload.get("error", {}).get("code") == "PROJECT_NOT_FOUND":
+                status = 404
+            self._send_json(status, payload)
+            return
         if len(segments) == 7 and segments[:3] == ["api", "v1", "agents"] and segments[4] == "access" and segments[5] == "memberships":
             user_id = str(query.get("user_id") or "ppx-client-user")
             payload = self.coordinator.delete_agent_membership(

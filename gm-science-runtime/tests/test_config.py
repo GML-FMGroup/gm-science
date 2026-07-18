@@ -7,6 +7,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from openppx.core.config import (
     apply_agent_privilege_level_defaults,
@@ -149,6 +150,18 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(loaded["channels"]["feishu"]["enabled"])
         self.assertEqual(loaded["channels"]["feishu"]["appId"], "app-id-1")
         self.assertEqual(loaded["channels"]["feishu"]["appSecret"], "app-secret-1")
+
+    def test_save_config_does_not_replace_existing_file_when_atomic_replace_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            path.write_text('{"existing":true}\n', encoding="utf-8")
+
+            with patch("openppx.core.config.os.replace", side_effect=OSError("replace failed")):
+                with self.assertRaisesRegex(OSError, "replace failed"):
+                    save_config(default_config(), path)
+
+            self.assertEqual(path.read_text(encoding="utf-8"), '{"existing":true}\n')
+            self.assertEqual(list(path.parent.glob(".config.json.*.tmp")), [])
 
     def test_apply_config_to_env_respects_existing_values(self) -> None:
         os.environ["OPENPPX_MODEL"] = "from-shell"

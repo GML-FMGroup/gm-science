@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from openppx.gm_science.bootstrap import GM_SCIENCE_DEFAULT_AGENT_NAME
+from openppx.gm_science.catalog import BUILTIN_SCIENCE_SKILLS, SCIENCE_CONNECTORS
 from openppx.runtime.client_api_service import ClientApiCoordinator, _ClientApiHandler
 
 
@@ -26,6 +27,49 @@ def _write_test_skill(root: Path, name: str, description: str) -> None:
         f"---\nname: {name}\ndescription: {description}\n---\n\n# {name}\n",
         encoding="utf-8",
     )
+
+
+def test_handler_decodes_encoded_domain_ids_in_path_segments() -> None:
+    handler = object.__new__(_ClientApiHandler)
+    handler.path = (
+        "/api/v1/gm-science/projects/proj_1/memory/notes/"
+        "fact%3Aabc123?user_id=researcher"
+    )
+
+    _path, segments, query = handler._parse()
+
+    assert segments[-1] == "fact:abc123"
+    assert query == {"user_id": "researcher"}
+
+
+def test_handler_rejects_invalid_json_without_dispatching() -> None:
+    handler = object.__new__(_ClientApiHandler)
+    sent: list[tuple[int, dict[str, object]]] = []
+    handler._parse = lambda: (
+        "/api/v1/gm-science/projects",
+        ["api", "v1", "gm-science", "projects"],
+        {},
+    )
+    handler._read_json_body = lambda: (_ for _ in ()).throw(
+        json.JSONDecodeError("invalid JSON", "{", 1)
+    )
+    handler._send_json = lambda status, payload: sent.append((status, payload))
+
+    _ClientApiHandler.do_POST(handler)
+
+    assert sent == [
+        (
+            400,
+            {
+                "ok": False,
+                "error": {
+                    "code": "INVALID_REQUEST",
+                    "message": "Request body must contain a valid JSON object.",
+                    "details": {},
+                },
+            },
+        )
+    ]
 
 
 def test_handler_routes_expose_gm_science_project_and_artifact_api(tmp_path: Path, monkeypatch) -> None:
@@ -68,6 +112,188 @@ def test_handler_routes_expose_gm_science_project_and_artifact_api(tmp_path: Pat
     assert sent[-1][1]["data"]["items"] == [artifact["data"]["artifact"]]
 
 
+def test_handler_routes_manage_reviewable_project_memory(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path / "gm-science"))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    project = coordinator.create_gm_science_project({"name": "Memory API"})["data"]["project"]
+    handler, sent = _fake_handler(coordinator)
+    user_id = "researcher"
+
+    handler._parse = lambda: (
+        f"/api/v1/gm-science/projects/{project['id']}/memory/notes",
+        ["api", "v1", "gm-science", "projects", project["id"], "memory", "notes"],
+        {},
+    )
+    handler._read_json_body = lambda: {
+        "user_id": user_id,
+        "scope": "user",
+        "category": "Preferences",
+        "text": "Prefer concise uncertainty summaries.",
+    }
+    _ClientApiHandler.do_POST(handler)
+    assert sent[-1][0] == 200
+    note = sent[-1][1]["data"]["note"]
+
+    handler._parse = lambda: (
+        f"/api/v1/gm-science/projects/{project['id']}/memory/notes/{note['id']}",
+        [
+            "api",
+            "v1",
+            "gm-science",
+            "projects",
+            project["id"],
+            "memory",
+            "notes",
+            note["id"],
+        ],
+        {},
+    )
+    handler._read_json_body = lambda: {
+        "user_id": user_id,
+        "category": "Preferences",
+        "text": "Prefer concise summaries with uncertainty labels.",
+    }
+    _ClientApiHandler.do_PATCH(handler)
+    assert sent[-1][1]["data"]["note"]["text"].endswith("uncertainty labels.")
+
+    candidate = coordinator._gm_science_memory.propose_candidate(
+        project_id=project["id"],
+        user_id=user_id,
+        session_id="session-memory",
+        scope="project",
+        category="Project context",
+        text="Use GRCh38 for genome references.",
+        rationale="A durable Project convention.",
+        model="openai-codex/gpt-5.5",
+    )
+    handler._parse = lambda: (
+        f"/api/v1/gm-science/projects/{project['id']}/memory/candidates/{candidate['id']}/review",
+        [
+            "api",
+            "v1",
+            "gm-science",
+            "projects",
+            project["id"],
+            "memory",
+            "candidates",
+            candidate["id"],
+            "review",
+        ],
+        {},
+    )
+    handler._read_json_body = lambda: {"user_id": user_id, "decision": "approve"}
+    _ClientApiHandler.do_POST(handler)
+    assert sent[-1][1]["data"]["candidate"]["status"] == "approved"
+
+    handler._parse = lambda: (
+        f"/api/v1/gm-science/projects/{project['id']}/memory",
+        ["api", "v1", "gm-science", "projects", project["id"], "memory"],
+        {"user_id": user_id},
+    )
+    _ClientApiHandler.do_GET(handler)
+    workspace = sent[-1][1]["data"]["memory"]
+    assert {item["scope"] for item in workspace["notes"]} == {"user", "project"}
+    assert next(item for item in workspace["candidates"] if item["id"] == candidate["id"])["status"] == "approved"
+
+    handler._parse = lambda: (
+        f"/api/v1/gm-science/projects/{project['id']}/memory?scope=project",
+        ["api", "v1", "gm-science", "projects", project["id"], "memory"],
+        {"user_id": user_id, "scope": "project"},
+    )
+    _ClientApiHandler.do_DELETE(handler)
+    assert sent[-1][1]["data"]["deleted_count"] == 1
+
+    handler._parse = lambda: (
+        f"/api/v1/gm-science/projects/{project['id']}/memory/notes/{note['id']}",
+        [
+            "api",
+            "v1",
+            "gm-science",
+            "projects",
+            project["id"],
+            "memory",
+            "notes",
+            note["id"],
+        ],
+        {"user_id": user_id},
+    )
+    _ClientApiHandler.do_DELETE(handler)
+    assert sent[-1][1]["data"] == {"deleted": True, "note_id": note["id"]}
+
+
+def test_session_policy_api_validates_project_specialists_and_persists(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path / "gm-science"))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    project = coordinator.create_gm_science_project(
+        {
+            "name": "Policy API",
+            "enabled_specialists": ["paper_reader", "research_reviewer"],
+        }
+    )["data"]["project"]
+    session = coordinator.create_session(
+        GM_SCIENCE_DEFAULT_AGENT_NAME,
+        project_id=project["id"],
+    )["data"]["session"]
+
+    initial = coordinator.get_gm_science_session_policy(session["id"])
+    assert initial["data"]["policy"]["delegation_enabled"] is False
+    assert initial["data"]["policy"]["memory_enabled"] is False
+    assert initial["data"]["policy"]["reviewer_available"] is True
+    assert {item["id"] for item in initial["data"]["policy"]["specialists"]} == {
+        "paper_reader"
+    }
+
+    updated = coordinator.update_gm_science_session_policy(
+        session["id"],
+        {
+            "delegation_enabled": True,
+            "auto_review_enabled": True,
+            "memory_enabled": True,
+            "specialist_id": "paper_reader",
+        },
+    )
+    policy = updated["data"]["policy"]
+    assert policy["delegation_enabled"] is True
+    assert policy["auto_review_enabled"] is True
+    assert policy["memory_enabled"] is True
+    assert policy["specialist_id"] == "paper_reader"
+    assert coordinator.get_gm_science_session_policy(session["id"])["data"]["policy"] == policy
+
+    rejected = coordinator.update_gm_science_session_policy(
+        session["id"],
+        {"specialist_id": "research_reviewer"},
+    )
+    assert rejected["error"]["code"] == "SESSION_POLICY_UNAVAILABLE"
+
+
+def test_handler_routes_session_policy_get_and_patch(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path / "gm-science"))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    project = coordinator.create_gm_science_project({"name": "Policy routes"})["data"]["project"]
+    session = coordinator.create_session(
+        GM_SCIENCE_DEFAULT_AGENT_NAME,
+        project_id=project["id"],
+    )["data"]["session"]
+    handler, sent = _fake_handler(coordinator)
+    handler._parse = lambda: (
+        f"/api/v1/gm-science/sessions/{session['id']}/policy",
+        ["api", "v1", "gm-science", "sessions", session["id"], "policy"],
+        {},
+    )
+
+    _ClientApiHandler.do_GET(handler)
+    assert sent[-1][0] == 200
+    assert sent[-1][1]["data"]["policy"]["compute_target"] == "local"
+
+    handler._read_json_body = lambda: {"memory_enabled": True}
+    _ClientApiHandler.do_PATCH(handler)
+    assert sent[-1][0] == 200
+    assert sent[-1][1]["data"]["policy"]["memory_enabled"] is True
+
+
 def test_handler_routes_expose_path_safe_searchable_project_resources(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("GM_SCIENCE_MODE", "1")
     monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
@@ -107,6 +333,65 @@ def test_handler_routes_expose_path_safe_searchable_project_resources(tmp_path: 
         f"/api/v1/gm-science/projects/{project['id']}/resources",
         ["api", "v1", "gm-science", "projects", project["id"], "resources"],
         {"q": "x" * 201},
+    )
+    _ClientApiHandler.do_GET(handler)
+    assert sent[-1][0] == 400
+    assert sent[-1][1]["error"]["code"] == "INVALID_REQUEST"
+
+
+def test_handler_routes_expose_bounded_path_safe_resource_detail(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    project = coordinator.create_gm_science_project({"name": "Resource detail API"})["data"]["project"]
+    workspace = Path(project["workspace_path"])
+    report_path = workspace / "reports" / "summary.md"
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text("# Summary\n", encoding="utf-8")
+    artifact = coordinator.create_gm_science_artifact(
+        project["id"],
+        {
+            "type": "report",
+            "title": "Summary report",
+            "path_or_url": str(report_path),
+            "mime_type": "text/markdown",
+            "session_id": "session-1",
+            "metadata": {"summary": "One result", "profile_path": str(tmp_path / "private.json")},
+            "provenance": {"created_by": "agent", "credential": "secret"},
+        },
+    )["data"]["artifact"]
+    handler, sent = _fake_handler(coordinator)
+    handler._parse = lambda: (
+        f"/api/v1/gm-science/projects/{project['id']}/resource-detail",
+        ["api", "v1", "gm-science", "projects", project["id"], "resource-detail"],
+        {"resource_id": f"artifact:{artifact['id']}"},
+    )
+
+    _ClientApiHandler.do_GET(handler)
+
+    assert sent[-1][0] == 200
+    detail = sent[-1][1]["data"]["detail"]
+    assert detail["resource"]["relative_path"] == "reports/summary.md"
+    assert detail["preview"]["content"] == "# Summary\n"
+    assert detail["artifact"]["session_id"] == "session-1"
+    serialized = json.dumps(detail)
+    assert str(workspace) not in serialized
+    assert "profile_path" not in serialized
+    assert "secret" not in serialized
+
+    handler._parse = lambda: (
+        f"/api/v1/gm-science/projects/{project['id']}/resource-detail",
+        ["api", "v1", "gm-science", "projects", project["id"], "resource-detail"],
+        {"resource_id": "artifact:missing"},
+    )
+    _ClientApiHandler.do_GET(handler)
+    assert sent[-1][0] == 404
+    assert sent[-1][1]["error"]["code"] == "RESOURCE_NOT_FOUND"
+
+    handler._parse = lambda: (
+        f"/api/v1/gm-science/projects/{project['id']}/resource-detail",
+        ["api", "v1", "gm-science", "projects", project["id"], "resource-detail"],
+        {},
     )
     _ClientApiHandler.do_GET(handler)
     assert sent[-1][0] == 400
@@ -355,6 +640,50 @@ def test_handler_routes_expose_project_capability_api(tmp_path: Path, monkeypatc
     assert sent[-1][1]["data"]["project"]["enabled_connectors"] == ["arxiv"]
 
 
+def test_handler_routes_expose_safe_config_backed_settings(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    project = coordinator.create_gm_science_project({"name": "Settings API"})["data"]["project"]
+    handler, sent = _fake_handler(coordinator)
+
+    handler._parse = lambda: (
+        "/api/v1/gm-science/settings",
+        ["api", "v1", "gm-science", "settings"],
+        {},
+    )
+    _ClientApiHandler.do_GET(handler)
+    assert sent[-1][0] == 200
+    assert sent[-1][1]["data"]["settings"]["model"]["provider"] == "openai_codex"
+
+    handler._read_json_body = lambda: {
+        "project_id": project["id"],
+        "model": {"provider": "openai", "model": "openai/gpt-5.5"},
+        "provider_api_key": {"operation": "replace", "value": "provider-secret"},
+        "pubmed_email": "settings@example.org",
+        "openalex_api_key": {"operation": "replace", "value": "openalex-secret"},
+    }
+    _ClientApiHandler.do_PATCH(handler)
+    assert sent[-1][0] == 200
+    data = sent[-1][1]["data"]
+    assert data["settings"]["model"] == {"provider": "openai", "model": "openai/gpt-5.5"}
+    assert data["agent"]["provider"] == "openai"
+    assert data["agent"]["model"] == "openai/gpt-5.5"
+    assert data["project_id"] == project["id"]
+    openalex = next(item for item in data["capabilities"] if item["id"] == "openalex")
+    assert openalex["status"] == "ready"
+    serialized = json.dumps(sent[-1][1])
+    assert "provider-secret" not in serialized
+    assert "openalex-secret" not in serialized
+
+    handler._read_json_body = lambda: {
+        "model": {"provider": "deepseek", "model": "deepseek-v4"},
+    }
+    _ClientApiHandler.do_PATCH(handler)
+    assert sent[-1][0] == 400
+    assert sent[-1][1]["error"]["code"] == "INVALID_REQUEST"
+
+
 def test_client_api_bootstraps_default_science_agent_in_gm_science_mode(
     tmp_path: Path,
     monkeypatch,
@@ -366,7 +695,12 @@ def test_client_api_bootstraps_default_science_agent_in_gm_science_mode(
 
     agents = coordinator.list_agents()
     assert agents["ok"] is True
-    assert agents["data"]["items"][0]["id"] == GM_SCIENCE_DEFAULT_AGENT_NAME
+    profile = agents["data"]["items"][0]
+    assert profile["id"] == GM_SCIENCE_DEFAULT_AGENT_NAME
+    assert profile["name"] == "gm-science"
+    assert profile["provider"] == "openai_codex"
+    assert profile["model"] == "openai-codex/gpt-5.5"
+    assert profile["tags"] == ["local", "science"]
     assert (tmp_path / GM_SCIENCE_DEFAULT_AGENT_NAME / "config.json").is_file()
     assert (tmp_path / "global_config.json").is_file()
 
@@ -394,7 +728,7 @@ def test_client_api_lists_and_creates_gm_science_projects(tmp_path: Path, monkey
     assert project["description"] == "Shown in the project list."
     assert project["agent_context"] == "Always keep citations attached to claims."
     assert project["enabled_skills"] == ["literature-review"]
-    assert project["enabled_connectors"] == ["arxiv", "pubmed", "openalex"]
+    assert project["enabled_connectors"] == ["pubmed", "arxiv", "openalex"]
     assert project["enabled_specialists"] == ["paper_reader", "research_reviewer"]
     assert project["sessions_count"] == 0
     assert project["artifacts_count"] == 0
@@ -417,6 +751,7 @@ def test_client_api_associates_sessions_with_projects_and_reports_counts(tmp_pat
     assert created["ok"] is True
     session = created["data"]["session"]
     assert session["project_id"] == project["id"]
+    assert session["title"] == "New session"
     listed_sessions = coordinator.list_sessions(GM_SCIENCE_DEFAULT_AGENT_NAME)
     assert listed_sessions["data"]["items"][0]["project_id"] == project["id"]
     listed_projects = coordinator.list_gm_science_projects()
@@ -511,10 +846,11 @@ def test_client_api_lists_capabilities_with_global_and_project_status(
     assert payload["data"]["project_id"] == project["id"]
     items = {item["id"]: item for item in payload["data"]["items"]}
     ordered_ids = list(items)
-    assert "docx" in ordered_ids
+    assert "docx" not in ordered_ids
     assert "literature-review" in ordered_ids
-    arxiv_index = ordered_ids.index("arxiv")
-    assert ordered_ids[arxiv_index : arxiv_index + 3] == ["arxiv", "pubmed", "openalex"]
+    connector_ids = [definition.id for definition in SCIENCE_CONNECTORS]
+    connector_start = ordered_ids.index(connector_ids[0])
+    assert ordered_ids[connector_start : connector_start + len(connector_ids)] == connector_ids
     assert ordered_ids[-2:] == ["paper_reader", "research_reviewer"]
     assert items["literature-review"] == {
         "id": "literature-review",
@@ -532,11 +868,13 @@ def test_client_api_lists_capabilities_with_global_and_project_status(
         "status_detail": "",
         "metadata": {
             "registry_source": "builtin",
+            "catalog_group": "featured",
+            "implementation_status": "installed",
             "file_count": 1,
             "files_truncated": False,
         },
     }
-    assert items["arxiv"]["source"] == "built_in"
+    assert items["arxiv"]["source"] == "external"
     assert items["arxiv"]["files"] == []
     assert items["arxiv"]["status"] == "ready"
     assert items["pubmed"]["status"] == "needs_configuration"
@@ -567,7 +905,7 @@ def test_client_api_discovers_and_selects_agent_local_skills(tmp_path: Path, mon
     created = coordinator.create_gm_science_project(
         {
             "name": "Local skills",
-            "enabled_skills": ["local-analysis", "docx"],
+            "enabled_skills": ["local-analysis"],
             "enabled_connectors": [],
             "enabled_specialists": [],
         }
@@ -575,14 +913,18 @@ def test_client_api_discovers_and_selects_agent_local_skills(tmp_path: Path, mon
 
     assert created["ok"] is True
     project = created["data"]["project"]
-    assert project["enabled_skills"] == ["docx", "local-analysis"]
+    assert project["enabled_skills"] == ["local-analysis"]
     payload = coordinator.list_gm_science_capabilities(project["id"])
     skills = {
         item["id"]: item
         for item in payload["data"]["items"]
         if item["kind"] == "skill"
     }
-    assert list(skills) == ["docx", "literature-review", "local-analysis"]
+    assert list(skills) == [
+        *(definition.id for definition in BUILTIN_SCIENCE_SKILLS),
+        "local-analysis",
+    ]
+    assert "docx" not in skills
     assert skills["local-analysis"]["source"] == "local"
     assert skills["local-analysis"]["project_enabled"] is True
 
@@ -735,8 +1077,9 @@ def test_client_api_project_run_injects_agent_context(tmp_path: Path, monkeypatc
     assert "arxiv:ok" in message
     assert "pubmed:needs_configuration" in message
     assert "openalex:needs_configuration" in message
-    assert "paper_reader:ok" in message
-    assert "research_reviewer:ok" in message
+    assert "paper_reader:disabled" in message
+    assert "research_reviewer:disabled" in message
+    assert '"delegation_enabled":false' in message
     assert "Project context:" in message
     assert "Prefer reproducible scripts and cite sources." in message
     assert "User request:" in message
@@ -745,6 +1088,8 @@ def test_client_api_project_run_injects_agent_context(tmp_path: Path, monkeypatc
     assert observed_cmd[project_index] == project["id"]
     mcp_index = observed_cmd.index("--enabled-mcp-servers-json") + 1
     assert json.loads(observed_cmd[mcp_index]) == []
+    skills_index = observed_cmd.index("--enabled-skills-json") + 1
+    assert json.loads(observed_cmd[skills_index]) == ["literature-review"]
     resource_index = observed_cmd.index("--resource-refs-json") + 1
     assert json.loads(observed_cmd[resource_index]) == [
         {"id": resource["id"], "version_or_hash": resource["version_or_hash"]}

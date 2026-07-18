@@ -73,6 +73,53 @@ describe("preload API", () => {
         { enabledSkills: [], enabledConnectors: ["arxiv"], enabledSpecialists: [] },
       ],
     });
+    expect(api.getGmScienceSettings()).toEqual({
+      channel: "ppx-client:get-gm-science-settings",
+      args: [],
+    });
+    expect(api.updateGmScienceSettings({ projectId: "proj-1", pubmedEmail: "researcher@example.org" })).toEqual({
+      channel: "ppx-client:update-gm-science-settings",
+      args: [{ projectId: "proj-1", pubmedEmail: "researcher@example.org" }],
+    });
+    expect(api.getGmScienceMemory("proj-1")).toEqual({
+      channel: "ppx-client:get-gm-science-memory",
+      args: ["proj-1"],
+    });
+    expect(api.createGmScienceMemoryNote("proj-1", {
+      scope: "project",
+      category: "Context",
+      text: "Use GRCh38.",
+    })).toEqual({
+      channel: "ppx-client:create-gm-science-memory-note",
+      args: ["proj-1", { scope: "project", category: "Context", text: "Use GRCh38." }],
+    });
+    expect(api.updateGmScienceMemoryNote("proj-1", "note-1", {
+      category: "Context",
+      text: "Use GRCh38 only.",
+    })).toEqual({
+      channel: "ppx-client:update-gm-science-memory-note",
+      args: ["proj-1", "note-1", { category: "Context", text: "Use GRCh38 only." }],
+    });
+    expect(api.deleteGmScienceMemoryNote("proj-1", "note-1")).toEqual({
+      channel: "ppx-client:delete-gm-science-memory-note",
+      args: ["proj-1", "note-1"],
+    });
+    expect(api.clearGmScienceMemory("proj-1", "project")).toEqual({
+      channel: "ppx-client:clear-gm-science-memory",
+      args: ["proj-1", "project"],
+    });
+    expect(api.reviewGmScienceMemoryCandidate("proj-1", "candidate-1", "approve")).toEqual({
+      channel: "ppx-client:review-gm-science-memory-candidate",
+      args: ["proj-1", "candidate-1", "approve"],
+    });
+    expect(api.getGmScienceSessionPolicy("session-1")).toEqual({
+      channel: "ppx-client:get-gm-science-session-policy",
+      args: ["session-1"],
+    });
+    expect(api.updateGmScienceSessionPolicy("session-1", { delegationEnabled: true })).toEqual({
+      channel: "ppx-client:update-gm-science-session-policy",
+      args: ["session-1", { delegationEnabled: true }],
+    });
     expect(api.listGmScienceArtifacts("proj-1")).toEqual({
       channel: "ppx-client:list-gm-science-artifacts",
       args: ["proj-1"],
@@ -80,6 +127,10 @@ describe("preload API", () => {
     expect(api.listGmScienceResources("proj-1", "figure")).toEqual({
       channel: "ppx-client:list-gm-science-resources",
       args: ["proj-1", "figure"],
+    });
+    expect(api.getGmScienceResourceDetail("proj-1", "artifact:art-1")).toEqual({
+      channel: "ppx-client:get-gm-science-resource-detail",
+      args: ["proj-1", "artifact:art-1"],
     });
     expect(api.createGmScienceArtifact("proj-1", { title: "note" })).toEqual({
       channel: "ppx-client:create-gm-science-artifact",
@@ -137,6 +188,6 @@ describe("preload API", () => {
       channel: "ppx-client:run-gm-science-analysis",
       args: ["proj-1", "analysis-1"],
     });
-    expect(invoke).toHaveBeenCalledTimes(22);
+    expect(invoke).toHaveBeenCalledTimes(33);
   });
 });

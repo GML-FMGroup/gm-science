@@ -20,6 +20,7 @@ class ProjectRecord:
     enabled_skills: list[str] = field(default_factory=list)
     enabled_connectors: list[str] = field(default_factory=list)
     enabled_specialists: list[str] = field(default_factory=list)
+    session_policy_defaults: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +30,7 @@ class ProjectSessionRecord:
     project_id: str
     session_id: str
     agent_id: str
+    policy: dict[str, Any]
     created_at: str
     updated_at: str
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
 import time
 from pathlib import Path
 
@@ -359,6 +360,37 @@ def test_create_run_does_not_restrict_mcp_servers_outside_gm_science_projects(
 
     assert payload["ok"] is True
     assert "--enabled-mcp-servers-json" not in observed_cmd
+
+
+def test_create_run_worker_pythonpath_is_absolute_after_cwd_change(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "global_config.json").write_text(
+        json.dumps({"agents": [{"name": "writer", "enabled": True}]}),
+        encoding="utf-8",
+    )
+    agent_dir = tmp_path / "writer"
+    agent_dir.mkdir()
+    (agent_dir / "config.json").write_text(
+        json.dumps({"agent": {"workspace": "workspace/writer"}}),
+        encoding="utf-8",
+    )
+    observed_kwargs: dict[str, object] = {}
+
+    def fake_popen(_cmd: list[str], **kwargs: object) -> _FakeProcess:
+        observed_kwargs.update(kwargs)
+        return _FakeProcess(json.dumps({"type": "final", "text": "ok"}))
+
+    monkeypatch.setenv("PYTHONPATH", "gm-science-runtime")
+    monkeypatch.setattr("openppx.runtime.client_api_service.subprocess.Popen", fake_popen)
+
+    payload = ClientApiCoordinator(data_dir=tmp_path).create_run("writer", "session_worker_env", "hi")
+
+    assert payload["ok"] is True
+    worker_env = observed_kwargs["env"]
+    assert isinstance(worker_env, dict)
+    python_paths = str(worker_env["PYTHONPATH"]).split(os.pathsep)
+    assert python_paths
+    assert all(Path(path).is_absolute() for path in python_paths)
+    assert Path(python_paths[0]).name == "gm-science-runtime"
 
 
 def test_create_run_treats_empty_final_as_failed_message(tmp_path: Path, monkeypatch) -> None:
