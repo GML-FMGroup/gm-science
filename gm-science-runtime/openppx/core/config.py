@@ -572,6 +572,21 @@ def default_config() -> dict[str, Any]:
             },
         },
         "science": {
+            "data": {
+                "enabled": True,
+                "maxFileSizeBytes": 100000000,
+                "profileRowLimit": 50000,
+                "previewRows": 20,
+                "maxColumns": 200,
+                "topValuesLimit": 10,
+            },
+            "analysis": {
+                "enabled": True,
+                "maxDatasets": 3,
+                "maxObjectiveChars": 4000,
+                "maxNumericColumns": 20,
+                "maxGroupCategories": 20,
+            },
             "execution": {
                 "enabled": True,
                 "pythonExecutable": "",

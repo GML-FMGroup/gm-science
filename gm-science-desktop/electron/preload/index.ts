@@ -1,9 +1,11 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   ConnectionSettings,
+  CreateGmScienceAnalysisInput,
   CreateGmScienceArtifactInput,
   CreateGmSciencePythonRunInput,
   CreateGmScienceProjectInput,
+  ImportGmScienceDatasetInput,
   PpxClientApi,
   RunEvent,
   RuntimeCommand,
@@ -41,6 +43,19 @@ const api: PpxClientApi = {
     ipcRenderer.invoke("ppx-client:cancel-gm-science-run", projectId, taskId),
   retryGmScienceRun: (projectId: string, taskId: string) =>
     ipcRenderer.invoke("ppx-client:retry-gm-science-run", projectId, taskId),
+  selectGmScienceDatasetFile: () => ipcRenderer.invoke("ppx-client:select-gm-science-dataset-file"),
+  listGmScienceDatasets: (projectId: string) => ipcRenderer.invoke("ppx-client:list-gm-science-datasets", projectId),
+  getGmScienceDataset: (projectId: string, artifactId: string) =>
+    ipcRenderer.invoke("ppx-client:get-gm-science-dataset", projectId, artifactId),
+  importGmScienceDataset: (projectId: string, input: ImportGmScienceDatasetInput) =>
+    ipcRenderer.invoke("ppx-client:import-gm-science-dataset", projectId, input),
+  listGmScienceAnalyses: (projectId: string) => ipcRenderer.invoke("ppx-client:list-gm-science-analyses", projectId),
+  getGmScienceAnalysis: (projectId: string, analysisId: string) =>
+    ipcRenderer.invoke("ppx-client:get-gm-science-analysis", projectId, analysisId),
+  createGmScienceAnalysis: (projectId: string, input: CreateGmScienceAnalysisInput) =>
+    ipcRenderer.invoke("ppx-client:create-gm-science-analysis", projectId, input),
+  runGmScienceAnalysis: (projectId: string, analysisId: string) =>
+    ipcRenderer.invoke("ppx-client:run-gm-science-analysis", projectId, analysisId),
   onRunEvent: (listener: (event: RunEvent) => void) => {
     const wrapped = (_event: unknown, payload: RunEvent) => listener(payload);
     ipcRenderer.on("ppx-client:run-event", wrapped);

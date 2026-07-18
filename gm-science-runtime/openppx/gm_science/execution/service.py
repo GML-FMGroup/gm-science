@@ -65,6 +65,7 @@ class ScienceExecutionService:
         input_payload: dict[str, Any] | None = None,
         user_id: str = "ppx-client-user",
         parent_task_id: str | None = None,
+        kind: str = "local_python",
     ) -> dict[str, Any]:
         """Create a run directory, submit Python, and return the Project run payload."""
 
@@ -88,6 +89,9 @@ class ScienceExecutionService:
                 f"Python source exceeds the configured {self.config.max_source_chars}-character limit."
             )
         payload = dict(input_payload or {})
+        normalized_kind = str(kind or "").strip()
+        if normalized_kind not in {"local_python", "data_analysis"}:
+            raise ValueError(f"Unsupported science run kind '{kind}'.")
         raw_argv = payload.get("argv", [])
         if not isinstance(raw_argv, list) or any(not isinstance(item, (str, int, float)) for item in raw_argv):
             raise ValueError("Run input 'argv' must be an array of scalar values.")
@@ -134,7 +138,7 @@ class ScienceExecutionService:
                         owner_key=user_id,
                     ),
                     scope_key=None,
-                    task_kind="science_python",
+                    task_kind=f"science_{normalized_kind}",
                     runner_payload={
                         "science_run_id": execution_id,
                         "project_id": project.id,
@@ -157,7 +161,7 @@ class ScienceExecutionService:
                     project_id=project.id,
                     session_id=normalized_session_id,
                     parent_task_id=parent_task_id,
-                    kind="local_python",
+                    kind=normalized_kind,
                     title=str(title or "Python run").strip() or "Python run",
                     source_path=str(source_path),
                     working_directory=str(run_dir),
@@ -252,6 +256,7 @@ class ScienceExecutionService:
             input_payload=record.input_payload,
             user_id=user_id,
             parent_task_id=record.task_id,
+            kind=record.kind,
         )
 
     def _project_run(self, project_id: str, task_id: str) -> ScienceRunRecord:
@@ -378,6 +383,12 @@ class ScienceExecutionService:
         role: str,
         metadata: dict[str, Any],
     ) -> None:
+        analysis_id = str(record.input_payload.get("analysis_id") or "")
+        dataset_artifact_ids = [
+            str(value)
+            for value in record.input_payload.get("dataset_artifact_ids", [])
+            if str(value).strip()
+        ]
         artifact = self.store.create_artifact(
             project_id=record.project_id,
             session_id=record.session_id,
@@ -385,11 +396,19 @@ class ScienceExecutionService:
             title=title,
             path_or_url=str(path),
             mime_type=mime_type,
-            metadata={**metadata, "science_run_role": role, "task_id": record.task_id},
+            metadata={
+                **metadata,
+                "science_run_role": role,
+                "task_id": record.task_id,
+                "analysis_id": analysis_id,
+                "source_artifact_ids": dataset_artifact_ids,
+            },
             provenance={
                 "created_by": "experiment_runner",
                 "task_id": record.task_id,
                 "parent_task_id": record.parent_task_id or "",
+                "analysis_id": analysis_id,
+                "source_artifact_ids": dataset_artifact_ids,
             },
         )
         existing_task_paths = {

@@ -5,21 +5,28 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   bootstrap as mockBootstrap,
+  createGmScienceAnalysis as mockCreateGmScienceAnalysis,
   createGmScienceArtifact as mockCreateGmScienceArtifact,
   createGmSciencePythonRun as mockCreateGmSciencePythonRun,
   createGmScienceProject as mockCreateGmScienceProject,
   createSession as mockCreateSession,
   cancelGmScienceRun as mockCancelGmScienceRun,
   getGmScienceRun as mockGetGmScienceRun,
+  getGmScienceAnalysis as mockGetGmScienceAnalysis,
+  getGmScienceDataset as mockGetGmScienceDataset,
+  importGmScienceDataset as mockImportGmScienceDataset,
   getGmScienceProject as mockGetGmScienceProject,
   listGmScienceCapabilities as mockListGmScienceCapabilities,
   listGmScienceArtifacts as mockListGmScienceArtifacts,
+  listGmScienceAnalyses as mockListGmScienceAnalyses,
+  listGmScienceDatasets as mockListGmScienceDatasets,
   listGmScienceProjects as mockListGmScienceProjects,
   listGmScienceRuns as mockListGmScienceRuns,
   listSessions as mockListSessions,
   loadSession as mockLoadSession,
   runRuntimeCommand as mockRunRuntimeCommand,
   retryGmScienceRun as mockRetryGmScienceRun,
+  runGmScienceAnalysis as mockRunGmScienceAnalysis,
   sendMessage as mockSendMessage,
   updateGmScienceProjectCapabilities as mockUpdateGmScienceProjectCapabilities,
   subscribe as subscribeMock,
@@ -30,8 +37,10 @@ import {
   normalizeClientApiRuntime,
   normalizeClientApiSession,
   normalizeGmScienceArtifact,
+  normalizeGmScienceAnalysis,
   normalizeGmScienceCapability,
   normalizeGmScienceProject,
+  normalizeGmScienceDataset,
   normalizeGmScienceRun,
 } from "../../app/src/lib/client-api-projection";
 import { mergeAssistantParts } from "../../app/src/lib/openppx-projection";
@@ -53,14 +62,19 @@ import type {
   ClientDiagnostics,
   ConnectionSettings,
   ConnectionTarget,
+  CreateGmScienceAnalysisInput,
   CreateGmScienceArtifactInput,
   CreateGmSciencePythonRunInput,
   CreateGmScienceProjectInput,
   GmScienceArtifact,
+  GmScienceAnalysis,
   GmScienceCapability,
   GmScienceCapabilityCatalog,
   GmScienceProject,
+  GmScienceDataset,
+  GmScienceDatasetFileSelection,
   GmScienceRun,
+  ImportGmScienceDatasetInput,
   MessagePart,
   PpxClientApi,
   RunEvent,
@@ -843,6 +857,164 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
       return mockRetryGmScienceRun(projectId, taskId);
     }
     return { run: await this.postGmScienceRunAction(projectId, taskId, "retry") };
+  }
+
+  public async selectGmScienceDatasetFile(): Promise<GmScienceDatasetFileSelection | null> {
+    return null;
+  }
+
+  public async listGmScienceDatasets(projectId: string): Promise<{ datasets: GmScienceDataset[] }> {
+    if (this.shouldUseMock()) {
+      return mockListGmScienceDatasets(projectId);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      return { datasets: [] };
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/datasets`,
+    );
+    const items = Array.isArray((payload.data as Record<string, unknown> | undefined)?.items)
+      ? ((payload.data as Record<string, unknown>).items as unknown[])
+      : [];
+    return {
+      datasets: items.map(normalizeGmScienceDataset).filter((item): item is GmScienceDataset => item !== null),
+    };
+  }
+
+  public async getGmScienceDataset(
+    projectId: string,
+    artifactId: string,
+  ): Promise<{ dataset: GmScienceDataset }> {
+    if (this.shouldUseMock()) {
+      return mockGetGmScienceDataset(projectId, artifactId);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/datasets/${encodeURIComponent(artifactId)}`,
+    );
+    const dataset = normalizeGmScienceDataset((payload.data as Record<string, unknown> | undefined)?.dataset);
+    if (!dataset) {
+      throw new Error("Client API returned an invalid dataset payload.");
+    }
+    return { dataset };
+  }
+
+  public async importGmScienceDataset(
+    projectId: string,
+    input: ImportGmScienceDatasetInput,
+  ): Promise<{ dataset: GmScienceDataset }> {
+    if (this.shouldUseMock()) {
+      return mockImportGmScienceDataset(projectId, input);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/datasets/import`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          source_path: input.sourcePath,
+          title: input.title ?? "",
+          session_id: input.sessionId ?? "",
+        }),
+      },
+    );
+    const dataset = normalizeGmScienceDataset((payload.data as Record<string, unknown> | undefined)?.dataset);
+    if (!dataset) {
+      throw new Error("Client API returned an invalid dataset payload.");
+    }
+    return { dataset };
+  }
+
+  public async listGmScienceAnalyses(projectId: string): Promise<{ analyses: GmScienceAnalysis[] }> {
+    if (this.shouldUseMock()) {
+      return mockListGmScienceAnalyses(projectId);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      return { analyses: [] };
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/analyses`,
+    );
+    const items = Array.isArray((payload.data as Record<string, unknown> | undefined)?.items)
+      ? ((payload.data as Record<string, unknown>).items as unknown[])
+      : [];
+    return {
+      analyses: items.map(normalizeGmScienceAnalysis).filter((item): item is GmScienceAnalysis => item !== null),
+    };
+  }
+
+  public async getGmScienceAnalysis(
+    projectId: string,
+    analysisId: string,
+  ): Promise<{ analysis: GmScienceAnalysis }> {
+    if (this.shouldUseMock()) {
+      return mockGetGmScienceAnalysis(projectId, analysisId);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/analyses/${encodeURIComponent(analysisId)}`,
+    );
+    const analysis = normalizeGmScienceAnalysis((payload.data as Record<string, unknown> | undefined)?.analysis);
+    if (!analysis) {
+      throw new Error("Client API returned an invalid analysis payload.");
+    }
+    return { analysis };
+  }
+
+  public async createGmScienceAnalysis(
+    projectId: string,
+    input: CreateGmScienceAnalysisInput,
+  ): Promise<{ analysis: GmScienceAnalysis }> {
+    if (this.shouldUseMock()) {
+      return mockCreateGmScienceAnalysis(projectId, input);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/analyses`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          title: input.title ?? "",
+          objective: input.objective,
+          dataset_artifact_ids: input.datasetArtifactIds,
+          session_id: input.sessionId ?? "",
+        }),
+      },
+    );
+    const analysis = normalizeGmScienceAnalysis((payload.data as Record<string, unknown> | undefined)?.analysis);
+    if (!analysis) {
+      throw new Error("Client API returned an invalid analysis payload.");
+    }
+    return { analysis };
+  }
+
+  public async runGmScienceAnalysis(
+    projectId: string,
+    analysisId: string,
+  ): Promise<{ analysis: GmScienceAnalysis }> {
+    if (this.shouldUseMock()) {
+      return mockRunGmScienceAnalysis(projectId, analysisId);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/analyses/${encodeURIComponent(analysisId)}/run`,
+      { method: "POST", body: JSON.stringify({}) },
+    );
+    const analysis = normalizeGmScienceAnalysis((payload.data as Record<string, unknown> | undefined)?.analysis);
+    if (!analysis) {
+      throw new Error("Client API returned an invalid analysis payload.");
+    }
+    return { analysis };
   }
 
   private async fetchGmScienceRun(projectId: string, taskId: string): Promise<GmScienceRun> {

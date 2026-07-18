@@ -15,6 +15,7 @@ from ..core.config import normalize_agent_privilege_level
 from ..core.env_utils import env_enabled
 from ..core.mcp_registry import build_mcp_toolsets_from_env
 from ..core.provider import build_adk_model_from_env
+from ..gm_science.analysis.tools import science_list_datasets, science_plan_data_analysis
 from ..gm_science.literature.tools import science_list_sources, science_register_review, science_search
 from ..gm_science.specialists.agents import build_specialist_tools, specialist_dispatch_guidance
 from ..gm_science.specialists.registry import science_list_specialists
@@ -244,6 +245,8 @@ def _build_tools() -> list[Any]:
                 science_list_sources,
                 science_search,
                 science_register_review,
+                science_list_datasets,
+                science_plan_data_analysis,
                 science_list_specialists,
                 *build_specialist_tools(),
             ]

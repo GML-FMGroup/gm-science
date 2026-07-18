@@ -147,6 +147,47 @@ Project 工作区的 `Runs` 面板可以提交本地 Python 源码，并查看�
 
 `pythonExecutable` 为空时使用当前 gm-science runtime 的 Python。当前版本只开放受约束的 Python Run，不开放任意 shell、依赖安装、notebook、GPU、SSH 或远程计算。应用重启后已完成和失败的历史仍可查看；无法重新接管的活动进程会诚实标记为 `lost`，用户可以从保存的源码和输入重试。
 
+## 数据集与 Data Analyst
+
+Project 工作区的 `Data` 面板支持导入 UTF-8 编码的 CSV、TSV、JSON、JSONL 和 NDJSON。源文件会先复制到当前 Project workspace，再生成：
+
+- `dataset` Artifact：保存 Project 内副本、SHA-256、行列数和 schema 摘要。
+- `dataset_profile` Artifact：保存类型推断、缺失值、常见值、数值摘要、预览和 profiling 警告。
+- 可审阅的 Analysis draft：自然语言目标会被编译成明确步骤和独立 Python 源码，创建草案时不会启动 TaskRun。
+- Analysis outputs：用户点击 `Approve & run` 后才创建 `data_analysis` TaskRun，并登记分析报告、JSON 摘要和 SVG 图表。
+
+CSV/TSV 的空列名与重复列名会确定性规范化，超出表头的额外字段会被截断；导入画像和批准后的分析使用同一套读取语义。Markdown 报告会直接呈现描述统计、IQR 异常值、Pearson 相关、描述性分组比较和图表引用，JSON 摘要保留结构化完整结果。
+
+内置确定性分析支持数据质量、描述统计、直方图、IQR 异常值、Pearson 相关和描述性分组比较。回归、显著性检验、因果和生存分析不会伪装成已完成，而会在草案中提示使用经过审阅的自定义 Python Run。
+
+主智能体可以调用 `science_list_datasets` 和 `science_plan_data_analysis` 生成草案，但没有“直接运行分析”的模型工具；执行审批只在 Data 面板中完成。
+
+相关设置位于 `~/.gm-science/science-research/config.json`：
+
+```json
+{
+  "science": {
+    "data": {
+      "enabled": true,
+      "maxFileSizeBytes": 100000000,
+      "profileRowLimit": 50000,
+      "previewRows": 20,
+      "maxColumns": 200,
+      "topValuesLimit": 10
+    },
+    "analysis": {
+      "enabled": true,
+      "maxDatasets": 3,
+      "maxObjectiveChars": 4000,
+      "maxNumericColumns": 20,
+      "maxGroupCategories": 20
+    }
+  }
+}
+```
+
+当前基础版本不读取 Excel、Parquet、HDF5，不自动安装 pandas/scipy，也不自动运行统计推断。导入大小和 profiling 行数分别受配置限制；总行数仍会完整计数。
+
 ## 一键启动
 
 macOS 用户可以直接双击：

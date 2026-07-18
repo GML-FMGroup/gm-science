@@ -51,6 +51,23 @@ class ScienceRunRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class AnalysisDraftRecord:
+    """A reviewable data-analysis intent with optional TaskRun linkage."""
+
+    id: str
+    project_id: str
+    session_id: str | None
+    title: str
+    objective: str
+    dataset_artifact_ids: list[str]
+    plan: dict[str, Any]
+    source: str
+    task_id: str | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True, slots=True)
 class ArtifactRecord:
     """A durable research artifact attached to a gm-science project."""
 

@@ -1,12 +1,14 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   ConnectionSettings,
+  CreateGmScienceAnalysisInput,
   CreateGmScienceArtifactInput,
   CreateGmSciencePythonRunInput,
   CreateGmScienceProjectInput,
+  ImportGmScienceDatasetInput,
   RuntimeCommand,
   SendMessageInput,
   UpdateGmScienceCapabilitiesInput,
@@ -132,6 +134,48 @@ app.whenReady().then(() => {
   );
   ipcMain.handle("ppx-client:retry-gm-science-run", async (_event, projectId: string, taskId: string) =>
     adapter!.retryGmScienceRun(projectId, taskId),
+  );
+  ipcMain.handle("ppx-client:select-gm-science-dataset-file", async () => {
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: "Import dataset",
+      properties: ["openFile"],
+      filters: [
+        { name: "Tabular datasets", extensions: ["csv", "tsv", "json", "jsonl", "ndjson"] },
+        { name: "All files", extensions: ["*"] },
+      ],
+    });
+    if (result.canceled || !result.filePaths[0]) {
+      return null;
+    }
+    return { path: result.filePaths[0], name: path.basename(result.filePaths[0]) };
+  });
+  ipcMain.handle("ppx-client:list-gm-science-datasets", async (_event, projectId: string) =>
+    adapter!.listGmScienceDatasets(projectId),
+  );
+  ipcMain.handle(
+    "ppx-client:get-gm-science-dataset",
+    async (_event, projectId: string, artifactId: string) => adapter!.getGmScienceDataset(projectId, artifactId),
+  );
+  ipcMain.handle(
+    "ppx-client:import-gm-science-dataset",
+    async (_event, projectId: string, input: ImportGmScienceDatasetInput) =>
+      adapter!.importGmScienceDataset(projectId, input),
+  );
+  ipcMain.handle("ppx-client:list-gm-science-analyses", async (_event, projectId: string) =>
+    adapter!.listGmScienceAnalyses(projectId),
+  );
+  ipcMain.handle(
+    "ppx-client:get-gm-science-analysis",
+    async (_event, projectId: string, analysisId: string) => adapter!.getGmScienceAnalysis(projectId, analysisId),
+  );
+  ipcMain.handle(
+    "ppx-client:create-gm-science-analysis",
+    async (_event, projectId: string, input: CreateGmScienceAnalysisInput) =>
+      adapter!.createGmScienceAnalysis(projectId, input),
+  );
+  ipcMain.handle(
+    "ppx-client:run-gm-science-analysis",
+    async (_event, projectId: string, analysisId: string) => adapter!.runGmScienceAnalysis(projectId, analysisId),
   );
 
   createWindow();

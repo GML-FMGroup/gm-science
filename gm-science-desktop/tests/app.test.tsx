@@ -211,6 +211,24 @@ function installClient(overrides: Partial<PpxClientApi> = {}): { client: PpxClie
     retryGmScienceRun: async (projectId, taskId) => ({
       run: buildScienceRun({ projectId, taskId: "task-retry", parentTaskId: taskId }),
     }),
+    selectGmScienceDatasetFile: async () => null,
+    listGmScienceDatasets: async () => ({ datasets: [] }),
+    getGmScienceDataset: async () => {
+      throw new Error("Dataset not found");
+    },
+    importGmScienceDataset: async () => {
+      throw new Error("Dataset import is not configured in this test");
+    },
+    listGmScienceAnalyses: async () => ({ analyses: [] }),
+    getGmScienceAnalysis: async () => {
+      throw new Error("Analysis not found");
+    },
+    createGmScienceAnalysis: async () => {
+      throw new Error("Analysis creation is not configured in this test");
+    },
+    runGmScienceAnalysis: async () => {
+      throw new Error("Analysis execution is not configured in this test");
+    },
     onRunEvent: (next) => {
       listener = next;
       return () => {

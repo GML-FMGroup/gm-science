@@ -1,7 +1,9 @@
 import {
   normalizeGmScienceArtifact,
+  normalizeGmScienceAnalysis,
   normalizeGmScienceCapability,
   normalizeGmScienceProject,
+  normalizeGmScienceDataset,
   normalizeGmScienceRun,
 } from "../app/src/lib/client-api-projection";
 
@@ -140,6 +142,79 @@ describe("gm-science client-api projection", () => {
       canRetry: false,
       logPreview: "[stdout] Loading data",
       artifactIds: ["art-code"],
+    });
+  });
+
+  it("normalizes dataset profiles and analysis plans", () => {
+    const dataset = normalizeGmScienceDataset({
+      artifact_id: "art-data",
+      project_id: "proj-1",
+      title: "Study",
+      path: "/workspace/source.csv",
+      format: "csv",
+      row_count: 3,
+      profiled_row_count: 3,
+      column_count: 1,
+      column_names: ["value"],
+      profile_artifact_id: "art-profile",
+      profile: {
+        version: 1,
+        format: "csv",
+        row_count: 3,
+        profiled_row_count: 3,
+        column_count: 1,
+        columns: [
+          {
+            name: "value",
+            inferred_type: "number",
+            non_null_count: 2,
+            missing_count: 1,
+            missing_fraction: 0.333333,
+            unique_count: 2,
+            unique_count_capped: false,
+            type_counts: { number: 2 },
+            top_values: [{ value: "1", count: 1 }],
+            numeric: { count: 2, min: 1, max: 3, mean: 2, standard_deviation: 1.414 },
+          },
+        ],
+        preview: [{ value: 1 }],
+        warnings: [],
+      },
+    });
+    expect(dataset?.profile?.columns[0]).toMatchObject({
+      name: "value",
+      inferredType: "number",
+      missingCount: 1,
+      numeric: { mean: 2, standardDeviation: 1.414 },
+    });
+
+    const analysis = normalizeGmScienceAnalysis({
+      id: "analysis-1",
+      project_id: "proj-1",
+      title: "Analyze",
+      objective: "Summarize data",
+      dataset_artifact_ids: ["art-data"],
+      plan: {
+        version: 1,
+        objective: "Summarize data",
+        operations: ["data_quality"],
+        steps: [{ id: "data_quality", title: "Data Quality", description: "Check data." }],
+        datasets: [],
+        assumptions: ["Missing values are excluded."],
+        warnings: [],
+      },
+      source: "print('ok')",
+      task_id: "",
+      status: "draft",
+      run: null,
+      artifact_ids: [],
+    });
+    expect(analysis).toMatchObject({
+      id: "analysis-1",
+      status: "draft",
+      datasetArtifactIds: ["art-data"],
+      source: "print('ok')",
+      plan: { operations: ["data_quality"] },
     });
   });
 });

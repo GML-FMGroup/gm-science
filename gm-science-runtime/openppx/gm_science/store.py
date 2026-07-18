@@ -9,7 +9,13 @@ import uuid
 from pathlib import Path
 from typing import Any, Iterator
 
-from .models import ArtifactRecord, ProjectRecord, ProjectSessionRecord, ScienceRunRecord
+from .models import (
+    AnalysisDraftRecord,
+    ArtifactRecord,
+    ProjectRecord,
+    ProjectSessionRecord,
+    ScienceRunRecord,
+)
 from .paths import get_gm_science_data_dir
 
 
@@ -348,6 +354,140 @@ class GmScienceStore:
             ).fetchall()
         return [_science_run_from_row(row) for row in rows]
 
+    def create_analysis_draft(
+        self,
+        *,
+        project_id: str,
+        title: str,
+        objective: str,
+        dataset_artifact_ids: list[str],
+        plan: dict[str, Any],
+        source: str,
+        session_id: str | None = None,
+    ) -> AnalysisDraftRecord:
+        """Persist one reviewable analysis intent before any TaskRun exists."""
+
+        if self.get_project(project_id) is None:
+            raise ValueError(f"Project '{project_id}' was not found.")
+        normalized_session_id = str(session_id or "").strip() or None
+        if normalized_session_id:
+            association = self.get_project_session(normalized_session_id)
+            if association is None or association.project_id != project_id:
+                raise ValueError(
+                    f"Session '{normalized_session_id}' does not belong to Project '{project_id}'."
+                )
+        normalized_objective = str(objective or "").strip()
+        if not normalized_objective:
+            raise ValueError("Analysis objective is required.")
+        normalized_dataset_ids = list(
+            dict.fromkeys(str(value or "").strip() for value in dataset_artifact_ids if str(value or "").strip())
+        )
+        if not normalized_dataset_ids:
+            raise ValueError("At least one dataset artifact is required.")
+        analysis_id = f"analysis_{uuid.uuid4().hex[:16]}"
+        timestamp = _utc_now()
+        record = AnalysisDraftRecord(
+            id=analysis_id,
+            project_id=project_id,
+            session_id=normalized_session_id,
+            title=str(title or "").strip() or "Data analysis",
+            objective=normalized_objective,
+            dataset_artifact_ids=normalized_dataset_ids,
+            plan=dict(plan),
+            source=str(source or ""),
+            task_id=None,
+            created_at=timestamp,
+            updated_at=timestamp,
+        )
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO gm_science_analysis_drafts (
+                    id, project_id, session_id, title, objective,
+                    dataset_artifact_ids, plan, source, task_id, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.id,
+                    record.project_id,
+                    record.session_id,
+                    record.title,
+                    record.objective,
+                    _json_dumps(record.dataset_artifact_ids),
+                    _json_dumps(record.plan),
+                    record.source,
+                    record.task_id,
+                    record.created_at,
+                    record.updated_at,
+                ),
+            )
+            conn.execute(
+                "UPDATE gm_science_projects SET updated_at = ? WHERE id = ?",
+                (timestamp, project_id),
+            )
+        return record
+
+    def get_analysis_draft(self, analysis_id: str) -> AnalysisDraftRecord | None:
+        """Return one analysis draft by id, or None when it does not exist."""
+
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM gm_science_analysis_drafts WHERE id = ?",
+                (str(analysis_id or "").strip(),),
+            ).fetchone()
+        return _analysis_draft_from_row(row) if row is not None else None
+
+    def list_analysis_drafts(self, project_id: str) -> list[AnalysisDraftRecord]:
+        """List analysis drafts for one Project in newest-first order."""
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM gm_science_analysis_drafts
+                WHERE project_id = ?
+                ORDER BY created_at DESC, id DESC
+                """,
+                (project_id,),
+            ).fetchall()
+        return [_analysis_draft_from_row(row) for row in rows]
+
+    def link_analysis_task(self, analysis_id: str, task_id: str) -> AnalysisDraftRecord:
+        """Point one analysis draft at its current Project TaskRun."""
+
+        analysis = self.get_analysis_draft(analysis_id)
+        if analysis is None:
+            raise ValueError(f"Analysis '{analysis_id}' was not found.")
+        normalized_task_id = str(task_id or "").strip()
+        run = self.get_science_run(normalized_task_id)
+        if run is None or run.project_id != analysis.project_id:
+            raise ValueError(
+                f"Science run '{normalized_task_id}' does not belong to Project '{analysis.project_id}'."
+            )
+        timestamp = _utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE gm_science_analysis_drafts SET task_id = ?, updated_at = ? WHERE id = ?",
+                (normalized_task_id, timestamp, analysis.id),
+            )
+            conn.execute(
+                "UPDATE gm_science_projects SET updated_at = ? WHERE id = ?",
+                (timestamp, analysis.project_id),
+            )
+        updated = self.get_analysis_draft(analysis.id)
+        if updated is None:
+            raise RuntimeError(f"Analysis '{analysis.id}' disappeared during update.")
+        return updated
+
+    def find_analysis_by_task(self, task_id: str) -> AnalysisDraftRecord | None:
+        """Return the analysis currently linked to one TaskRun, if any."""
+
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM gm_science_analysis_drafts WHERE task_id = ?",
+                (str(task_id or "").strip(),),
+            ).fetchone()
+        return _analysis_draft_from_row(row) if row is not None else None
+
     def create_artifact(
         self,
         *,
@@ -561,6 +701,25 @@ class GmScienceStore:
 
                 CREATE INDEX IF NOT EXISTS idx_gm_science_runs_project
                 ON gm_science_runs(project_id, created_at);
+
+                CREATE TABLE IF NOT EXISTS gm_science_analysis_drafts (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    session_id TEXT,
+                    title TEXT NOT NULL,
+                    objective TEXT NOT NULL,
+                    dataset_artifact_ids TEXT NOT NULL,
+                    plan TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    task_id TEXT UNIQUE,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(project_id) REFERENCES gm_science_projects(id) ON DELETE CASCADE,
+                    FOREIGN KEY(session_id) REFERENCES gm_science_project_sessions(session_id) ON DELETE SET NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_gm_science_analysis_drafts_project
+                ON gm_science_analysis_drafts(project_id, created_at);
                 """
             )
 
@@ -625,6 +784,24 @@ def _science_run_from_row(row: sqlite3.Row) -> ScienceRunRecord:
         source_path=str(row["source_path"]),
         working_directory=str(row["working_directory"]),
         input_payload=_json_loads_dict(row["input_payload"]),
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
+    )
+
+
+def _analysis_draft_from_row(row: sqlite3.Row) -> AnalysisDraftRecord:
+    """Project one SQLite row into an AnalysisDraftRecord."""
+
+    return AnalysisDraftRecord(
+        id=str(row["id"]),
+        project_id=str(row["project_id"]),
+        session_id=str(row["session_id"]) if row["session_id"] is not None else None,
+        title=str(row["title"]),
+        objective=str(row["objective"]),
+        dataset_artifact_ids=_json_loads_list(row["dataset_artifact_ids"]),
+        plan=_json_loads_dict(row["plan"]),
+        source=str(row["source"]),
+        task_id=str(row["task_id"]) if row["task_id"] is not None else None,
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )

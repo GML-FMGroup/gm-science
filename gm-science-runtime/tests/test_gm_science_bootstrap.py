@@ -56,6 +56,17 @@ def test_bootstrap_creates_default_science_agent_with_openai_codex_provider(tmp_
     assert specialists["model"] == ""
     assert specialists["paperReader"]["maxPapers"] == 6
     assert specialists["reviewer"]["reviewGate"] == "annotate"
+    data = config["science"]["data"]
+    assert data["enabled"] is True
+    assert data["maxFileSizeBytes"] == 100_000_000
+    assert data["profileRowLimit"] == 50_000
+    analysis = config["science"]["analysis"]
+    assert analysis["enabled"] is True
+    assert analysis["maxDatasets"] == 3
+    assert analysis["maxNumericColumns"] == 20
+    execution = config["science"]["execution"]
+    assert execution["enabled"] is True
+    assert execution["defaultTimeoutSeconds"] == 900
 
     runtime_config = json.loads(result.runtime_config_path.read_text(encoding="utf-8"))
     assert isinstance(runtime_config["env"], dict)
@@ -91,3 +102,6 @@ def test_bootstrap_persists_missing_science_defaults_into_existing_config(tmp_pa
         "research_reviewer",
     ]
     assert saved["science"]["specialists"]["reviewer"]["reviewGate"] == "annotate"
+    assert saved["science"]["data"]["profileRowLimit"] == 50_000
+    assert saved["science"]["analysis"]["maxDatasets"] == 3
+    assert saved["science"]["execution"]["defaultTimeoutSeconds"] == 900

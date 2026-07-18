@@ -1,7 +1,11 @@
 import type {
   ChatMessage,
   GmScienceCapability,
+  GmScienceAnalysis,
   GmScienceArtifact,
+  GmScienceDataset,
+  GmScienceDatasetColumnProfile,
+  GmScienceDatasetProfile,
   GmScienceProject,
   GmScienceRun,
   GmScienceRunStatus,
@@ -38,6 +42,10 @@ function asStringList(value: unknown): string[] {
 function asLooseRecord(value: unknown): Record<string, unknown> {
   const record = asRecord(value);
   return record ? { ...record } : {};
+}
+
+function asNullableNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function normalizeRole(value: unknown): MessageRole {
@@ -290,5 +298,137 @@ export function normalizeGmScienceRun(payload: unknown): GmScienceRun | null {
     canRetry: run.can_retry === true || run.canRetry === true,
     logPreview: asString(run.log_preview ?? run.logPreview),
     artifactIds: asStringList(run.artifact_ids ?? run.artifactIds),
+  };
+}
+
+function normalizeDatasetColumn(payload: unknown): GmScienceDatasetColumnProfile | null {
+  const column = asRecord(payload);
+  if (!column) {
+    return null;
+  }
+  const numeric = asRecord(column.numeric);
+  const topValues = Array.isArray(column.top_values ?? column.topValues)
+    ? (column.top_values ?? column.topValues) as unknown[]
+    : [];
+  const typeCountsRaw = asRecord(column.type_counts ?? column.typeCounts) ?? {};
+  return {
+    name: asString(column.name),
+    inferredType: asString(column.inferred_type ?? column.inferredType),
+    nonNullCount: asNumber(column.non_null_count ?? column.nonNullCount),
+    missingCount: asNumber(column.missing_count ?? column.missingCount),
+    missingFraction: asNumber(column.missing_fraction ?? column.missingFraction),
+    uniqueCount: asNumber(column.unique_count ?? column.uniqueCount),
+    uniqueCountCapped: column.unique_count_capped === true || column.uniqueCountCapped === true,
+    typeCounts: Object.fromEntries(
+      Object.entries(typeCountsRaw).map(([key, value]) => [key, asNumber(value)]),
+    ),
+    topValues: topValues
+      .map((item) => asRecord(item))
+      .filter((item): item is Record<string, unknown> => item !== null)
+      .map((item) => ({ value: asString(item.value), count: asNumber(item.count) })),
+    numeric: numeric
+      ? {
+          count: asNumber(numeric.count),
+          min: asNullableNumber(numeric.min),
+          max: asNullableNumber(numeric.max),
+          mean: asNullableNumber(numeric.mean),
+          standardDeviation: asNullableNumber(numeric.standard_deviation ?? numeric.standardDeviation),
+        }
+      : undefined,
+  };
+}
+
+function normalizeDatasetProfile(payload: unknown): GmScienceDatasetProfile | undefined {
+  const profile = asRecord(payload);
+  if (!profile) {
+    return undefined;
+  }
+  const columns = Array.isArray(profile.columns) ? profile.columns : [];
+  const preview = Array.isArray(profile.preview) ? profile.preview : [];
+  return {
+    version: asNumber(profile.version, 1),
+    format: asString(profile.format),
+    rowCount: asNumber(profile.row_count ?? profile.rowCount),
+    profiledRowCount: asNumber(profile.profiled_row_count ?? profile.profiledRowCount),
+    columnCount: asNumber(profile.column_count ?? profile.columnCount),
+    columns: columns
+      .map(normalizeDatasetColumn)
+      .filter((item): item is GmScienceDatasetColumnProfile => item !== null),
+    preview: preview.map(asLooseRecord),
+    warnings: asStringList(profile.warnings),
+  };
+}
+
+export function normalizeGmScienceDataset(payload: unknown): GmScienceDataset | null {
+  const dataset = asRecord(payload);
+  if (!dataset) {
+    return null;
+  }
+  return {
+    artifactId: asString(dataset.artifact_id ?? dataset.artifactId),
+    projectId: asString(dataset.project_id ?? dataset.projectId),
+    sessionId: asString(dataset.session_id ?? dataset.sessionId),
+    title: asString(dataset.title),
+    path: asString(dataset.path),
+    mimeType: asString(dataset.mime_type ?? dataset.mimeType),
+    format: asString(dataset.format),
+    sourceName: asString(dataset.source_name ?? dataset.sourceName),
+    sizeBytes: asNumber(dataset.size_bytes ?? dataset.sizeBytes),
+    rowCount: asNumber(dataset.row_count ?? dataset.rowCount),
+    profiledRowCount: asNumber(dataset.profiled_row_count ?? dataset.profiledRowCount),
+    columnCount: asNumber(dataset.column_count ?? dataset.columnCount),
+    columnNames: asStringList(dataset.column_names ?? dataset.columnNames),
+    profileArtifactId: asString(dataset.profile_artifact_id ?? dataset.profileArtifactId),
+    profile: normalizeDatasetProfile(dataset.profile),
+    createdAt: asString(dataset.created_at ?? dataset.createdAt, new Date().toISOString()),
+    updatedAt: asString(dataset.updated_at ?? dataset.updatedAt, new Date().toISOString()),
+  };
+}
+
+export function normalizeGmScienceAnalysis(payload: unknown): GmScienceAnalysis | null {
+  const analysis = asRecord(payload);
+  const plan = asRecord(analysis?.plan);
+  if (!analysis || !plan) {
+    return null;
+  }
+  const status = asString(analysis.status, "draft");
+  if (status !== "draft" && !GM_SCIENCE_RUN_STATUSES.has(status as GmScienceRunStatus)) {
+    return null;
+  }
+  const steps = Array.isArray(plan.steps) ? plan.steps : [];
+  const datasets = Array.isArray(plan.datasets) ? plan.datasets : [];
+  const source = typeof analysis.source === "string" ? analysis.source : undefined;
+  return {
+    id: asString(analysis.id),
+    projectId: asString(analysis.project_id ?? analysis.projectId),
+    sessionId: asString(analysis.session_id ?? analysis.sessionId),
+    title: asString(analysis.title),
+    objective: asString(analysis.objective),
+    datasetArtifactIds: asStringList(analysis.dataset_artifact_ids ?? analysis.datasetArtifactIds),
+    plan: {
+      version: asNumber(plan.version, 1),
+      objective: asString(plan.objective),
+      operations: asStringList(plan.operations),
+      steps: steps
+        .map(asRecord)
+        .filter((item): item is Record<string, unknown> => item !== null)
+        .map((item) => ({
+          id: asString(item.id),
+          title: asString(item.title),
+          description: asString(item.description),
+        })),
+      datasets: datasets.map(asLooseRecord),
+      assumptions: asStringList(plan.assumptions),
+      warnings: asStringList(plan.warnings),
+    },
+    source,
+    taskId: asString(analysis.task_id ?? analysis.taskId),
+    status: status as GmScienceAnalysis["status"],
+    run: normalizeGmScienceRun(analysis.run),
+    reportArtifactId: asString(analysis.report_artifact_id ?? analysis.reportArtifactId),
+    figureArtifactIds: asStringList(analysis.figure_artifact_ids ?? analysis.figureArtifactIds),
+    artifactIds: asStringList(analysis.artifact_ids ?? analysis.artifactIds),
+    createdAt: asString(analysis.created_at ?? analysis.createdAt, new Date().toISOString()),
+    updatedAt: asString(analysis.updated_at ?? analysis.updatedAt, new Date().toISOString()),
   };
 }

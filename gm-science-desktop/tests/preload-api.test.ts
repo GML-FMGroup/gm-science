@@ -101,6 +101,38 @@ describe("preload API", () => {
       channel: "ppx-client:retry-gm-science-run",
       args: ["proj-1", "task-1"],
     });
-    expect(invoke).toHaveBeenCalledTimes(13);
+    expect(api.selectGmScienceDatasetFile()).toEqual({
+      channel: "ppx-client:select-gm-science-dataset-file",
+      args: [],
+    });
+    expect(api.listGmScienceDatasets("proj-1")).toEqual({
+      channel: "ppx-client:list-gm-science-datasets",
+      args: ["proj-1"],
+    });
+    expect(api.getGmScienceDataset("proj-1", "art-data")).toEqual({
+      channel: "ppx-client:get-gm-science-dataset",
+      args: ["proj-1", "art-data"],
+    });
+    expect(api.importGmScienceDataset("proj-1", { sourcePath: "/tmp/data.csv" })).toEqual({
+      channel: "ppx-client:import-gm-science-dataset",
+      args: ["proj-1", { sourcePath: "/tmp/data.csv" }],
+    });
+    expect(api.listGmScienceAnalyses("proj-1")).toEqual({
+      channel: "ppx-client:list-gm-science-analyses",
+      args: ["proj-1"],
+    });
+    expect(api.getGmScienceAnalysis("proj-1", "analysis-1")).toEqual({
+      channel: "ppx-client:get-gm-science-analysis",
+      args: ["proj-1", "analysis-1"],
+    });
+    expect(api.createGmScienceAnalysis("proj-1", { objective: "Analyze", datasetArtifactIds: ["art-data"] })).toEqual({
+      channel: "ppx-client:create-gm-science-analysis",
+      args: ["proj-1", { objective: "Analyze", datasetArtifactIds: ["art-data"] }],
+    });
+    expect(api.runGmScienceAnalysis("proj-1", "analysis-1")).toEqual({
+      channel: "ppx-client:run-gm-science-analysis",
+      args: ["proj-1", "analysis-1"],
+    });
+    expect(invoke).toHaveBeenCalledTimes(21);
   });
 });

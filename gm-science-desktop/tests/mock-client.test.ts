@@ -1,16 +1,21 @@
 import {
   bootstrap,
+  createGmScienceAnalysis,
   createGmScienceArtifact,
   createGmScienceProject,
   createGmSciencePythonRun,
   createSession,
   listGmScienceCapabilities,
   listGmScienceArtifacts,
+  importGmScienceDataset,
+  listGmScienceAnalyses,
+  listGmScienceDatasets,
   listGmScienceProjects,
   listGmScienceRuns,
   loadSession,
   updateGmScienceProjectCapabilities,
   retryGmScienceRun,
+  runGmScienceAnalysis,
 } from "../app/src/lib/mock-client";
 
 describe("mock client adapter", () => {
@@ -79,5 +84,30 @@ describe("mock client adapter", () => {
 
     const retried = await retryGmScienceRun("proj_mock_research", created.run.taskId);
     expect(retried.run.parentTaskId).toBe(created.run.taskId);
+  });
+
+  it("supports mock dataset import and review-before-run analysis", async () => {
+    const imported = await importGmScienceDataset("proj_mock_research", {
+      sourcePath: "/tmp/study.csv",
+      title: "Study",
+    });
+    expect(imported.dataset.profile?.columns).toHaveLength(3);
+    expect((await listGmScienceDatasets("proj_mock_research")).datasets).toContainEqual(imported.dataset);
+
+    const draft = await createGmScienceAnalysis("proj_mock_research", {
+      objective: "Summarize Study",
+      datasetArtifactIds: [imported.dataset.artifactId],
+    });
+    expect(draft.analysis.status).toBe("draft");
+    const executed = await runGmScienceAnalysis("proj_mock_research", draft.analysis.id);
+    expect(executed.analysis.status).toBe("completed");
+    expect(executed.analysis.run?.kind).toBe("data_analysis");
+    expect((await listGmScienceRuns("proj_mock_research")).runs.find(
+      (run) => run.taskId === executed.analysis.taskId,
+    )?.kind).toBe("data_analysis");
+    expect((await listGmScienceAnalyses("proj_mock_research")).analyses).toContainEqual(executed.analysis);
+    await expect(runGmScienceAnalysis("proj_mock_research", draft.analysis.id)).rejects.toThrow(
+      "already been approved",
+    );
   });
 });

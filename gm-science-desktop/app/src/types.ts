@@ -188,6 +188,109 @@ export interface CreateGmSciencePythonRunInput {
   input?: Record<string, unknown>;
 }
 
+export interface GmScienceDatasetColumnProfile {
+  name: string;
+  inferredType: string;
+  nonNullCount: number;
+  missingCount: number;
+  missingFraction: number;
+  uniqueCount: number;
+  uniqueCountCapped: boolean;
+  typeCounts: Record<string, number>;
+  topValues: Array<{ value: string; count: number }>;
+  numeric?: {
+    count: number;
+    min: number | null;
+    max: number | null;
+    mean: number | null;
+    standardDeviation: number | null;
+  };
+}
+
+export interface GmScienceDatasetProfile {
+  version: number;
+  format: string;
+  rowCount: number;
+  profiledRowCount: number;
+  columnCount: number;
+  columns: GmScienceDatasetColumnProfile[];
+  preview: Array<Record<string, unknown>>;
+  warnings: string[];
+}
+
+export interface GmScienceDataset {
+  artifactId: string;
+  projectId: string;
+  sessionId: string;
+  title: string;
+  path: string;
+  mimeType: string;
+  format: string;
+  sourceName: string;
+  sizeBytes: number;
+  rowCount: number;
+  profiledRowCount: number;
+  columnCount: number;
+  columnNames: string[];
+  profileArtifactId: string;
+  profile?: GmScienceDatasetProfile;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GmScienceDatasetFileSelection {
+  path: string;
+  name: string;
+}
+
+export interface ImportGmScienceDatasetInput {
+  sourcePath: string;
+  title?: string;
+  sessionId?: string;
+}
+
+export interface GmScienceAnalysisPlanStep {
+  id: string;
+  title: string;
+  description: string;
+}
+
+export interface GmScienceAnalysisPlan {
+  version: number;
+  objective: string;
+  operations: string[];
+  steps: GmScienceAnalysisPlanStep[];
+  datasets: Array<Record<string, unknown>>;
+  assumptions: string[];
+  warnings: string[];
+}
+
+export interface GmScienceAnalysis {
+  id: string;
+  projectId: string;
+  sessionId: string;
+  title: string;
+  objective: string;
+  datasetArtifactIds: string[];
+  plan: GmScienceAnalysisPlan;
+  source?: string;
+  taskId: string;
+  status: "draft" | GmScienceRunStatus;
+  run: GmScienceRun | null;
+  reportArtifactId: string;
+  figureArtifactIds: string[];
+  artifactIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateGmScienceAnalysisInput {
+  title?: string;
+  objective: string;
+  datasetArtifactIds: string[];
+  sessionId?: string;
+}
+
 export interface ChatMessage {
   id: string;
   sessionId: string;
@@ -272,5 +375,19 @@ export interface PpxClientApi {
   ): Promise<{ run: GmScienceRun }>;
   cancelGmScienceRun(projectId: string, taskId: string): Promise<{ run: GmScienceRun }>;
   retryGmScienceRun(projectId: string, taskId: string): Promise<{ run: GmScienceRun }>;
+  selectGmScienceDatasetFile(): Promise<GmScienceDatasetFileSelection | null>;
+  listGmScienceDatasets(projectId: string): Promise<{ datasets: GmScienceDataset[] }>;
+  getGmScienceDataset(projectId: string, artifactId: string): Promise<{ dataset: GmScienceDataset }>;
+  importGmScienceDataset(
+    projectId: string,
+    input: ImportGmScienceDatasetInput,
+  ): Promise<{ dataset: GmScienceDataset }>;
+  listGmScienceAnalyses(projectId: string): Promise<{ analyses: GmScienceAnalysis[] }>;
+  getGmScienceAnalysis(projectId: string, analysisId: string): Promise<{ analysis: GmScienceAnalysis }>;
+  createGmScienceAnalysis(
+    projectId: string,
+    input: CreateGmScienceAnalysisInput,
+  ): Promise<{ analysis: GmScienceAnalysis }>;
+  runGmScienceAnalysis(projectId: string, analysisId: string): Promise<{ analysis: GmScienceAnalysis }>;
   onRunEvent(listener: (event: RunEvent) => void): () => void;
 }

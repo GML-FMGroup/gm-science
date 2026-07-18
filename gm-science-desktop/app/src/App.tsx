@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CapabilitiesPanel } from "./components/CapabilitiesPanel";
+import { DataPanel } from "./components/DataPanel";
 import { MessageBubble } from "./components/MessageBubble";
 import type {
   AgentProfile,
@@ -19,7 +20,7 @@ import type {
 
 type NavView = "projects" | "workspace" | "settings";
 type SettingsSection = GmScienceCapabilityKind | "runtime";
-type WorkspacePanel = "artifacts" | "runs";
+type WorkspacePanel = "artifacts" | "data" | "runs";
 
 interface ProjectFormState {
   name: string;
@@ -1233,6 +1234,14 @@ export function App() {
                   Artifacts
                 </button>
                 <button
+                  className={workspacePanel === "data" ? "active" : ""}
+                  role="tab"
+                  aria-selected={workspacePanel === "data"}
+                  onClick={() => setWorkspacePanel("data")}
+                >
+                  Data
+                </button>
+                <button
                   className={workspacePanel === "runs" ? "active" : ""}
                   role="tab"
                   aria-selected={workspacePanel === "runs"}
@@ -1241,7 +1250,7 @@ export function App() {
                   Runs
                 </button>
               </div>
-              <span>{workspacePanel === "artifacts" ? artifacts.length : runs.length}</span>
+              <span>{workspacePanel === "artifacts" ? artifacts.length : workspacePanel === "runs" ? runs.length : ""}</span>
             </header>
             {workspacePanel === "artifacts" ? (
               <>
@@ -1262,6 +1271,18 @@ export function App() {
                   ) : null}
                 </div>
               </>
+            ) : workspacePanel === "data" ? (
+              <DataPanel
+                projectId={selectedProjectId}
+                sessionId={selectedSessionId || undefined}
+                onRunStarted={(run) => {
+                  runsRef.current = [run, ...runsRef.current.filter((item) => item.taskId !== run.taskId)];
+                  setRuns(runsRef.current);
+                }}
+                onWorkspaceChanged={async () => {
+                  await Promise.all([refreshArtifacts(selectedProjectId), refreshRuns(selectedProjectId), refreshProjects()]);
+                }}
+              />
             ) : (
               <>
                 <div className="science-runs-toolbar">

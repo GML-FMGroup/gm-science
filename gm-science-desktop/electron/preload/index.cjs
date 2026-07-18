@@ -28,6 +28,19 @@ const api = {
     ipcRenderer.invoke("ppx-client:cancel-gm-science-run", projectId, taskId),
   retryGmScienceRun: (projectId, taskId) =>
     ipcRenderer.invoke("ppx-client:retry-gm-science-run", projectId, taskId),
+  selectGmScienceDatasetFile: () => ipcRenderer.invoke("ppx-client:select-gm-science-dataset-file"),
+  listGmScienceDatasets: (projectId) => ipcRenderer.invoke("ppx-client:list-gm-science-datasets", projectId),
+  getGmScienceDataset: (projectId, artifactId) =>
+    ipcRenderer.invoke("ppx-client:get-gm-science-dataset", projectId, artifactId),
+  importGmScienceDataset: (projectId, input) =>
+    ipcRenderer.invoke("ppx-client:import-gm-science-dataset", projectId, input),
+  listGmScienceAnalyses: (projectId) => ipcRenderer.invoke("ppx-client:list-gm-science-analyses", projectId),
+  getGmScienceAnalysis: (projectId, analysisId) =>
+    ipcRenderer.invoke("ppx-client:get-gm-science-analysis", projectId, analysisId),
+  createGmScienceAnalysis: (projectId, input) =>
+    ipcRenderer.invoke("ppx-client:create-gm-science-analysis", projectId, input),
+  runGmScienceAnalysis: (projectId, analysisId) =>
+    ipcRenderer.invoke("ppx-client:run-gm-science-analysis", projectId, analysisId),
   onRunEvent: (listener) => {
     const wrapped = (_event, payload) => listener(payload);
     ipcRenderer.on("ppx-client:run-event", wrapped);

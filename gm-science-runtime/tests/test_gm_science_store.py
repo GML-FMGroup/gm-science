@@ -169,6 +169,93 @@ def test_science_run_rejects_session_from_another_project(tmp_path: Path) -> Non
         )
 
 
+def test_analysis_draft_round_trips_and_links_project_run(tmp_path: Path) -> None:
+    store = GmScienceStore(tmp_path)
+    project = store.create_project(name="Analysis", description="", agent_context="")
+    dataset = store.create_artifact(
+        project_id=project.id,
+        artifact_type="dataset",
+        title="Measurements",
+        path_or_url="datasets/source.csv",
+    )
+    draft = store.create_analysis_draft(
+        project_id=project.id,
+        title="Compare measurements",
+        objective="Compare group means.",
+        dataset_artifact_ids=[dataset.id, dataset.id],
+        plan={"operations": ["group_comparison"]},
+        source="print('analysis')",
+    )
+
+    assert draft.dataset_artifact_ids == [dataset.id]
+    assert draft.task_id is None
+    assert not hasattr(draft, "status")
+    assert store.get_analysis_draft(draft.id) == draft
+    assert store.list_analysis_drafts(project.id) == [draft]
+
+    store.create_science_run(
+        task_id="task-analysis",
+        project_id=project.id,
+        kind="data_analysis",
+        title=draft.title,
+        source_path="runs/task-analysis/main.py",
+        working_directory="runs/task-analysis",
+        input_payload={"analysis_id": draft.id},
+    )
+    linked = store.link_analysis_task(draft.id, "task-analysis")
+
+    assert linked.task_id == "task-analysis"
+    assert store.find_analysis_by_task("task-analysis") == linked
+
+
+def test_analysis_draft_rejects_cross_project_session_and_run(tmp_path: Path) -> None:
+    store = GmScienceStore(tmp_path)
+    project = store.create_project(name="Primary", description="", agent_context="")
+    other = store.create_project(name="Other", description="", agent_context="")
+    dataset = store.create_artifact(
+        project_id=project.id,
+        artifact_type="dataset",
+        title="Data",
+        path_or_url="data.csv",
+    )
+    store.link_project_session(
+        project_id=other.id,
+        session_id="session-other-analysis",
+        agent_id="science-research",
+    )
+
+    with pytest.raises(ValueError, match="does not belong"):
+        store.create_analysis_draft(
+            project_id=project.id,
+            session_id="session-other-analysis",
+            title="Invalid",
+            objective="Analyze data.",
+            dataset_artifact_ids=[dataset.id],
+            plan={},
+            source="pass",
+        )
+
+    draft = store.create_analysis_draft(
+        project_id=project.id,
+        title="Valid",
+        objective="Analyze data.",
+        dataset_artifact_ids=[dataset.id],
+        plan={},
+        source="pass",
+    )
+    store.create_science_run(
+        task_id="task-other-analysis",
+        project_id=other.id,
+        kind="data_analysis",
+        title="Other",
+        source_path="other.py",
+        working_directory="runs/other",
+    )
+
+    with pytest.raises(ValueError, match="does not belong"):
+        store.link_analysis_task(draft.id, "task-other-analysis")
+
+
 def test_find_project_paper_and_artifact_by_id(tmp_path: Path) -> None:
     store = GmScienceStore(tmp_path)
     project = store.create_project(name="Review", description="", agent_context="")

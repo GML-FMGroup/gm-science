@@ -20,6 +20,8 @@ from ..core.config import get_data_dir
 from ..core.logging_utils import debug_logging_enabled, emit_debug
 from ..gm_science.bootstrap import GM_SCIENCE_DEFAULT_AGENT_NAME, ensure_gm_science_initialized
 from ..gm_science.capabilities import build_capability_catalog, normalize_capability_selection
+from ..gm_science.analysis import AnalysisService
+from ..gm_science.data import DatasetService
 from ..gm_science.execution import ScienceExecutionService
 from ..gm_science.literature.config import load_literature_config, select_literature_sources
 from ..gm_science.models import ArtifactRecord, ProjectRecord
@@ -750,6 +752,16 @@ class ClientApiCoordinator:
             store=self._gm_science_store,
             config_path=agent_config_path(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir),
         )
+        self._dataset_service = DatasetService(
+            store=self._gm_science_store,
+            config_path=agent_config_path(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir),
+        )
+        self._analysis_service = AnalysisService(
+            store=self._gm_science_store,
+            dataset_service=self._dataset_service,
+            execution_service=self._science_execution,
+            config_path=agent_config_path(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir),
+        )
 
     def _ensure_requester_principal(self, user_id: str) -> ResolvedPrincipal:
         """Return a persisted requester principal for client-api operations."""
@@ -1332,6 +1344,98 @@ class ClientApiCoordinator:
             return _error("INVALID_REQUEST", str(exc))
         return _ok({"artifact": _gm_science_artifact_payload(artifact)})
 
+    def list_gm_science_datasets(self, project_id: str) -> dict[str, Any]:
+        """Return imported datasets for one gm-science Project."""
+
+        try:
+            return _ok({"items": self._dataset_service.list_datasets(project_id)})
+        except ValueError as exc:
+            return _error("PROJECT_NOT_FOUND", str(exc))
+
+    def get_gm_science_dataset(self, project_id: str, artifact_id: str) -> dict[str, Any]:
+        """Return one imported dataset and its persisted profile."""
+
+        try:
+            return _ok({"dataset": self._dataset_service.get_dataset(project_id, artifact_id)})
+        except ValueError as exc:
+            return _error("DATASET_NOT_FOUND", str(exc))
+
+    def import_gm_science_dataset(self, project_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Import one local file into a gm-science Project workspace."""
+
+        source_path = str(body.get("source_path") or body.get("sourcePath") or "").strip()
+        if not source_path:
+            return _error("INVALID_REQUEST", "Field 'source_path' is required.")
+        try:
+            dataset = self._dataset_service.import_dataset(
+                project_id=project_id,
+                source_path=source_path,
+                title=str(body.get("title") or ""),
+                session_id=str(body.get("session_id") or body.get("sessionId") or "") or None,
+            )
+        except ValueError as exc:
+            return _error("INVALID_REQUEST", str(exc))
+        return _ok({"dataset": dataset})
+
+    def list_gm_science_analyses(self, project_id: str) -> dict[str, Any]:
+        """Return reviewable analyses for one gm-science Project."""
+
+        try:
+            return _ok({"items": self._analysis_service.list_analyses(project_id)})
+        except ValueError as exc:
+            return _error("PROJECT_NOT_FOUND", str(exc))
+        except RuntimeError as exc:
+            return _error("EXECUTION_UNAVAILABLE", str(exc))
+
+    def get_gm_science_analysis(self, project_id: str, analysis_id: str) -> dict[str, Any]:
+        """Return one analysis draft, derived run status, and output links."""
+
+        try:
+            return _ok({"analysis": self._analysis_service.get_analysis(project_id, analysis_id)})
+        except ValueError as exc:
+            return _error("ANALYSIS_NOT_FOUND", str(exc))
+        except RuntimeError as exc:
+            return _error("EXECUTION_UNAVAILABLE", str(exc))
+
+    def create_gm_science_analysis(self, project_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Compile a natural-language objective into a reviewable analysis draft."""
+
+        raw_dataset_ids = body.get("dataset_artifact_ids", body.get("datasetArtifactIds"))
+        if not isinstance(raw_dataset_ids, list):
+            return _error("INVALID_REQUEST", "Field 'dataset_artifact_ids' must be an array.")
+        try:
+            analysis = self._analysis_service.create_draft(
+                project_id=project_id,
+                session_id=str(body.get("session_id") or body.get("sessionId") or "") or None,
+                title=str(body.get("title") or ""),
+                objective=str(body.get("objective") or ""),
+                dataset_artifact_ids=[str(value) for value in raw_dataset_ids],
+            )
+        except ValueError as exc:
+            return _error("INVALID_REQUEST", str(exc))
+        return _ok({"analysis": analysis})
+
+    def run_gm_science_analysis(
+        self,
+        project_id: str,
+        analysis_id: str,
+        *,
+        user_id: str = "ppx-client-user",
+    ) -> dict[str, Any]:
+        """Approve one persisted analysis draft and submit its TaskRun."""
+
+        try:
+            analysis = self._analysis_service.run_analysis(
+                project_id,
+                analysis_id,
+                user_id=user_id,
+            )
+        except ValueError as exc:
+            return _error("INVALID_REQUEST", str(exc))
+        except RuntimeError as exc:
+            return _error("EXECUTION_UNAVAILABLE", str(exc))
+        return _ok({"analysis": analysis})
+
     def list_gm_science_runs(self, project_id: str) -> dict[str, Any]:
         """Return synchronized local execution runs for one gm-science Project."""
 
@@ -1396,15 +1500,13 @@ class ClientApiCoordinator:
         """Create a new local execution run from one terminal run's saved intent."""
 
         try:
-            return _ok(
-                {
-                    "run": self._science_execution.retry_run(
-                        project_id,
-                        task_id,
-                        user_id=user_id,
-                    )
-                }
+            run = self._science_execution.retry_run(
+                project_id,
+                task_id,
+                user_id=user_id,
             )
+            self._analysis_service.relink_retry(task_id, str(run["task_id"]))
+            return _ok({"run": run})
         except ValueError as exc:
             return _error("INVALID_REQUEST", str(exc))
         except RuntimeError as exc:
@@ -2782,6 +2884,44 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
         if (
             len(segments) == 6
             and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "datasets"
+        ):
+            payload = self.coordinator.list_gm_science_datasets(segments[4])
+            self._send_json(200 if payload.get("ok") else 404, payload)
+            return
+        if (
+            len(segments) == 7
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "datasets"
+        ):
+            payload = self.coordinator.get_gm_science_dataset(segments[4], segments[6])
+            self._send_json(200 if payload.get("ok") else 404, payload)
+            return
+        if (
+            len(segments) == 6
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "analyses"
+        ):
+            payload = self.coordinator.list_gm_science_analyses(segments[4])
+            status = 200 if payload.get("ok") else 404
+            if not payload.get("ok") and payload.get("error", {}).get("code") == "EXECUTION_UNAVAILABLE":
+                status = 503
+            self._send_json(status, payload)
+            return
+        if (
+            len(segments) == 7
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "analyses"
+        ):
+            payload = self.coordinator.get_gm_science_analysis(segments[4], segments[6])
+            status = 200 if payload.get("ok") else 404
+            if not payload.get("ok") and payload.get("error", {}).get("code") == "EXECUTION_UNAVAILABLE":
+                status = 503
+            self._send_json(status, payload)
+            return
+        if (
+            len(segments) == 6
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
             and segments[5] == "runs"
         ):
             payload = self.coordinator.list_gm_science_runs(segments[4])
@@ -2917,6 +3057,39 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
             status = 200 if payload.get("ok") else 400
             if not payload.get("ok") and payload.get("error", {}).get("code") == "PROJECT_NOT_FOUND":
                 status = 404
+            self._send_json(status, payload)
+            return
+        if (
+            len(segments) == 7
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "datasets"
+            and segments[6] == "import"
+        ):
+            payload = self.coordinator.import_gm_science_dataset(segments[4], body)
+            self._send_json(200 if payload.get("ok") else 400, payload)
+            return
+        if (
+            len(segments) == 6
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "analyses"
+        ):
+            payload = self.coordinator.create_gm_science_analysis(segments[4], body)
+            self._send_json(200 if payload.get("ok") else 400, payload)
+            return
+        if (
+            len(segments) == 8
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "analyses"
+            and segments[7] == "run"
+        ):
+            payload = self.coordinator.run_gm_science_analysis(
+                segments[4],
+                segments[6],
+                user_id=str(body.get("user_id") or "ppx-client-user"),
+            )
+            status = 200 if payload.get("ok") else 400
+            if not payload.get("ok") and payload.get("error", {}).get("code") == "EXECUTION_UNAVAILABLE":
+                status = 503
             self._send_json(status, payload)
             return
         if (

@@ -4,14 +4,18 @@ import type {
   ChatMessage,
   ClientDiagnostics,
   ConnectionSettings,
+  CreateGmScienceAnalysisInput,
   CreateGmScienceArtifactInput,
   CreateGmSciencePythonRunInput,
   CreateGmScienceProjectInput,
   GmScienceArtifact,
+  GmScienceAnalysis,
   GmScienceCapability,
   GmScienceCapabilityCatalog,
   GmScienceProject,
+  GmScienceDataset,
   GmScienceRun,
+  ImportGmScienceDatasetInput,
   MessagePart,
   RuntimeCommand,
   RuntimeStatus,
@@ -26,6 +30,8 @@ interface StoreState {
   agents: AgentProfile[];
   projects: GmScienceProject[];
   artifactsByProject: Record<string, GmScienceArtifact[]>;
+  datasetsByProject: Record<string, GmScienceDataset[]>;
+  analysesByProject: Record<string, GmScienceAnalysis[]>;
   runsByProject: Record<string, GmScienceRun[]>;
   sessionsByAgent: Record<string, SessionSummary[]>;
   messagesBySession: Record<string, ChatMessage[]>;
@@ -106,6 +112,12 @@ const state: StoreState = {
     },
   ],
   artifactsByProject: {
+    [firstProjectId]: [],
+  },
+  datasetsByProject: {
+    [firstProjectId]: [],
+  },
+  analysesByProject: {
     [firstProjectId]: [],
   },
   runsByProject: {
@@ -357,6 +369,9 @@ export async function createGmScienceProject(
   };
   state.projects = [project, ...state.projects];
   state.artifactsByProject[project.id] = [];
+  state.datasetsByProject[project.id] = [];
+  state.analysesByProject[project.id] = [];
+  state.runsByProject[project.id] = [];
   return { project };
 }
 
@@ -580,6 +595,186 @@ export async function retryGmScienceRun(projectId: string, taskId: string): Prom
     item.taskId === run.taskId ? run : item,
   );
   return { run };
+}
+
+export async function selectGmScienceDatasetFile(): Promise<null> {
+  return null;
+}
+
+export async function listGmScienceDatasets(projectId: string): Promise<{ datasets: GmScienceDataset[] }> {
+  return { datasets: (state.datasetsByProject[projectId] ?? []).map((dataset) => ({ ...dataset })) };
+}
+
+export async function getGmScienceDataset(
+  projectId: string,
+  artifactId: string,
+): Promise<{ dataset: GmScienceDataset }> {
+  const dataset = (state.datasetsByProject[projectId] ?? []).find((item) => item.artifactId === artifactId);
+  if (!dataset) {
+    throw new Error(`Dataset ${artifactId} was not found.`);
+  }
+  return { dataset: { ...dataset } };
+}
+
+export async function importGmScienceDataset(
+  projectId: string,
+  input: ImportGmScienceDatasetInput,
+): Promise<{ dataset: GmScienceDataset }> {
+  const timestamp = now();
+  const artifactId = `art_dataset_${crypto.randomUUID()}`;
+  const title = input.title?.trim() || input.sourcePath.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "") || "Dataset";
+  const dataset: GmScienceDataset = {
+    artifactId,
+    projectId,
+    sessionId: input.sessionId ?? "",
+    title,
+    path: input.sourcePath,
+    mimeType: "text/csv",
+    format: "csv",
+    sourceName: input.sourcePath.split(/[\\/]/).pop() ?? "dataset.csv",
+    sizeBytes: 128,
+    rowCount: 4,
+    profiledRowCount: 4,
+    columnCount: 3,
+    columnNames: ["group", "x", "y"],
+    profileArtifactId: `art_profile_${crypto.randomUUID()}`,
+    profile: {
+      version: 1,
+      format: "csv",
+      rowCount: 4,
+      profiledRowCount: 4,
+      columnCount: 3,
+      columns: [
+        {
+          name: "group",
+          inferredType: "string",
+          nonNullCount: 4,
+          missingCount: 0,
+          missingFraction: 0,
+          uniqueCount: 2,
+          uniqueCountCapped: false,
+          typeCounts: { string: 4 },
+          topValues: [{ value: "A", count: 2 }, { value: "B", count: 2 }],
+        },
+        ...["x", "y"].map((name) => ({
+          name,
+          inferredType: "number",
+          nonNullCount: 4,
+          missingCount: 0,
+          missingFraction: 0,
+          uniqueCount: 4,
+          uniqueCountCapped: false,
+          typeCounts: { number: 4 },
+          topValues: [],
+          numeric: { count: 4, min: 1, max: 4, mean: 2.5, standardDeviation: 1.29 },
+        })),
+      ],
+      preview: [{ group: "A", x: 1, y: 2 }],
+      warnings: [],
+    },
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+  state.datasetsByProject[projectId] = [dataset, ...(state.datasetsByProject[projectId] ?? [])];
+  const artifact: GmScienceArtifact = {
+    id: artifactId,
+    projectId,
+    sessionId: input.sessionId ?? "",
+    type: "dataset",
+    title,
+    pathOrUrl: input.sourcePath,
+    mimeType: "text/csv",
+    metadata: { row_count: 4, column_count: 3, dataset_format: "csv" },
+    provenance: { created_by: "mock-dataset-importer" },
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+  state.artifactsByProject[projectId] = [artifact, ...(state.artifactsByProject[projectId] ?? [])];
+  return { dataset: { ...dataset } };
+}
+
+export async function listGmScienceAnalyses(projectId: string): Promise<{ analyses: GmScienceAnalysis[] }> {
+  return { analyses: (state.analysesByProject[projectId] ?? []).map((analysis) => ({ ...analysis })) };
+}
+
+export async function getGmScienceAnalysis(
+  projectId: string,
+  analysisId: string,
+): Promise<{ analysis: GmScienceAnalysis }> {
+  const analysis = (state.analysesByProject[projectId] ?? []).find((item) => item.id === analysisId);
+  if (!analysis) {
+    throw new Error(`Analysis ${analysisId} was not found.`);
+  }
+  return { analysis: { ...analysis } };
+}
+
+export async function createGmScienceAnalysis(
+  projectId: string,
+  input: CreateGmScienceAnalysisInput,
+): Promise<{ analysis: GmScienceAnalysis }> {
+  const timestamp = now();
+  const analysis: GmScienceAnalysis = {
+    id: `analysis_${crypto.randomUUID()}`,
+    projectId,
+    sessionId: input.sessionId ?? "",
+    title: input.title?.trim() || input.objective,
+    objective: input.objective,
+    datasetArtifactIds: [...input.datasetArtifactIds],
+    plan: {
+      version: 1,
+      objective: input.objective,
+      operations: ["data_quality", "descriptive_statistics", "distribution"],
+      steps: [
+        { id: "data_quality", title: "Data Quality", description: "Count missing values and type coverage." },
+        { id: "descriptive_statistics", title: "Descriptive Statistics", description: "Summarize numeric columns." },
+        { id: "distribution", title: "Distribution", description: "Render a numeric histogram." },
+      ],
+      datasets: [],
+      assumptions: ["Missing values are excluded per calculation."],
+      warnings: [],
+    },
+    source: "# Generated by gm-science\nprint('mock analysis')\n",
+    taskId: "",
+    status: "draft",
+    run: null,
+    reportArtifactId: "",
+    figureArtifactIds: [],
+    artifactIds: [],
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+  state.analysesByProject[projectId] = [analysis, ...(state.analysesByProject[projectId] ?? [])];
+  return { analysis: { ...analysis } };
+}
+
+export async function runGmScienceAnalysis(
+  projectId: string,
+  analysisId: string,
+): Promise<{ analysis: GmScienceAnalysis }> {
+  const current = (await getGmScienceAnalysis(projectId, analysisId)).analysis;
+  if (current.taskId) {
+    throw new Error(`Analysis ${analysisId} has already been approved for execution.`);
+  }
+  const createdRun = (await createGmSciencePythonRun(projectId, {
+    title: current.title,
+    source: current.source ?? "",
+    sessionId: current.sessionId,
+  })).run;
+  const run: GmScienceRun = { ...createdRun, kind: "data_analysis" };
+  state.runsByProject[projectId] = (state.runsByProject[projectId] ?? []).map((item) =>
+    item.taskId === run.taskId ? run : item,
+  );
+  const updated: GmScienceAnalysis = {
+    ...current,
+    taskId: run.taskId,
+    status: run.status,
+    run,
+    updatedAt: now(),
+  };
+  state.analysesByProject[projectId] = (state.analysesByProject[projectId] ?? []).map((item) =>
+    item.id === analysisId ? updated : item,
+  );
+  return { analysis: updated };
 }
 
 export function subscribe(listener: EventSink): () => void {
