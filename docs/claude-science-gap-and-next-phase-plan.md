@@ -68,6 +68,20 @@ gm-science 当前设计和实现已经正确吸收了以下产品结构：
 
 第二个口径较低，主要因为动态能力注册、统一 Files、会话级调度、Memory 和治理层尚未完成，而不是因为已有科研流程不可用。
 
+### 2.4 2026-07-18 Specialist 实机补充结论
+
+重新登录 Claude Science 后，对 Specialist 新建页和 Reviewer 详情进行了只读验证，进一步确认：
+
+- 自定义 Specialist 的 Instructions 是追加到 Claude Science 基础提示词，不是替换基础提示词。
+- Description 只用于 registry 和 delegation 菜单展示，不进入 agent prompt；Agent ID 用于日志和委派。
+- 自定义 Specialist 页面没有独立模型选择。子 agent 使用 `General -> Subagent model`，并可配置为跟随主模型。
+- Specialist 可以分配 Skills 和 Connectors；Connector 还能继续细化到其内部具体工具的启用集合。
+- 新建页会预选当前可用 Skills 和 Connectors，但 gm-science 不照搬这一默认值。作为本地科研智能体，第一版继续采用显式分配和最小能力集合。
+- `Chat with Claude` 不直接创建 agent，而是打开预填 `/Customize` 的新 Session，由自然语言工作流帮助用户生成 Specialist 定义；`Write from scratch` 才进入结构化表单。
+- 内置 Reviewer 保留不可移除的基础 rubric。用户只能追加更严格的 Instructions，并可补充领域 Skills 和 Connectors。
+
+这些结论修正了“每个 Specialist 应在 UI 中独立选择模型”的假设。gm-science 配置仍保留可选的单 Specialist 模型覆盖，以满足 openppx provider 的高级用法，但产品默认应使用统一的子 agent 模型策略。Connector 内工具级白名单和 `/Customize` 创建向导作为后续 registry write 与 Session orchestration 能力实施。
+
 ## 3. 后续产品目标
 
 后续阶段的一句话目标是：
@@ -521,6 +535,23 @@ Phase 8A.2 于 2026-07-18 实施：
 
 Phase 8A.2 不包含 MCP 安装器、凭据编辑器、持续健康探测、工具清单缓存和审批 UI。上述能力应在 Credentials / Permissions / Network 阶段基于现有 openppx runtime 继续扩展，不能建立第二套 MCP 管理器。
 
+### 7.3 Phase 8A.3 实施状态
+
+Phase 8A.3 于 2026-07-18 实施：
+
+- `science.specialists.custom` 已成为本地自定义 Specialist 的配置事实源，每个定义包含稳定 Agent ID、名称、说明、模型覆盖、额外指令、Skills、Connectors、启用状态和自动调度策略。
+- Specialist registry 会保留无效定义并投影可操作的配置错误；缺失 Skill、缺失 Connector 或不可用 Connector 不会被静默忽略。
+- 自定义 Specialist 使用 Google ADK `LlmAgent` 和 `AgentTool`，在空白子 Session 中接收结构化目标和上下文，不继承主会话历史、Memory 或隐藏推理。
+- 子 agent 只获得显式分配的能力：Skill 作为有界参考材料注入；arXiv、PubMed、OpenAlex 合并为来源受限的文献搜索工具；MCP Connector 只构建被分配的 openppx MCP toolset。
+- Project 必须同时启用 Specialist 及其全部 Skill/Connector 依赖。AgentTool 在运行前再次执行大小写无关的白名单校验，不能依靠前端开关绕过。
+- 自定义 Specialist 使用固定结构化输出，并保存为 `specialist_report` Artifact；provenance 记录 Specialist、模型、Session 和分配的能力。
+- Specialists 设置页已支持搜索、来源分组和详情，展示 Agent ID、模型、执行模式、权限摘要、额外指令以及分配的 Skills/Connectors。
+- 内置 `paper_reader` 和 `research_reviewer` 的现有输入、证据边界和 Artifact 类型保持不变。
+
+本迭代没有实现 UI 内创建/编辑 Specialist，也没有实现会话级 Specialist 选择、Delegation、Auto-review 或 Reviewer 检查点。配置文件仍是 registry write 入口；修改后需要重启运行时。上述会话策略属于 Phase 8C，不应与 SpecialistDefinition 混为同一状态。
+
+实机补充验证还表明，Claude Science 支持对 Specialist 已分配 Connector 的内部工具继续做启用/禁用。Phase 8A.3 当前只实现 Connector 级白名单；工具级白名单需要先扩展 openppx MCP registry 的稳定工具描述和过滤契约，再进入 Specialist 编辑 UI，不能由前端维护第二份工具名清单。
+
 ## 8. 测试与验收策略
 
 每个阶段至少覆盖以下层次：
@@ -589,7 +620,7 @@ Phase 8A.2 不包含 MCP 安装器、凭据编辑器、持续健康探测、工�
 | Project / Session / Artifact 基础 | 基本完成 |
 | 文献与科研垂直闭环 | 第一版完成 |
 | 本地执行与数据分析 | 第一版完成 |
-| 动态能力注册与组合 | Skill 和 MCP Connector 第一版完成；动态 Specialist 尚未完成 |
+| 动态能力注册与组合 | Skill、MCP Connector 和配置驱动 Specialist 第一版完成；安装/编辑与治理待后续阶段 |
 | 统一 Files 与上下文引用 | 尚未完成 |
 | 会话级调度控制 | 部分完成 |
 | 可审阅 Memory | 底座存在，产品层未完成 |

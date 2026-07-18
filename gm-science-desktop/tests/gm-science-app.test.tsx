@@ -563,6 +563,60 @@ describe("gm-science App", () => {
     expect(within(panel).queryByText(/secret/i)).not.toBeInTheDocument();
   });
 
+  it("shows configured Specialist identity, access, and assigned capabilities", async () => {
+    const items: GmScienceCapability[] = [
+      ...capabilities(),
+      {
+        id: "literature_scout",
+        kind: "specialist",
+        name: "Literature Scout",
+        description: "Find focused research evidence.",
+        source: "local",
+        version: "",
+        license: "",
+        files: [],
+        available: true,
+        defaultEnabled: false,
+        projectEnabled: false,
+        status: "ready",
+        statusDetail: "",
+        metadata: {
+          model: "openai-codex/gpt-5.5",
+          execution_mode: "agent_tool",
+          read_only: true,
+          network_access: true,
+          shell_access: false,
+          assigned_skills: ["literature-review"],
+          assigned_connectors: ["pubmed", "openalex"],
+          additional_instructions: "Prefer primary sources.",
+        },
+      },
+    ];
+    installClient({
+      listGmScienceCapabilities: async (projectId) => ({ projectId: projectId ?? "", items }),
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Customize" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Specialists" }));
+    const panel = await screen.findByRole("region", { name: "Specialists" });
+    fireEvent.change(within(panel).getByRole("searchbox", { name: "Search specialists" }), {
+      target: { value: "openalex" },
+    });
+
+    expect(within(panel).getByText("Literature Scout")).toBeInTheDocument();
+    fireEvent.click(within(panel).getByRole("button", { name: "Show details for Literature Scout" }));
+    expect(within(panel).getByText("literature_scout")).toBeInTheDocument();
+    expect(within(panel).getByText("openai-codex/gpt-5.5")).toBeInTheDocument();
+    expect(within(panel).getByText("Prefer primary sources.")).toBeInTheDocument();
+    expect(within(panel).getByText("literature-review")).toBeInTheDocument();
+    expect(within(panel).getByText("pubmed")).toBeInTheDocument();
+    expect(within(panel).getByText("openalex")).toBeInTheDocument();
+    expect(within(panel).getByText("Not allowed")).toBeInTheDocument();
+  });
+
   it("renders research artifact details with metadata fallbacks", async () => {
     installClient({
       listGmScienceArtifacts: async () => ({

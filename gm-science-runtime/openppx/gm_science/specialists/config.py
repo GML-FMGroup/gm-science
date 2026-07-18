@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,7 @@ from ...core.env_utils import is_enabled
 
 SUPPORTED_SPECIALISTS = ("paper_reader", "research_reviewer")
 SUPPORTED_REVIEW_GATES = ("off", "annotate")
+_SPECIALIST_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,19 +47,37 @@ class ResearchReviewerConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class CustomSpecialistConfig:
+    """One user-defined specialist loaded from the local agent configuration."""
+
+    name: str
+    title: str
+    description: str
+    enabled: bool
+    auto_dispatch: bool
+    model: str
+    instructions: str
+    skills: tuple[str, ...]
+    connectors: tuple[str, ...]
+    configuration_error: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class SpecialistConfig:
     """Validated specialist configuration for one science agent."""
 
     enabled: bool
     model: str
+    max_skill_chars: int
     project_defaults: ProjectCapabilityDefaults
     paper_reader: PaperReaderConfig
     reviewer: ResearchReviewerConfig
+    custom: tuple[CustomSpecialistConfig, ...]
 
     def public_statuses(self) -> dict[str, dict[str, Any]]:
         """Return user-visible availability without internal prompts or limits."""
 
-        return {
+        statuses = {
             "paper_reader": {
                 "enabled": self.enabled and self.paper_reader.enabled,
                 "auto_dispatch": self.paper_reader.auto_dispatch,
@@ -68,6 +88,18 @@ class SpecialistConfig:
                 "review_gate": self.reviewer.review_gate,
             },
         }
+        statuses.update(
+            {
+                specialist.name: {
+                    "enabled": self.enabled
+                    and specialist.enabled
+                    and not specialist.configuration_error,
+                    "auto_dispatch": specialist.auto_dispatch,
+                }
+                for specialist in self.custom
+            }
+        )
+        return statuses
 
 
 def parse_specialist_config(config: Mapping[str, Any] | None) -> SpecialistConfig:
@@ -87,19 +119,22 @@ def parse_specialist_config(config: Mapping[str, Any] | None) -> SpecialistConfi
     return SpecialistConfig(
         enabled=is_enabled(specialists.get("enabled"), default=True),
         model=str(specialists.get("model") or "").strip(),
+        max_skill_chars=_bounded_int(specialists.get("maxSkillChars"), 60_000, 1_000, 200_000),
         project_defaults=ProjectCapabilityDefaults(
             enabled_skills=_normalize_names(defaults.get("enabledSkills")),
             enabled_connectors=_normalize_names(defaults.get("enabledConnectors")),
-            enabled_specialists=_normalize_names(
-                defaults.get("enabledSpecialists"),
-                allowed=SUPPORTED_SPECIALISTS,
-            ),
+            enabled_specialists=_normalize_names(defaults.get("enabledSpecialists")),
         ),
         paper_reader=PaperReaderConfig(
             enabled=is_enabled(paper_reader.get("enabled"), default=True),
             auto_dispatch=is_enabled(paper_reader.get("autoDispatch"), default=True),
             max_papers=_bounded_int(paper_reader.get("maxPapers"), 6, 1, 20),
-            max_source_chars=_bounded_int(paper_reader.get("maxSourceChars"), 30_000, 1_000, 200_000),
+            max_source_chars=_bounded_int(
+                paper_reader.get("maxSourceChars"),
+                30_000,
+                1_000,
+                200_000,
+            ),
         ),
         reviewer=ResearchReviewerConfig(
             enabled=is_enabled(reviewer.get("enabled"), default=True),
@@ -108,6 +143,7 @@ def parse_specialist_config(config: Mapping[str, Any] | None) -> SpecialistConfi
             max_findings=_bounded_int(reviewer.get("maxFindings"), 20, 1, 100),
             max_source_chars=_bounded_int(reviewer.get("maxSourceChars"), 60_000, 1_000, 200_000),
         ),
+        custom=_parse_custom_specialists(specialists.get("custom")),
     )
 
 
@@ -117,7 +153,7 @@ def load_specialist_config(config_path: Path | None = None) -> SpecialistConfig:
     return parse_specialist_config(load_config(config_path=config_path))
 
 
-def _normalize_names(value: Any, *, allowed: tuple[str, ...] | None = None) -> tuple[str, ...]:
+def _normalize_names(value: Any) -> tuple[str, ...]:
     """Normalize capability names once while preserving configured order."""
 
     if not isinstance(value, list):
@@ -125,7 +161,7 @@ def _normalize_names(value: Any, *, allowed: tuple[str, ...] | None = None) -> t
     normalized: list[str] = []
     for item in value:
         name = str(item or "").strip().lower()
-        if not name or name in normalized or (allowed is not None and name not in allowed):
+        if not name or name in normalized:
             continue
         normalized.append(name)
     return tuple(normalized)
@@ -133,6 +169,68 @@ def _normalize_names(value: Any, *, allowed: tuple[str, ...] | None = None) -> t
 
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
+
+
+def _parse_custom_specialists(value: Any) -> tuple[CustomSpecialistConfig, ...]:
+    """Parse custom specialists while retaining invalid entries for diagnostics."""
+
+    if not isinstance(value, Mapping):
+        return ()
+    parsed: list[CustomSpecialistConfig] = []
+    for index, raw_name in enumerate(sorted(value, key=lambda item: str(item).casefold())):
+        configured_name = str(raw_name or "").strip()
+        name = configured_name or f"invalid_specialist_{index + 1}"
+        raw_config = value[raw_name]
+        errors: list[str] = []
+        if not configured_name or not _SPECIALIST_ID_PATTERN.fullmatch(configured_name):
+            errors.append("Agent ID must match ^[a-z][a-z0-9_]{0,63}$.")
+        if name in SUPPORTED_SPECIALISTS:
+            errors.append("Agent ID conflicts with a built-in specialist.")
+        if not isinstance(raw_config, Mapping):
+            errors.append("Specialist configuration must be an object.")
+        item = _mapping(raw_config)
+        title = str(item.get("title") or item.get("name") or _display_name(name)).strip()
+        description = str(item.get("description") or "").strip()
+        if not title:
+            errors.append("Specialist title is required.")
+        if not description:
+            errors.append("Specialist description is required.")
+        parsed.append(
+            CustomSpecialistConfig(
+                name=name,
+                title=title or name or "Invalid specialist",
+                description=description,
+                enabled=is_enabled(item.get("enabled"), default=True),
+                auto_dispatch=is_enabled(item.get("autoDispatch"), default=False),
+                model=str(item.get("model") or "").strip(),
+                instructions=str(item.get("instructions") or "").strip(),
+                skills=_normalize_capability_ids(item.get("skills")),
+                connectors=_normalize_capability_ids(item.get("connectors")),
+                configuration_error=" ".join(errors),
+            )
+        )
+    return tuple(parsed)
+
+
+def _normalize_capability_ids(value: Any) -> tuple[str, ...]:
+    """Normalize capability IDs without changing case-sensitive MCP server names."""
+
+    if not isinstance(value, list):
+        return ()
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        capability_id = str(item or "").strip()
+        key = capability_id.casefold()
+        if not capability_id or key in seen:
+            continue
+        seen.add(key)
+        normalized.append(capability_id)
+    return tuple(normalized)
+
+
+def _display_name(value: str) -> str:
+    return " ".join(token.capitalize() for token in value.replace("-", "_").split("_") if token)
 
 
 def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:

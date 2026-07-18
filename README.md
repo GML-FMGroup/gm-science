@@ -127,7 +127,7 @@ gm-science 的 Connectors 设置页会读取 openppx `tools.mcpServers` 配置�
 - `paper_reader`：读取已保存的 paper artifacts，生成结构化 `reading_note`。
 - `research_reviewer`：检查 `report` 或 `reading_note` 及其关联论文，生成 findings-first 的 `critique_report`。
 
-专家只获得当前 Project 的显式 artifact IDs，不继承主对话内容，也没有 shell、网络或通用写文件工具。网络论文链接不会自动下载；没有 Project 内本地文本时，阅读结果必须标记为 `metadata_abstract`。
+两个内置专家只获得当前 Project 的显式 artifact IDs，不继承主对话内容，也没有 shell、网络或通用写文件工具。网络论文链接不会自动下载；没有 Project 内本地文本时，阅读结果必须标记为 `metadata_abstract`。配置驱动的自定义 Specialist 同样不继承主对话，但可以获得下文显式分配的 Skill 和 Connector。
 
 配置仍位于 `~/.gm-science/science-research/config.json`：
 
@@ -137,11 +137,24 @@ gm-science 的 Connectors 设置页会读取 openppx `tools.mcpServers` 配置�
     "projectDefaults": {
       "enabledSkills": ["literature-review"],
       "enabledConnectors": ["arxiv", "pubmed", "openalex"],
-      "enabledSpecialists": ["paper_reader", "research_reviewer"]
+      "enabledSpecialists": ["paper_reader", "research_reviewer", "literature_scout"]
     },
     "specialists": {
       "enabled": true,
       "model": "",
+      "maxSkillChars": 60000,
+      "custom": {
+        "literature_scout": {
+          "title": "Literature Scout",
+          "description": "Find focused research evidence.",
+          "enabled": true,
+          "autoDispatch": false,
+          "model": "",
+          "instructions": "Prefer primary sources and state evidence limitations.",
+          "skills": ["literature-review"],
+          "connectors": ["pubmed", "openalex"]
+        }
+      },
       "paperReader": {
         "enabled": true,
         "autoDispatch": true,
@@ -161,6 +174,10 @@ gm-science 的 Connectors 设置页会读取 openppx `tools.mcpServers` 配置�
 ```
 
 - `model` 为空时继承主模型；非空时沿用当前 provider 和凭据，只覆盖模型名。
+- `custom` 的键是稳定 Agent ID，只允许小写字母、数字和下划线，且必须以字母开头。修改自定义 Specialist 后需要重启运行时。
+- 自定义 Specialist 只获得 `skills` 和 `connectors` 中显式分配的能力。Project 必须同时启用该 Specialist 及其全部依赖，否则目录和调度工具会将其标记为不可用。
+- `arxiv`、`pubmed`、`openalex` 会投影为受来源白名单限制的文献搜索工具；`mcp:<server-name>` 只挂载对应的 openppx MCP toolset，不会继承其他全局 MCP 工具。
+- Skill 内容会作为有界参考材料注入子 agent，所有 Skill 合计最多读取 `maxSkillChars` 个字符。自定义 Specialist 使用空白子 Session，输出固定结构并保存为 `specialist_report` Artifact。
 - `reviewGate` 支持 `off` 和 `annotate`。`annotate` 只评审本轮最新的新 report，失败不会覆盖主回答，也不会自动修改报告或递归复审。
 - Project 创建请求未显式传入能力列表时使用 `projectDefaults`；显式空数组会按请求保存，不会被默认值覆盖。connectors 显式空列表会禁用所有文献来源。
 - 自动调度适用于论文阅读、比较和明确的评审请求；普通问答和单次来源状态查询不会触发 reviewer gate。

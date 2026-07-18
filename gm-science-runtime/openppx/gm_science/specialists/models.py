@@ -90,3 +90,23 @@ class ReviewerOutput(SpecialistModel):
     missing_evidence: list[str]
     evidence_scopes: list[Literal["metadata_abstract", "local_text"]]
     review_limitations: list[str]
+
+
+class ConfiguredSpecialistInput(SpecialistModel):
+    """Generic task packet passed to one configured custom specialist."""
+
+    project_id: str = Field(min_length=1)
+    session_id: str = Field(min_length=1)
+    objective: str = Field(min_length=1, max_length=8_000)
+    context: str = Field(default="", max_length=20_000)
+
+
+class ConfiguredSpecialistOutput(SpecialistModel):
+    """Reviewable structured result returned by a custom specialist."""
+
+    title: str = Field(min_length=1, max_length=300)
+    summary: str
+    findings: list[str] = Field(max_length=100)
+    recommendations: list[str] = Field(max_length=100)
+    limitations: list[str] = Field(max_length=100)
+    confidence: Literal["low", "medium", "high"]

@@ -12,7 +12,7 @@ from ..tooling.skills_adapter import SkillInfo, SkillRegistry
 from .literature.config import load_literature_config
 from .models import ProjectRecord
 from .specialists.config import load_specialist_config
-from .specialists.registry import list_specialist_specs
+from .specialists.registry import list_specialist_specs, specialist_configuration_issues
 
 CapabilityKind = Literal["skill", "connector", "specialist"]
 CapabilitySource = Literal["built_in", "local", "external"]
@@ -118,23 +118,63 @@ def build_capability_catalog(
                 )
             )
 
+    skill_ids = {str(item["id"]) for item in items if item["kind"] == "skill"}
+    connector_items = {
+        str(item["id"]).casefold(): item for item in items if item["kind"] == "connector"
+    }
+    connector_ids = {str(item["id"]) for item in connector_items.values()}
     for spec in list_specialist_specs(specialists):
+        issues = list(
+            specialist_configuration_issues(
+                spec,
+                skill_ids=skill_ids,
+                connector_ids=connector_ids,
+            )
+        )
+        unavailable_connectors = [
+            connector_id
+            for connector_id in spec.connectors
+            if connector_id.casefold() in connector_items
+            and connector_items[connector_id.casefold()]["available"] is not True
+        ]
+        if unavailable_connectors:
+            issues.append(f"Unavailable Connectors: {', '.join(unavailable_connectors)}.")
+        available = spec.enabled and not issues
+        if not spec.enabled:
+            status = "disabled"
+            status_detail = "Disabled in science.specialists configuration."
+        elif issues:
+            status = "needs_configuration"
+            status_detail = " ".join(issues)
+        else:
+            status = "ready"
+            status_detail = ""
+        metadata = {
+            "registry_source": "custom" if spec.source == "local" else "built_in",
+            "auto_dispatch": spec.auto_dispatch,
+            "read_only": spec.read_only,
+            "network_access": spec.network_access,
+            "shell_access": spec.shell_access,
+            "model": spec.model or "inherit",
+            "assigned_skills": list(spec.skills),
+            "assigned_connectors": list(spec.connectors),
+            "execution_mode": "agent_tool",
+        }
+        if spec.source == "local":
+            metadata["additional_instructions"] = spec.instructions
         items.append(
             _capability_payload(
                 capability_id=spec.name,
                 kind="specialist",
                 name=spec.title,
                 description=spec.description,
-                source="built_in",
-                available=spec.enabled,
+                source="local" if spec.source == "local" else "built_in",
+                available=available,
                 default_enabled=spec.name in defaults.enabled_specialists,
                 project_enabled=_project_enabled(project_values, "specialist", spec.name),
-                status="ready" if spec.enabled else "disabled",
-                status_detail="" if spec.enabled else "Disabled in science.specialists configuration.",
-                metadata={
-                    "auto_dispatch": spec.auto_dispatch,
-                    "read_only": spec.read_only,
-                },
+                status=status,
+                status_detail=status_detail,
+                metadata=metadata,
             )
         )
     return items

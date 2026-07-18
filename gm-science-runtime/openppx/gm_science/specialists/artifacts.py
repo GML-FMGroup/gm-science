@@ -9,10 +9,11 @@ from typing import Any
 
 from ..models import ArtifactRecord
 from ..store import GmScienceStore
-from .models import PaperReaderOutput, ReviewerOutput
+from .models import ConfiguredSpecialistOutput, PaperReaderOutput, ReviewerOutput
 
 READING_NOTE_MIME_TYPE = "application/vnd.gm-science.reading-note+json"
 CRITIQUE_REPORT_MIME_TYPE = "application/vnd.gm-science.critique+json"
+SPECIALIST_REPORT_MIME_TYPE = "application/vnd.gm-science.specialist-report+json"
 
 
 def save_reading_note(
@@ -95,6 +96,43 @@ def save_critique_report(
     )
 
 
+def save_specialist_report(
+    store: GmScienceStore,
+    *,
+    project_id: str,
+    session_id: str,
+    specialist_id: str,
+    output: ConfiguredSpecialistOutput,
+    objective: str,
+    model_name: str,
+    skills: tuple[str, ...],
+    connectors: tuple[str, ...],
+) -> ArtifactRecord:
+    """Persist one configured specialist result with capability provenance."""
+
+    project = _project(store, project_id)
+    path = _artifact_path(project.workspace_path, "specialist-reports", output.title)
+    path.write_text(render_specialist_report(output, specialist_id=specialist_id), encoding="utf-8")
+    payload = output.model_dump(mode="json")
+    payload.update({"specialist_id": specialist_id, "objective": objective})
+    return store.create_artifact(
+        project_id=project.id,
+        artifact_type="specialist_report",
+        title=output.title,
+        path_or_url=str(path),
+        mime_type=SPECIALIST_REPORT_MIME_TYPE,
+        session_id=session_id or None,
+        metadata=payload,
+        provenance={
+            "created_by": specialist_id,
+            "model": model_name,
+            "session_id": session_id,
+            "assigned_skills": list(skills),
+            "assigned_connectors": list(connectors),
+        },
+    )
+
+
 def render_reading_note(output: PaperReaderOutput) -> str:
     """Render one structured reading result as reviewable Markdown."""
 
@@ -148,6 +186,28 @@ def render_critique_report(output: ReviewerOutput) -> str:
     _append_list(lines, "Missing evidence", output.missing_evidence)
     _append_list(lines, "Evidence scopes", list(output.evidence_scopes))
     _append_list(lines, "Review limitations", output.review_limitations)
+    lines.extend(["## Summary", "", output.summary, ""])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_specialist_report(output: ConfiguredSpecialistOutput, *, specialist_id: str) -> str:
+    """Render one custom specialist result as reviewable Markdown."""
+
+    lines = [
+        f"# {output.title}",
+        "",
+        f"- Specialist: `{specialist_id}`",
+        f"- Confidence: `{output.confidence}`",
+        "",
+        "## Findings",
+        "",
+    ]
+    lines.extend(f"- {finding}" for finding in output.findings)
+    if not output.findings:
+        lines.append("None recorded.")
+    lines.append("")
+    _append_list(lines, "Recommendations", output.recommendations)
+    _append_list(lines, "Limitations", output.limitations)
     lines.extend(["## Summary", "", output.summary, ""])
     return "\n".join(lines).rstrip() + "\n"
 

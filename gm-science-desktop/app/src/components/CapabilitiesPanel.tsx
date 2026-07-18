@@ -45,6 +45,10 @@ function metadataList(item: GmScienceCapability, key: string): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 }
 
+function accessLabel(value: unknown): string {
+  return value === true ? "Allowed" : "Not allowed";
+}
+
 function SkillDetails({ item }: { item: GmScienceCapability }) {
   return (
     <div className="capability-details" id={`capability-details-${item.id}`}>
@@ -151,6 +155,75 @@ function McpConnectorDetails({ item }: { item: GmScienceCapability }) {
   );
 }
 
+function SpecialistDetails({ item }: { item: GmScienceCapability }) {
+  const assignedSkills = metadataList(item, "assigned_skills");
+  const assignedConnectors = metadataList(item, "assigned_connectors");
+  const instructions = metadataText(item, "additional_instructions");
+
+  return (
+    <div className="capability-details" id={`capability-details-${item.id}`}>
+      <dl>
+        <div>
+          <dt>Agent ID</dt>
+          <dd>{item.id}</dd>
+        </div>
+        <div>
+          <dt>Model</dt>
+          <dd>{metadataText(item, "model") || "inherit"}</dd>
+        </div>
+        <div>
+          <dt>Execution</dt>
+          <dd>{metadataText(item, "execution_mode") || "agent_tool"}</dd>
+        </div>
+        <div>
+          <dt>Network</dt>
+          <dd>{accessLabel(item.metadata.network_access)}</dd>
+        </div>
+        <div>
+          <dt>Shell</dt>
+          <dd>{accessLabel(item.metadata.shell_access)}</dd>
+        </div>
+        <div>
+          <dt>Read-only</dt>
+          <dd>{item.metadata.read_only === true ? "Yes" : "No"}</dd>
+        </div>
+      </dl>
+      {instructions ? (
+        <div className="capability-instructions">
+          <strong>Additional instructions</strong>
+          <p>{instructions}</p>
+        </div>
+      ) : null}
+      <div className="capability-detail-lists">
+        <div className="capability-files">
+          <strong>Assigned Skills</strong>
+          {assignedSkills.length > 0 ? (
+            <ul>
+              {assignedSkills.map((name) => (
+                <li key={name}>{name}</li>
+              ))}
+            </ul>
+          ) : (
+            <span>None assigned</span>
+          )}
+        </div>
+        <div className="capability-files">
+          <strong>Assigned Connectors</strong>
+          {assignedConnectors.length > 0 ? (
+            <ul>
+              {assignedConnectors.map((name) => (
+                <li key={name}>{name}</li>
+              ))}
+            </ul>
+          ) : (
+            <span>None assigned</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function CapabilitiesPanel({
   kind,
   projectName,
@@ -178,7 +251,10 @@ export function CapabilitiesPanel({
         return `${item.name} ${item.id} ${item.description} ${sourceLabels[item.source]} ${metadataText(
           item,
           "server_name",
-        )} ${metadataText(item, "transport")}`
+        )} ${metadataText(item, "transport")} ${metadataList(item, "assigned_skills").join(" ")} ${metadataList(
+          item,
+          "assigned_connectors",
+        ).join(" ")}`
           .toLocaleLowerCase()
           .includes(normalizedQuery);
       }),
@@ -246,7 +322,7 @@ export function CapabilitiesPanel({
                 const cannotEnable = !item.available && !checked;
                 const expanded = expandedId === item.id;
                 const isMcpConnector = kind === "connector" && item.metadata.connector_type === "mcp";
-                const hasDetails = kind === "skill" || isMcpConnector;
+                const hasDetails = kind === "skill" || kind === "specialist" || isMcpConnector;
                 return (
                   <article className="capability-row" key={item.id}>
                     <div className="capability-copy">
@@ -260,6 +336,7 @@ export function CapabilitiesPanel({
                       {item.statusDetail ? <small>{item.statusDetail}</small> : null}
                       {expanded && kind === "skill" ? <SkillDetails item={item} /> : null}
                       {expanded && isMcpConnector ? <McpConnectorDetails item={item} /> : null}
+                      {expanded && kind === "specialist" ? <SpecialistDetails item={item} /> : null}
                     </div>
                     <div className="capability-controls">
                       {hasDetails ? (

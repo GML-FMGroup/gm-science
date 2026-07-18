@@ -15,9 +15,21 @@ from google.adk.utils.context_utils import Aclosing
 from google.genai import types
 
 from ..store import GmScienceStore
-from .artifacts import artifact_payload, save_critique_report, save_reading_note
+from .artifacts import (
+    artifact_payload,
+    save_critique_report,
+    save_reading_note,
+    save_specialist_report,
+)
 from .config import load_specialist_config
-from .models import PaperReaderInput, PaperReaderOutput, ReviewerInput, ReviewerOutput
+from .models import (
+    ConfiguredSpecialistInput,
+    ConfiguredSpecialistOutput,
+    PaperReaderInput,
+    PaperReaderOutput,
+    ReviewerInput,
+    ReviewerOutput,
+)
 from .registry import SpecialistSpec
 from .tools import science_read_paper_bundle, validate_specialist_artifacts
 
@@ -79,7 +91,9 @@ class ProjectSpecialistTool(AgentTool):
 
         raw_output = await self._run_isolated(input_value, tool_context)
         output = self.spec.output_schema.model_validate(raw_output)
-        artifact = self._persist_output(
+        artifact = _persist_built_in_output(
+            self.spec,
+            self.agent,
             store,
             input_value=input_value,
             output=output,
@@ -94,87 +108,171 @@ class ProjectSpecialistTool(AgentTool):
     async def _run_isolated(self, input_value: Any, tool_context: Any) -> Any:
         """Run the child with an empty in-memory session and isolated plugins/artifacts."""
 
-        invocation_context = getattr(tool_context, "_invocation_context", None)
-        user_id = str(getattr(invocation_context, "user_id", "") or "gm-science-specialist")
-        app_name = str(getattr(invocation_context, "app_name", "") or self.agent.name)
-        credential_service = getattr(invocation_context, "credential_service", None)
-        runner = Runner(
-            app_name=app_name,
-            agent=self.agent,
-            artifact_service=InMemoryArtifactService(),
-            session_service=InMemorySessionService(),
-            memory_service=InMemoryMemoryService(),
-            credential_service=credential_service,
-            plugins=None,
-        )
-        session = await runner.session_service.create_session(
-            app_name=app_name,
-            user_id=user_id,
-            state=child_session_state(),
-        )
-        content = types.Content(
-            role="user",
-            parts=[types.Part.from_text(text=input_value.model_dump_json(exclude_none=True))],
-        )
-        last_content = None
-        try:
-            async with Aclosing(
-                runner.run_async(user_id=user_id, session_id=session.id, new_message=content)
-            ) as events:
-                async for event in events:
-                    if event.content:
-                        last_content = event.content
-        finally:
-            await runner.close()
-        if last_content is None or not last_content.parts:
-            raise RuntimeError(f"Specialist '{self.spec.name}' returned no structured output.")
-        merged_text = "\n".join(
-            part.text
-            for part in last_content.parts
-            if not part.thought and isinstance(part.text, str) and part.text
-        )
-        return validate_schema(self.spec.output_schema, merged_text)
+        return await _run_agent_isolated(self.agent, input_value, tool_context)
 
-    def _persist_output(
-        self,
-        store: GmScienceStore,
-        *,
-        input_value: Any,
-        output: Any,
-        evidence_scopes: dict[str, str],
-        max_findings: int,
-    ):
-        if isinstance(input_value, PaperReaderInput) and isinstance(output, PaperReaderOutput):
-            output_ids = [reading.paper_artifact_id for reading in output.readings]
-            if set(output_ids) != set(input_value.paper_artifact_ids) or len(output_ids) != len(set(output_ids)):
-                raise ValueError("paper-reader output must contain each requested paper exactly once.")
-            for reading in output.readings:
-                if evidence_scopes.get(reading.paper_artifact_id) != reading.evidence_scope:
-                    raise ValueError("paper-reader output changed the host-verified evidence scope.")
-            return save_reading_note(
-                store,
-                project_id=input_value.project_id,
-                session_id=input_value.session_id,
-                output=output,
-                source_artifact_ids=input_value.paper_artifact_ids,
-                focus=input_value.focus,
-                comparison_question=input_value.comparison_question,
-                model_name=_agent_model_name(self.agent),
+
+class ConfiguredSpecialistTool(AgentTool):
+    """Run one config-defined specialist after enforcing both capability allowlists."""
+
+    def __init__(self, *, spec: SpecialistSpec, agent: Any) -> None:
+        self.spec = spec
+        super().__init__(agent=agent, include_plugins=False)
+
+    async def run_async(self, *, args: dict[str, Any], tool_context: Any) -> dict[str, Any]:
+        """Validate Project policy, run in isolation, and persist a specialist report."""
+
+        input_value = ConfiguredSpecialistInput.model_validate(args)
+        store = GmScienceStore()
+        project = store.get_project(input_value.project_id)
+        if project is None:
+            raise ValueError(f"Project '{input_value.project_id}' was not found.")
+        current = load_specialist_config()
+        configured = next((item for item in current.custom if item.name == self.spec.name), None)
+        if configured is None or not current.enabled or not configured.enabled:
+            raise ValueError(f"Specialist '{self.spec.name}' is disabled by configuration.")
+        if configured.configuration_error:
+            raise ValueError(
+                f"Specialist '{self.spec.name}' needs configuration: {configured.configuration_error}"
             )
-        if isinstance(input_value, ReviewerInput) and isinstance(output, ReviewerOutput):
-            if len(output.findings) > max_findings:
-                raise ValueError(f"research-reviewer returned more than {max_findings} findings.")
-            return save_critique_report(
-                store,
-                project_id=input_value.project_id,
-                session_id=input_value.session_id,
-                output=output,
-                target_artifact_id=input_value.target_artifact_id,
-                trigger=input_value.trigger,
-                review_focus=input_value.review_focus,
-                model_name=_agent_model_name(self.agent),
-            )
-        raise TypeError(f"Specialist '{self.spec.name}' returned an incompatible output schema.")
+        if self.spec.name not in project.enabled_specialists:
+            raise ValueError(f"Specialist '{self.spec.name}' is not enabled for Project '{project.id}'.")
+        _require_project_capabilities(
+            specialist_id=self.spec.name,
+            assigned=self.spec.skills,
+            project_enabled=project.enabled_skills,
+            kind="Skill",
+        )
+        _require_project_capabilities(
+            specialist_id=self.spec.name,
+            assigned=self.spec.connectors,
+            project_enabled=project.enabled_connectors,
+            kind="Connector",
+        )
+
+        raw_output = await _run_agent_isolated(self.agent, input_value, tool_context)
+        output = ConfiguredSpecialistOutput.model_validate(raw_output)
+        artifact = save_specialist_report(
+            store,
+            project_id=project.id,
+            session_id=input_value.session_id,
+            specialist_id=self.spec.name,
+            output=output,
+            objective=input_value.objective,
+            model_name=_agent_model_name(self.agent),
+            skills=self.spec.skills,
+            connectors=self.spec.connectors,
+        )
+        return {
+            "output": output.model_dump(mode="json"),
+            "artifact": artifact_payload(artifact),
+        }
+
+
+async def _run_agent_isolated(agent: Any, input_value: Any, tool_context: Any) -> Any:
+    """Run one child agent with fresh in-memory services and return structured output."""
+
+    invocation_context = getattr(tool_context, "_invocation_context", None)
+    user_id = str(getattr(invocation_context, "user_id", "") or "gm-science-specialist")
+    app_name = str(getattr(invocation_context, "app_name", "") or agent.name)
+    credential_service = getattr(invocation_context, "credential_service", None)
+    runner = Runner(
+        app_name=app_name,
+        agent=agent,
+        artifact_service=InMemoryArtifactService(),
+        session_service=InMemorySessionService(),
+        memory_service=InMemoryMemoryService(),
+        credential_service=credential_service,
+        plugins=None,
+    )
+    session = await runner.session_service.create_session(
+        app_name=app_name,
+        user_id=user_id,
+        state=child_session_state(),
+    )
+    content = types.Content(
+        role="user",
+        parts=[types.Part.from_text(text=input_value.model_dump_json(exclude_none=True))],
+    )
+    last_content = None
+    try:
+        async with Aclosing(
+            runner.run_async(user_id=user_id, session_id=session.id, new_message=content)
+        ) as events:
+            async for event in events:
+                if event.content:
+                    last_content = event.content
+    finally:
+        await runner.close()
+    if last_content is None or not last_content.parts:
+        raise RuntimeError(f"Specialist '{agent.name}' returned no structured output.")
+    merged_text = "\n".join(
+        part.text
+        for part in last_content.parts
+        if not part.thought and isinstance(part.text, str) and part.text
+    )
+    return validate_schema(agent.output_schema, merged_text)
+
+
+def _require_project_capabilities(
+    *,
+    specialist_id: str,
+    assigned: tuple[str, ...],
+    project_enabled: list[str],
+    kind: str,
+) -> None:
+    """Reject a specialist run when one assigned capability is not Project-enabled."""
+
+    enabled = {item.casefold() for item in project_enabled}
+    missing = [item for item in assigned if item.casefold() not in enabled]
+    if missing:
+        raise ValueError(
+            f"Specialist '{specialist_id}' requires Project-enabled {kind}s: {', '.join(missing)}."
+        )
+
+
+def _persist_built_in_output(
+    spec: SpecialistSpec,
+    agent: Any,
+    store: GmScienceStore,
+    *,
+    input_value: Any,
+    output: Any,
+    evidence_scopes: dict[str, str],
+    max_findings: int,
+):
+    """Persist one validated built-in specialist output."""
+
+    if isinstance(input_value, PaperReaderInput) and isinstance(output, PaperReaderOutput):
+        output_ids = [reading.paper_artifact_id for reading in output.readings]
+        if set(output_ids) != set(input_value.paper_artifact_ids) or len(output_ids) != len(set(output_ids)):
+            raise ValueError("paper-reader output must contain each requested paper exactly once.")
+        for reading in output.readings:
+            if evidence_scopes.get(reading.paper_artifact_id) != reading.evidence_scope:
+                raise ValueError("paper-reader output changed the host-verified evidence scope.")
+        return save_reading_note(
+            store,
+            project_id=input_value.project_id,
+            session_id=input_value.session_id,
+            output=output,
+            source_artifact_ids=input_value.paper_artifact_ids,
+            focus=input_value.focus,
+            comparison_question=input_value.comparison_question,
+            model_name=_agent_model_name(agent),
+        )
+    if isinstance(input_value, ReviewerInput) and isinstance(output, ReviewerOutput):
+        if len(output.findings) > max_findings:
+            raise ValueError(f"research-reviewer returned more than {max_findings} findings.")
+        return save_critique_report(
+            store,
+            project_id=input_value.project_id,
+            session_id=input_value.session_id,
+            output=output,
+            target_artifact_id=input_value.target_artifact_id,
+            trigger=input_value.trigger,
+            review_focus=input_value.review_focus,
+            model_name=_agent_model_name(agent),
+        )
+    raise TypeError(f"Specialist '{spec.name}' returned an incompatible output schema.")
 
 
 def _agent_model_name(agent: Any) -> str:

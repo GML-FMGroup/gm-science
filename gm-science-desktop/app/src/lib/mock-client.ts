@@ -535,6 +535,32 @@ const capabilityDefinitions: Omit<GmScienceCapability, "projectEnabled">[] = [
     statusDetail: "",
     metadata: { auto_dispatch: true, read_only: true },
   },
+  {
+    id: "literature_scout",
+    kind: "specialist",
+    name: "Literature Scout",
+    description: "Find focused research evidence with assigned literature capabilities.",
+    source: "local",
+    version: "",
+    license: "",
+    files: [],
+    available: true,
+    defaultEnabled: false,
+    status: "ready",
+    statusDetail: "",
+    metadata: {
+      registry_source: "custom",
+      auto_dispatch: false,
+      read_only: true,
+      network_access: true,
+      shell_access: false,
+      model: "inherit",
+      assigned_skills: ["literature-review"],
+      assigned_connectors: ["pubmed", "openalex"],
+      execution_mode: "agent_tool",
+      additional_instructions: "Prefer primary sources and state evidence limitations.",
+    },
+  },
 ];
 
 function projectCapabilityIds(project: GmScienceProject, kind: GmScienceCapability["kind"]): string[] {

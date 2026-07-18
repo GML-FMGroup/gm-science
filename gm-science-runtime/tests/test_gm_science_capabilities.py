@@ -208,3 +208,55 @@ def test_capability_catalog_projects_configured_mcp_connectors_with_redacted_met
     assert "/private/workspace" not in serialized
     assert "/opt/tools" not in serialized
     assert "secret-user" not in serialized
+
+
+def test_capability_catalog_projects_configured_specialists_and_dependency_status(tmp_path: Path) -> None:
+    initialized = ensure_gm_science_initialized(root_dir=tmp_path / "data")
+    bundled_dir = tmp_path / "bundled-skills"
+    _write_skill(
+        bundled_dir,
+        "literature-review",
+        description="Search and synthesize scholarly evidence.",
+    )
+    registry = SkillRegistry(
+        agent_home=initialized.config_path.parent,
+        builtin_skills_dir=bundled_dir,
+    )
+    config = json.loads(initialized.config_path.read_text(encoding="utf-8"))
+    config["science"]["projectDefaults"]["enabledSpecialists"].append("literature_scout")
+    config["science"]["specialists"]["custom"] = {
+        "literature_scout": {
+            "title": "Literature Scout",
+            "description": "Find focused research evidence.",
+            "autoDispatch": True,
+            "instructions": "Prefer primary sources.",
+            "skills": ["literature-review"],
+            "connectors": ["ARXIV"],
+        },
+        "broken_specialist": {
+            "description": "References missing capabilities.",
+            "skills": ["not-installed"],
+            "connectors": ["mcp:not-configured"],
+        },
+    }
+    initialized.config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    catalog = build_capability_catalog(
+        config_path=initialized.config_path,
+        skill_registry=registry,
+    )
+
+    specialists = {item["id"]: item for item in catalog if item["kind"] == "specialist"}
+    scout = specialists["literature_scout"]
+    assert scout["source"] == "local"
+    assert scout["available"] is True
+    assert scout["default_enabled"] is True
+    assert scout["metadata"]["registry_source"] == "custom"
+    assert scout["metadata"]["assigned_skills"] == ["literature-review"]
+    assert scout["metadata"]["assigned_connectors"] == ["ARXIV"]
+    assert scout["metadata"]["additional_instructions"] == "Prefer primary sources."
+    broken = specialists["broken_specialist"]
+    assert broken["available"] is False
+    assert broken["status"] == "needs_configuration"
+    assert "Missing Skills: not-installed" in broken["status_detail"]
+    assert "Missing Connectors: mcp:not-configured" in broken["status_detail"]

@@ -603,6 +603,8 @@ def default_config() -> dict[str, Any]:
             "specialists": {
                 "enabled": True,
                 "model": "",
+                "maxSkillChars": 60000,
+                "custom": {},
                 "paperReader": {
                     "enabled": True,
                     "autoDispatch": True,

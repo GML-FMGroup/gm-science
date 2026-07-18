@@ -2,8 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from openppx.gm_science.specialists.artifacts import save_critique_report, save_reading_note
+from openppx.gm_science.specialists.artifacts import (
+    save_critique_report,
+    save_reading_note,
+    save_specialist_report,
+)
 from openppx.gm_science.specialists.models import (
+    ConfiguredSpecialistOutput,
     PaperReading,
     PaperReaderOutput,
     ReviewerFinding,
@@ -117,3 +122,38 @@ def test_save_critique_report_links_target_and_structured_findings(tmp_path: Pat
     assert artifact.provenance["trigger"] == "explicit"
     assert artifact.provenance["model"] == "openai-codex/gpt-5.5"
     assert "One major issue" in Path(artifact.path_or_url).read_text(encoding="utf-8")
+
+
+def test_save_specialist_report_records_assigned_capabilities(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
+    store = GmScienceStore(tmp_path)
+    project = store.create_project(name="Scout", description="", agent_context="")
+    output = ConfiguredSpecialistOutput(
+        title="Scout report",
+        summary="A scoped result.",
+        findings=["Primary finding"],
+        recommendations=["Validate experimentally"],
+        limitations=["No full text"],
+        confidence="medium",
+    )
+
+    artifact = save_specialist_report(
+        store,
+        project_id=project.id,
+        session_id="session-1",
+        specialist_id="literature_scout",
+        output=output,
+        objective="Find evidence.",
+        model_name="openai-codex/gpt-5.5",
+        skills=("literature-review",),
+        connectors=("pubmed",),
+    )
+
+    assert artifact.type == "specialist_report"
+    assert artifact.metadata["objective"] == "Find evidence."
+    assert artifact.provenance["created_by"] == "literature_scout"
+    assert artifact.provenance["assigned_skills"] == ["literature-review"]
+    assert artifact.provenance["assigned_connectors"] == ["pubmed"]
+    markdown = Path(artifact.path_or_url).read_text(encoding="utf-8")
+    assert "Specialist: `literature_scout`" in markdown
+    assert "Primary finding" in markdown
