@@ -8,10 +8,10 @@ import type {
   ChatMessage,
   ClientDiagnostics,
   ConnectionSettings,
-  GmScienceArtifact,
   GmScienceCapability,
   GmScienceCapabilityKind,
   GmScienceProject,
+  GmScienceResource,
   GmScienceRun,
   RuntimeState,
   RuntimeStatus,
@@ -20,7 +20,7 @@ import type {
 
 type NavView = "projects" | "workspace" | "settings";
 type SettingsSection = GmScienceCapabilityKind | "runtime";
-type WorkspacePanel = "artifacts" | "data" | "runs";
+type WorkspacePanel = "files" | "data" | "runs";
 
 interface ProjectFormState {
   name: string;
@@ -175,44 +175,33 @@ function resizeComposer(textarea: HTMLTextAreaElement | null): void {
   textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
 }
 
-function formatArtifactType(type: string): string {
-  if (!type) {
-    return "artifact";
+function formatResourceKind(kind: GmScienceResource["kind"]): string {
+  return kind.replaceAll("_", " ");
+}
+
+function formatFileSize(value: number | null): string {
+  if (value === null) {
+    return "";
   }
-  return type.replace(/[_-]+/g, " ");
-}
-
-function metadataText(metadata: Record<string, unknown>, key: string): string {
-  const value = metadata[key];
-  return typeof value === "string" || typeof value === "number" ? String(value) : "";
-}
-
-function metadataList(metadata: Record<string, unknown>, key: string): string[] {
-  const value = metadata[key];
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && Boolean(item)) : [];
-}
-
-function metadataObjectList(metadata: Record<string, unknown>, key: string): Record<string, unknown>[] {
-  const value = metadata[key];
-  return Array.isArray(value)
-    ? value.filter(
-        (item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item),
-      )
-    : [];
-}
-
-function formatEvidenceScope(scope: string): string {
-  if (scope === "metadata_abstract") {
-    return "abstract metadata";
+  if (value < 1024) {
+    return `${value} B`;
   }
-  if (scope === "local_text") {
-    return "local text";
+  if (value < 1024 * 1024) {
+    return `${Math.round(value / 1024)} KB`;
   }
-  return scope.replaceAll("_", " ");
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function artifactSearchText(artifact: GmScienceArtifact): string {
-  return `${artifact.title} ${artifact.type} ${JSON.stringify(artifact.metadata)}`.toLowerCase();
+function resourceSearchText(resource: GmScienceResource): string {
+  return [
+    resource.displayName,
+    formatResourceKind(resource.kind),
+    resource.artifactType,
+    resource.mimeType,
+    resource.relativePath,
+  ]
+    .join(" ")
+    .toLowerCase();
 }
 
 function isActiveRun(run: GmScienceRun): boolean {
@@ -230,119 +219,32 @@ function formatRunTime(value: string): string {
     : date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
-function isWebUrl(value: string): boolean {
-  return /^https?:\/\//i.test(value.trim());
-}
-
-function ArtifactItem({ artifact }: { artifact: GmScienceArtifact }) {
-  const type = artifact.type.trim().toLowerCase() || "artifact";
-  const metadata = artifact.metadata ?? {};
-  const authors = metadataList(metadata, "authors");
-  const sources = metadataList(metadata, "source_names");
-  const year = metadataText(metadata, "year");
-  const citationCount = metadataText(metadata, "citation_count");
-  const identifier =
-    (metadataText(metadata, "doi") && `DOI ${metadataText(metadata, "doi")}`) ||
-    (metadataText(metadata, "pmid") && `PMID ${metadataText(metadata, "pmid")}`) ||
-    (metadataText(metadata, "arxiv_id") && `arXiv ${metadataText(metadata, "arxiv_id")}`) ||
-    (metadataText(metadata, "openalex_id") && `OpenAlex ${metadataText(metadata, "openalex_id")}`) ||
-    "";
-  const paperDetails = [
-    year,
-    sources.join(" + "),
-    citationCount && `${citationCount} citation${citationCount === "1" ? "" : "s"}`,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  const citedPapers = metadataList(metadata, "paper_artifact_ids").length;
-  const reportFileName = artifact.pathOrUrl.split(/[\\/]/).pop() ?? "";
-  const reportDate = artifact.createdAt ? new Date(artifact.createdAt).toLocaleDateString("zh-CN") : "";
-  const reportDetails = [
-    reportFileName,
-    `${citedPapers} cited ${citedPapers === 1 ? "paper" : "papers"}`,
-    reportDate,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  const readingSources = metadataList(metadata, "source_artifact_ids");
-  const evidenceScopes = metadataList(metadata, "evidence_scopes").map(formatEvidenceScope);
-  const readingDetails = [
-    `${readingSources.length} ${readingSources.length === 1 ? "source" : "sources"}`,
-    evidenceScopes.length > 0 && `Evidence: ${evidenceScopes.join(" + ")}`,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  const confidenceNote = metadataText(metadata, "confidence_note");
-  const readingFocus = metadataText(metadata, "focus");
-  const verdict = metadataText(metadata, "verdict").toLowerCase();
-  const targetArtifactId = metadataText(metadata, "target_artifact_id");
-  const findings = metadataObjectList(metadata, "findings");
-  const severityOrder = ["blocking", "major", "minor"];
-  const severityDetails = severityOrder
-    .map((severity) => {
-      const count = findings.filter((finding) => metadataText(finding, "severity").toLowerCase() === severity).length;
-      return count > 0 ? `${count} ${severity}` : "";
-    })
-    .filter(Boolean)
-    .join(" · ");
+function ResourceItem({ resource }: { resource: GmScienceResource }) {
   const marker =
-    type === "paper"
-      ? "P"
-      : type === "report"
-        ? "R"
-        : type === "citation"
-          ? "C"
-          : type === "reading_note"
-            ? "N"
-            : type === "critique_report"
-              ? "Q"
-              : "A";
+    resource.kind === "dataset" ? "D" : resource.kind === "run_output" ? "O" : resource.kind === "project_file" ? "F" : "A";
+  const details = [
+    resource.artifactType !== resource.kind ? resource.artifactType.replaceAll("_", " ") : "",
+    resource.mimeType,
+    formatFileSize(resource.sizeBytes),
+    formatRunTime(resource.updatedAt),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const location = resource.relativePath || resource.url;
 
   return (
-    <article className={`artifact-item artifact-${type}`}>
-      <div className="artifact-title-row">
-        <span className="artifact-marker" aria-hidden="true">
+    <article className={`resource-item resource-${resource.kind}`}>
+      <div className="resource-title-row">
+        <span className="resource-marker" aria-hidden="true">
           {marker}
         </span>
         <div>
-          <strong>{artifact.title}</strong>
-          <span className="artifact-kind">{formatArtifactType(type)}</span>
+          <strong>{resource.displayName}</strong>
+          <span className="resource-kind">{formatResourceKind(resource.kind)}</span>
         </div>
       </div>
-      {type === "paper" && authors.length > 0 ? <p className="artifact-byline">{authors.slice(0, 3).join(", ")}</p> : null}
-      {type === "paper" && paperDetails ? <p className="artifact-detail">{paperDetails}</p> : null}
-      {type === "paper" && identifier ? <p className="artifact-identifier">{identifier}</p> : null}
-      {type === "report" ? <p className="artifact-detail">{reportDetails}</p> : null}
-      {type === "citation" ? <p className="artifact-detail">Linked to report</p> : null}
-      {type === "reading_note" ? <p className="artifact-detail">{readingDetails}</p> : null}
-      {type === "reading_note" && readingFocus ? <p className="artifact-note">Focus: {readingFocus}</p> : null}
-      {type === "reading_note" && confidenceNote ? <p className="artifact-note">{confidenceNote}</p> : null}
-      {type === "critique_report" ? (
-        <div className="artifact-critique-summary">
-          <div>
-            {verdict ? <span className={`artifact-verdict ${verdict}`}>{verdict}</span> : null}
-            {severityDetails ? <span className="artifact-severity-summary">{severityDetails}</span> : null}
-          </div>
-          {targetArtifactId ? <p className="artifact-target">Target: {targetArtifactId}</p> : null}
-          {findings.length > 0 ? (
-            <ul className="artifact-findings">
-              {findings.slice(0, 3).map((finding, index) => (
-                <li key={`${metadataText(finding, "severity")}-${index}`}>
-                  <span className={`finding-severity ${metadataText(finding, "severity").toLowerCase()}`}>
-                    {metadataText(finding, "severity") || "finding"}
-                  </span>
-                  <span>{metadataText(finding, "claim") || metadataText(finding, "category")}</span>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
-      ) : null}
-      {isWebUrl(artifact.pathOrUrl) ? (
-        <a className="artifact-link" href={artifact.pathOrUrl} target="_blank" rel="noreferrer">
-          Open
-        </a>
-      ) : null}
+      {location ? <p className="resource-location">{location}</p> : null}
+      {details ? <p className="resource-detail">{details}</p> : null}
     </article>
   );
 }
@@ -402,10 +304,10 @@ export function App() {
   const [diagnostics, setDiagnostics] = useState<ClientDiagnostics | null>(null);
   const [agents, setAgents] = useState<AgentProfile[]>([]);
   const [projects, setProjects] = useState<GmScienceProject[]>([]);
-  const [artifacts, setArtifacts] = useState<GmScienceArtifact[]>([]);
+  const [resources, setResources] = useState<GmScienceResource[]>([]);
   const [runs, setRuns] = useState<GmScienceRun[]>([]);
-  const [artifactSearch, setArtifactSearch] = useState("");
-  const [workspacePanel, setWorkspacePanel] = useState<WorkspacePanel>("artifacts");
+  const [resourceSearch, setResourceSearch] = useState("");
+  const [workspacePanel, setWorkspacePanel] = useState<WorkspacePanel>("files");
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState("");
@@ -466,10 +368,10 @@ export function App() {
         projectSessions.some((session) => session.agentId === selectedAgentId && sendingSessionIds.includes(session.id))),
     [projectSessions, selectedAgentId, selectedSessionId, sendingSessionIds],
   );
-  const visibleArtifacts = useMemo(() => {
-    const query = artifactSearch.trim().toLowerCase();
-    return query ? artifacts.filter((artifact) => artifactSearchText(artifact).includes(query)) : artifacts;
-  }, [artifactSearch, artifacts]);
+  const visibleResources = useMemo(() => {
+    const query = resourceSearch.trim().toLowerCase();
+    return query ? resources.filter((resource) => resourceSearchText(resource).includes(query)) : resources;
+  }, [resourceSearch, resources]);
   const canSend = Boolean(composer.trim()) && Boolean(selectedAgentId) && Boolean(selectedProjectId) && !selectedAgentBusy;
 
   useEffect(() => {
@@ -496,7 +398,7 @@ export function App() {
           setSendingSessionIds((current) => removeSendingSession(current, event.sessionId));
         }
         if (event.status === "failed") {
-          void refreshArtifacts(selectedProjectIdRef.current);
+          void refreshResources(selectedProjectIdRef.current);
         }
         return;
       }
@@ -514,7 +416,7 @@ export function App() {
       }
       if (event.type === "run.finished") {
         setSendingSessionIds((current) => removeSendingSession(current, event.sessionId));
-        void refreshArtifacts(selectedProjectIdRef.current);
+        void refreshResources(selectedProjectIdRef.current);
       }
     });
 
@@ -658,18 +560,18 @@ export function App() {
     }
   }
 
-  async function refreshArtifacts(projectId: string, clearOnError = false): Promise<void> {
+  async function refreshResources(projectId: string, clearOnError = false): Promise<void> {
     if (!projectId) {
       return;
     }
     try {
-      const payload = await window.ppxClient.listGmScienceArtifacts(projectId);
+      const payload = await window.ppxClient.listGmScienceResources(projectId);
       if (selectedProjectIdRef.current === projectId) {
-        setArtifacts(payload.artifacts);
+        setResources(payload.resources);
       }
     } catch {
       if (clearOnError && selectedProjectIdRef.current === projectId) {
-        setArtifacts([]);
+        setResources([]);
       }
     }
   }
@@ -691,7 +593,7 @@ export function App() {
       runsRef.current = payload.runs;
       setRuns(payload.runs);
       if (becameTerminal) {
-        await Promise.all([refreshArtifacts(projectId), refreshProjects()]);
+        await Promise.all([refreshResources(projectId), refreshProjects()]);
       }
     } catch (error) {
       if (clearOnError && selectedProjectIdRef.current === projectId) {
@@ -709,7 +611,7 @@ export function App() {
     setProjectError(null);
     selectedProjectIdRef.current = project.id;
     setSelectedProjectId(project.id);
-    setArtifactSearch("");
+    setResourceSearch("");
     setRunError(null);
     runsRef.current = [];
     setRuns([]);
@@ -736,7 +638,7 @@ export function App() {
         setMessages(loaded.messages);
       }
     }
-    await Promise.all([refreshArtifacts(project.id, true), refreshRuns(project.id, true)]);
+    await Promise.all([refreshResources(project.id, true), refreshRuns(project.id, true)]);
   }
 
   function openPythonRunDialog(): void {
@@ -777,7 +679,7 @@ export function App() {
       setWorkspacePanel("runs");
       setPythonRunModalOpen(false);
       if (!isActiveRun(created.run)) {
-        await Promise.all([refreshArtifacts(selectedProjectId), refreshProjects()]);
+        await Promise.all([refreshResources(selectedProjectId), refreshProjects()]);
       }
     } catch (error) {
       setRunError(error instanceof Error ? error.message : String(error));
@@ -795,7 +697,7 @@ export function App() {
         item.taskId === cancelled.run.taskId ? cancelled.run : item,
       );
       setRuns(runsRef.current);
-      await Promise.all([refreshArtifacts(run.projectId), refreshProjects()]);
+      await Promise.all([refreshResources(run.projectId), refreshProjects()]);
     } catch (error) {
       setRunError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -811,7 +713,7 @@ export function App() {
       runsRef.current = [retried.run, ...runsRef.current.filter((item) => item.taskId !== retried.run.taskId)];
       setRuns(runsRef.current);
       if (!isActiveRun(retried.run)) {
-        await Promise.all([refreshArtifacts(run.projectId), refreshProjects()]);
+        await Promise.all([refreshResources(run.projectId), refreshProjects()]);
       }
     } catch (error) {
       setRunError(error instanceof Error ? error.message : String(error));
@@ -957,7 +859,7 @@ export function App() {
     } catch (error) {
       console.error("Failed to send message", error);
       setSendError(error instanceof Error ? error.message : String(error));
-      await refreshArtifacts(selectedProjectId);
+      await refreshResources(selectedProjectId);
     } finally {
       setSendingSessionIds((current) => current.filter((item) => item !== sessionId));
     }
@@ -1226,12 +1128,12 @@ export function App() {
             <header className="artifacts-header">
               <div className="workspace-panel-tabs" role="tablist" aria-label="Project workspace panel">
                 <button
-                  className={workspacePanel === "artifacts" ? "active" : ""}
+                  className={workspacePanel === "files" ? "active" : ""}
                   role="tab"
-                  aria-selected={workspacePanel === "artifacts"}
-                  onClick={() => setWorkspacePanel("artifacts")}
+                  aria-selected={workspacePanel === "files"}
+                  onClick={() => setWorkspacePanel("files")}
                 >
-                  Artifacts
+                  Files
                 </button>
                 <button
                   className={workspacePanel === "data" ? "active" : ""}
@@ -1250,24 +1152,24 @@ export function App() {
                   Runs
                 </button>
               </div>
-              <span>{workspacePanel === "artifacts" ? artifacts.length : workspacePanel === "runs" ? runs.length : ""}</span>
+              <span>{workspacePanel === "files" ? resources.length : workspacePanel === "runs" ? runs.length : ""}</span>
             </header>
-            {workspacePanel === "artifacts" ? (
+            {workspacePanel === "files" ? (
               <>
                 <input
                   className="artifact-search"
-                  value={artifactSearch}
-                  placeholder="Search artifacts..."
-                  aria-label="Search artifacts"
-                  onChange={(event) => setArtifactSearch(event.target.value)}
+                  value={resourceSearch}
+                  placeholder="Search files..."
+                  aria-label="Search files"
+                  onChange={(event) => setResourceSearch(event.target.value)}
                 />
                 <div className="artifact-list">
-                  {visibleArtifacts.map((artifact) => (
-                    <ArtifactItem key={artifact.id} artifact={artifact} />
+                  {visibleResources.map((resource) => (
+                    <ResourceItem key={resource.id} resource={resource} />
                   ))}
-                  {artifacts.length === 0 ? <div className="artifact-empty">No artifacts yet</div> : null}
-                  {artifacts.length > 0 && visibleArtifacts.length === 0 ? (
-                    <div className="artifact-empty">No matching artifacts</div>
+                  {resources.length === 0 ? <div className="artifact-empty">No files yet</div> : null}
+                  {resources.length > 0 && visibleResources.length === 0 ? (
+                    <div className="artifact-empty">No matching files</div>
                   ) : null}
                 </div>
               </>
@@ -1280,7 +1182,7 @@ export function App() {
                   setRuns(runsRef.current);
                 }}
                 onWorkspaceChanged={async () => {
-                  await Promise.all([refreshArtifacts(selectedProjectId), refreshRuns(selectedProjectId), refreshProjects()]);
+                  await Promise.all([refreshResources(selectedProjectId), refreshRuns(selectedProjectId), refreshProjects()]);
                 }}
               />
             ) : (

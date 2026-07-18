@@ -77,6 +77,10 @@ describe("preload API", () => {
       channel: "ppx-client:list-gm-science-artifacts",
       args: ["proj-1"],
     });
+    expect(api.listGmScienceResources("proj-1", "figure")).toEqual({
+      channel: "ppx-client:list-gm-science-resources",
+      args: ["proj-1", "figure"],
+    });
     expect(api.createGmScienceArtifact("proj-1", { title: "note" })).toEqual({
       channel: "ppx-client:create-gm-science-artifact",
       args: ["proj-1", { title: "note" }],
@@ -133,6 +137,6 @@ describe("preload API", () => {
       channel: "ppx-client:run-gm-science-analysis",
       args: ["proj-1", "analysis-1"],
     });
-    expect(invoke).toHaveBeenCalledTimes(21);
+    expect(invoke).toHaveBeenCalledTimes(22);
   });
 });

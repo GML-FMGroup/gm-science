@@ -21,6 +21,7 @@ import {
   listGmScienceAnalyses as mockListGmScienceAnalyses,
   listGmScienceDatasets as mockListGmScienceDatasets,
   listGmScienceProjects as mockListGmScienceProjects,
+  listGmScienceResources as mockListGmScienceResources,
   listGmScienceRuns as mockListGmScienceRuns,
   listSessions as mockListSessions,
   loadSession as mockLoadSession,
@@ -40,6 +41,7 @@ import {
   normalizeGmScienceAnalysis,
   normalizeGmScienceCapability,
   normalizeGmScienceProject,
+  normalizeGmScienceResource,
   normalizeGmScienceDataset,
   normalizeGmScienceRun,
 } from "../../app/src/lib/client-api-projection";
@@ -71,6 +73,7 @@ import type {
   GmScienceCapability,
   GmScienceCapabilityCatalog,
   GmScienceProject,
+  GmScienceResource,
   GmScienceDataset,
   GmScienceDatasetFileSelection,
   GmScienceRun,
@@ -788,6 +791,31 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
       throw new Error("Client API returned an invalid artifact payload.");
     }
     return { artifact };
+  }
+
+  public async listGmScienceResources(
+    projectId: string,
+    query = "",
+  ): Promise<{ resources: GmScienceResource[] }> {
+    if (this.shouldUseMock()) {
+      return mockListGmScienceResources(projectId, query);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      return { resources: [] };
+    }
+    const normalizedQuery = query.trim();
+    const queryString = normalizedQuery ? `?q=${encodeURIComponent(normalizedQuery)}` : "";
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/resources${queryString}`,
+    );
+    const items = Array.isArray((payload.data as Record<string, unknown> | undefined)?.items)
+      ? ((payload.data as Record<string, unknown>).items as unknown[])
+      : [];
+    return {
+      resources: items
+        .map((item) => normalizeGmScienceResource(item))
+        .filter((item): item is GmScienceResource => item !== null),
+    };
   }
 
   public async listGmScienceRuns(projectId: string): Promise<{ runs: GmScienceRun[] }> {

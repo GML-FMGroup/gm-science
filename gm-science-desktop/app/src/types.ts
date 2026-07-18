@@ -142,6 +142,30 @@ export interface GmScienceArtifact {
   updatedAt: string;
 }
 
+export type GmScienceResourceKind = "artifact" | "dataset" | "run_output" | "project_file";
+export type GmScienceResourceAccessMode = "read" | "external" | "metadata_only";
+export type GmScienceResourceSource = "artifact" | "workspace";
+
+export interface GmScienceResource {
+  id: string;
+  kind: GmScienceResourceKind;
+  projectId: string;
+  sessionId: string;
+  displayName: string;
+  artifactType: string;
+  mimeType: string;
+  versionOrHash: string;
+  accessMode: GmScienceResourceAccessMode;
+  source: GmScienceResourceSource;
+  artifactId: string;
+  relativePath: string;
+  url: string;
+  sizeBytes: number | null;
+  createdAt: string;
+  updatedAt: string;
+  metadata: Record<string, unknown>;
+}
+
 export interface CreateGmScienceArtifactInput {
   type: string;
   title: string;
@@ -369,6 +393,7 @@ export interface PpxClientApi {
     input: UpdateGmScienceCapabilitiesInput,
   ): Promise<{ project: GmScienceProject; capabilities: GmScienceCapability[] }>;
   listGmScienceArtifacts(projectId: string): Promise<{ artifacts: GmScienceArtifact[] }>;
+  listGmScienceResources(projectId: string, query?: string): Promise<{ resources: GmScienceResource[] }>;
   createGmScienceArtifact(
     projectId: string,
     input: CreateGmScienceArtifactInput,

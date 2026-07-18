@@ -114,6 +114,10 @@ app.whenReady().then(() => {
     adapter!.listGmScienceArtifacts(projectId),
   );
   ipcMain.handle(
+    "ppx-client:list-gm-science-resources",
+    async (_event, projectId: string, query?: string) => adapter!.listGmScienceResources(projectId, query),
+  );
+  ipcMain.handle(
     "ppx-client:create-gm-science-artifact",
     async (_event, projectId: string, input: CreateGmScienceArtifactInput) =>
       adapter!.createGmScienceArtifact(projectId, input),

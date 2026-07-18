@@ -7,6 +7,10 @@ import type {
   GmScienceDatasetColumnProfile,
   GmScienceDatasetProfile,
   GmScienceProject,
+  GmScienceResource,
+  GmScienceResourceAccessMode,
+  GmScienceResourceKind,
+  GmScienceResourceSource,
   GmScienceRun,
   GmScienceRunStatus,
   MessagePart,
@@ -258,6 +262,55 @@ export function normalizeGmScienceArtifact(payload: unknown): GmScienceArtifact 
     provenance: asLooseRecord(artifact.provenance),
     createdAt: asString(artifact.created_at ?? artifact.createdAt, new Date().toISOString()),
     updatedAt: asString(artifact.updated_at ?? artifact.updatedAt, new Date().toISOString()),
+  };
+}
+
+const GM_SCIENCE_RESOURCE_KINDS = new Set<GmScienceResourceKind>([
+  "artifact",
+  "dataset",
+  "run_output",
+  "project_file",
+]);
+const GM_SCIENCE_RESOURCE_ACCESS_MODES = new Set<GmScienceResourceAccessMode>([
+  "read",
+  "external",
+  "metadata_only",
+]);
+const GM_SCIENCE_RESOURCE_SOURCES = new Set<GmScienceResourceSource>(["artifact", "workspace"]);
+
+export function normalizeGmScienceResource(payload: unknown): GmScienceResource | null {
+  const resource = asRecord(payload);
+  if (!resource) {
+    return null;
+  }
+  const kind = asString(resource.kind) as GmScienceResourceKind;
+  const accessMode = asString(resource.access_mode ?? resource.accessMode) as GmScienceResourceAccessMode;
+  const source = asString(resource.source) as GmScienceResourceSource;
+  if (
+    !GM_SCIENCE_RESOURCE_KINDS.has(kind) ||
+    !GM_SCIENCE_RESOURCE_ACCESS_MODES.has(accessMode) ||
+    !GM_SCIENCE_RESOURCE_SOURCES.has(source)
+  ) {
+    return null;
+  }
+  return {
+    id: asString(resource.id),
+    kind,
+    projectId: asString(resource.project_id ?? resource.projectId),
+    sessionId: asString(resource.session_id ?? resource.sessionId),
+    displayName: asString(resource.display_name ?? resource.displayName),
+    artifactType: asString(resource.artifact_type ?? resource.artifactType),
+    mimeType: asString(resource.mime_type ?? resource.mimeType),
+    versionOrHash: asString(resource.version_or_hash ?? resource.versionOrHash),
+    accessMode,
+    source,
+    artifactId: asString(resource.artifact_id ?? resource.artifactId),
+    relativePath: asString(resource.relative_path ?? resource.relativePath),
+    url: asString(resource.url),
+    sizeBytes: asNullableNumber(resource.size_bytes ?? resource.sizeBytes),
+    createdAt: asString(resource.created_at ?? resource.createdAt),
+    updatedAt: asString(resource.updated_at ?? resource.updatedAt),
+    metadata: asLooseRecord(resource.metadata),
   };
 }
 

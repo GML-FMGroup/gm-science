@@ -3,6 +3,7 @@ import {
   normalizeGmScienceAnalysis,
   normalizeGmScienceCapability,
   normalizeGmScienceProject,
+  normalizeGmScienceResource,
   normalizeGmScienceDataset,
   normalizeGmScienceRun,
 } from "../app/src/lib/client-api-projection";
@@ -68,6 +69,50 @@ describe("gm-science client-api projection", () => {
       createdAt: "2026-07-10T10:00:00.000Z",
       updatedAt: "2026-07-10T11:00:00.000Z",
     });
+  });
+
+  it("normalizes path-safe Project resource references", () => {
+    expect(
+      normalizeGmScienceResource({
+        id: "artifact:art_123",
+        kind: "run_output",
+        project_id: "proj_123",
+        session_id: "session-1",
+        display_name: "Result figure",
+        artifact_type: "figure",
+        mime_type: "image/png",
+        version_or_hash: "sha-123",
+        access_mode: "read",
+        source: "artifact",
+        artifact_id: "art_123",
+        relative_path: "runs/run-1/outputs/result.png",
+        url: "",
+        size_bytes: 2048,
+        created_at: "2026-07-10T10:00:00.000Z",
+        updated_at: "2026-07-10T11:00:00.000Z",
+        metadata: { task_id: "task-1" },
+        path_or_url: "/must/not/project",
+      }),
+    ).toEqual({
+      id: "artifact:art_123",
+      kind: "run_output",
+      projectId: "proj_123",
+      sessionId: "session-1",
+      displayName: "Result figure",
+      artifactType: "figure",
+      mimeType: "image/png",
+      versionOrHash: "sha-123",
+      accessMode: "read",
+      source: "artifact",
+      artifactId: "art_123",
+      relativePath: "runs/run-1/outputs/result.png",
+      url: "",
+      sizeBytes: 2048,
+      createdAt: "2026-07-10T10:00:00.000Z",
+      updatedAt: "2026-07-10T11:00:00.000Z",
+      metadata: { task_id: "task-1" },
+    });
+    expect(normalizeGmScienceResource({ id: "bad", kind: "secret_file" })).toBeNull();
   });
 
   it("normalizes capability status without leaking unknown fields", () => {

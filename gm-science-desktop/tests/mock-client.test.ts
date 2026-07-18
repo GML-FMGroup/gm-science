@@ -11,6 +11,7 @@ import {
   listGmScienceAnalyses,
   listGmScienceDatasets,
   listGmScienceProjects,
+  listGmScienceResources,
   listGmScienceRuns,
   loadSession,
   updateGmScienceProjectCapabilities,
@@ -58,6 +59,14 @@ describe("mock client adapter", () => {
     expect(artifact.artifact.projectId).toBe(created.project.id);
     const artifacts = await listGmScienceArtifacts(created.project.id);
     expect(artifacts.artifacts).toContainEqual(artifact.artifact);
+    const resources = await listGmScienceResources(created.project.id, "paper");
+    expect(resources.resources).toContainEqual(
+      expect.objectContaining({
+        id: `artifact:${artifact.artifact.id}`,
+        kind: "artifact",
+        displayName: "A relevant paper",
+      }),
+    );
 
     const catalog = await listGmScienceCapabilities(created.project.id);
     expect(catalog.items.some((item) => item.id === "pubmed" && item.projectEnabled)).toBe(true);

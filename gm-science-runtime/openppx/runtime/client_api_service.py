@@ -29,6 +29,7 @@ from ..gm_science.data import DatasetService
 from ..gm_science.execution import ScienceExecutionService
 from ..gm_science.literature.config import load_literature_config, select_literature_sources
 from ..gm_science.models import ArtifactRecord, ProjectRecord
+from ..gm_science.resources import ResourceCatalogService
 from ..gm_science.specialists.config import load_specialist_config
 from ..gm_science.store import GmScienceStore
 from .access_policy import AccessPolicy
@@ -760,6 +761,10 @@ class ClientApiCoordinator:
             store=self._gm_science_store,
             config_path=agent_config_path(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir),
         )
+        self._resource_catalog = ResourceCatalogService(
+            store=self._gm_science_store,
+            config_path=agent_config_path(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir),
+        )
         self._analysis_service = AnalysisService(
             store=self._gm_science_store,
             dataset_service=self._dataset_service,
@@ -1347,6 +1352,19 @@ class ClientApiCoordinator:
         except ValueError as exc:
             return _error("INVALID_REQUEST", str(exc))
         return _ok({"artifact": _gm_science_artifact_payload(artifact)})
+
+    def list_gm_science_resources(self, project_id: str, query: str = "") -> dict[str, Any]:
+        """Return one Project's unified, path-safe resource catalog."""
+
+        if self._gm_science_store.get_project(project_id) is None:
+            return _error("PROJECT_NOT_FOUND", f"Project '{project_id}' was not found.")
+        if not self._resource_catalog.config.enabled:
+            return _error("RESOURCE_CATALOG_UNAVAILABLE", "Project resource catalog is disabled by configuration.")
+        try:
+            resources = self._resource_catalog.list_resources(project_id, query=query)
+        except ValueError as exc:
+            return _error("INVALID_REQUEST", str(exc))
+        return _ok({"items": [resource.to_dict() for resource in resources]})
 
     def list_gm_science_datasets(self, project_id: str) -> dict[str, Any]:
         """Return imported datasets for one gm-science Project."""
@@ -2901,6 +2919,18 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
         ):
             payload = self.coordinator.list_gm_science_artifacts(segments[4])
             self._send_json(200 if payload.get("ok") else 404, payload)
+            return
+        if (
+            len(segments) == 6
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "resources"
+        ):
+            payload = self.coordinator.list_gm_science_resources(segments[4], query.get("q", ""))
+            status = 200
+            if not payload.get("ok"):
+                code = payload.get("error", {}).get("code")
+                status = 404 if code == "PROJECT_NOT_FOUND" else 503 if code == "RESOURCE_CATALOG_UNAVAILABLE" else 400
+            self._send_json(status, payload)
             return
         if (
             len(segments) == 6

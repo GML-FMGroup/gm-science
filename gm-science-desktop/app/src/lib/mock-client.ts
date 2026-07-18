@@ -13,6 +13,7 @@ import type {
   GmScienceCapability,
   GmScienceCapabilityCatalog,
   GmScienceProject,
+  GmScienceResource,
   GmScienceDataset,
   GmScienceRun,
   ImportGmScienceDatasetInput,
@@ -610,6 +611,44 @@ export async function updateGmScienceProjectCapabilities(
 
 export async function listGmScienceArtifacts(projectId: string): Promise<{ artifacts: GmScienceArtifact[] }> {
   return { artifacts: (state.artifactsByProject[projectId] ?? []).map((artifact) => ({ ...artifact })) };
+}
+
+export async function listGmScienceResources(
+  projectId: string,
+  query = "",
+): Promise<{ resources: GmScienceResource[] }> {
+  const resources = (state.artifactsByProject[projectId] ?? []).map<GmScienceResource>((artifact) => ({
+    id: `artifact:${artifact.id}`,
+    kind:
+      artifact.type === "dataset"
+        ? "dataset"
+        : artifact.metadata.task_id || artifact.provenance.task_id
+          ? "run_output"
+          : "artifact",
+    projectId: artifact.projectId,
+    sessionId: artifact.sessionId,
+    displayName: artifact.title,
+    artifactType: artifact.type,
+    mimeType: artifact.mimeType,
+    versionOrHash: artifact.updatedAt,
+    accessMode: /^https?:\/\//i.test(artifact.pathOrUrl) ? "external" : "metadata_only",
+    source: "artifact",
+    artifactId: artifact.id,
+    relativePath: "",
+    url: /^https?:\/\//i.test(artifact.pathOrUrl) ? artifact.pathOrUrl : "",
+    sizeBytes: null,
+    createdAt: artifact.createdAt,
+    updatedAt: artifact.updatedAt,
+    metadata: {},
+  }));
+  const needle = query.trim().toLowerCase();
+  return {
+    resources: needle
+      ? resources.filter((resource) =>
+          `${resource.displayName} ${resource.kind} ${resource.artifactType}`.toLowerCase().includes(needle),
+        )
+      : resources,
+  };
 }
 
 export async function createGmScienceArtifact(

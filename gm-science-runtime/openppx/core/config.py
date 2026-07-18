@@ -595,6 +595,20 @@ def default_config() -> dict[str, Any]:
                 "maxSourceChars": 200000,
                 "maxLogPreviewChars": 6000,
             },
+            "resources": {
+                "enabled": True,
+                "maxWorkspaceFiles": 1000,
+                "maxScanDepth": 6,
+                "includeHidden": False,
+                "excludedDirectories": [
+                    ".git",
+                    ".venv",
+                    "__pycache__",
+                    "node_modules",
+                    "datasets",
+                    "runs",
+                ],
+            },
             "projectDefaults": {
                 "enabledSkills": ["literature-review"],
                 "enabledConnectors": ["arxiv", "pubmed", "openalex"],

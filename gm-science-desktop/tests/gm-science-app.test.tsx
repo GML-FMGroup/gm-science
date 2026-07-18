@@ -4,11 +4,11 @@ import { App } from "../app/src/App";
 import type {
   BootstrapPayload,
   ClientDiagnostics,
-  GmScienceArtifact,
   GmScienceAnalysis,
   GmScienceCapability,
   GmScienceDataset,
   GmScienceProject,
+  GmScienceResource,
   GmScienceRun,
   PpxClientApi,
   RunEvent,
@@ -263,6 +263,7 @@ function installClient(overrides: Partial<PpxClientApi> = {}): {
       return { project: updated, capabilities: capabilities(updated) };
     },
     listGmScienceArtifacts: async () => ({ artifacts: [] }),
+    listGmScienceResources: async () => ({ resources: [] }),
     createGmScienceArtifact: async (projectId, input) => ({
       artifact: {
         id: "art-test",
@@ -321,19 +322,25 @@ function installClient(overrides: Partial<PpxClientApi> = {}): {
   return { client, emit: (event) => listener?.(event) };
 }
 
-function artifact(overrides: Partial<GmScienceArtifact>): GmScienceArtifact {
+function resource(overrides: Partial<GmScienceResource> = {}): GmScienceResource {
   return {
-    id: "art-default",
+    id: "project_file:file-default",
+    kind: "project_file",
     projectId: "proj_123",
-    sessionId: "session-a",
-    type: "paper",
-    title: "Artifact",
-    pathOrUrl: "",
-    mimeType: "application/json",
-    metadata: {},
-    provenance: {},
+    sessionId: "",
+    displayName: "protocol.md",
+    artifactType: "project_file",
+    mimeType: "text/markdown",
+    versionOrHash: "version-1",
+    accessMode: "read",
+    source: "workspace",
+    artifactId: "",
+    relativePath: "notes/protocol.md",
+    url: "",
+    sizeBytes: 1024,
     createdAt: "2026-07-10T10:00:00.000Z",
     updatedAt: "2026-07-10T10:00:00.000Z",
+    metadata: {},
     ...overrides,
   };
 }
@@ -617,68 +624,33 @@ describe("gm-science App", () => {
     expect(within(panel).getByText("Not allowed")).toBeInTheDocument();
   });
 
-  it("renders research artifact details with metadata fallbacks", async () => {
+  it("renders the unified Files catalog with resource kind and safe location", async () => {
     installClient({
-      listGmScienceArtifacts: async () => ({
-        artifacts: [
-          artifact({
-            id: "art-paper",
-            title: "Reliable Protein Folding",
-            pathOrUrl: "https://example.test/folding",
-            metadata: {
-              year: 2024,
-              authors: ["Ada Lovelace", "Grace Hopper"],
-              source_names: ["arxiv", "pubmed"],
-              doi: "10.1000/folding",
-              citation_count: 12,
-            },
+      listGmScienceResources: async () => ({
+        resources: [
+          resource({
+            id: "artifact:dataset",
+            kind: "dataset",
+            displayName: "Measurements",
+            artifactType: "dataset",
+            relativePath: "datasets/measurements.csv",
           }),
-          artifact({
-            id: "art-report",
-            type: "report",
-            title: "Folding review",
-            pathOrUrl: "/tmp/folding.md",
-            metadata: { paper_artifact_ids: ["art-paper"] },
+          resource({
+            id: "artifact:figure",
+            kind: "run_output",
+            displayName: "Result figure",
+            artifactType: "figure",
+            relativePath: "runs/run-1/outputs/result.png",
+            sizeBytes: 2048,
           }),
-          artifact({
-            id: "art-citation",
-            type: "citation",
-            title: "Reliable Protein Folding citation",
-            metadata: { paper_artifact_id: "art-paper", report_artifact_id: "art-report" },
+          resource({
+            id: "artifact:report",
+            kind: "artifact",
+            displayName: "Folding review",
+            artifactType: "report",
+            relativePath: "reports/folding.md",
           }),
-          artifact({ id: "art-malformed", title: "Metadata-free paper", metadata: {} }),
-          artifact({
-            id: "art-reading-note",
-            type: "reading_note",
-            title: "Folding reading note",
-            metadata: {
-              source_artifact_ids: ["art-paper"],
-              evidence_scopes: ["metadata_abstract"],
-              focus: "protein folding reliability",
-              confidence_note: "Limited to abstract metadata.",
-            },
-          }),
-          artifact({
-            id: "art-critique",
-            type: "critique_report",
-            title: "Folding critique",
-            metadata: {
-              verdict: "revise",
-              target_artifact_id: "art-report",
-              findings: [
-                {
-                  severity: "major",
-                  category: "evidence",
-                  claim: "The central claim needs stronger support.",
-                },
-                {
-                  severity: "minor",
-                  category: "clarity",
-                  claim: "Define the evaluation metric.",
-                },
-              ],
-            },
-          }),
+          resource(),
         ],
       }),
     });
@@ -686,30 +658,22 @@ describe("gm-science App", () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
 
-    expect(await screen.findByText("Reliable Protein Folding")).toBeInTheDocument();
-    expect(screen.getByText("Ada Lovelace, Grace Hopper")).toBeInTheDocument();
-    expect(screen.getByText("2024 · arxiv + pubmed · 12 citations")).toBeInTheDocument();
-    expect(screen.getByText("DOI 10.1000/folding")).toBeInTheDocument();
-    expect(screen.getByText(/folding\.md · 1 cited paper/)).toBeInTheDocument();
-    expect(screen.getByText("Linked to report")).toBeInTheDocument();
-    expect(screen.getByText("Metadata-free paper")).toBeInTheDocument();
-    expect(screen.getByText("1 source · Evidence: abstract metadata")).toBeInTheDocument();
-    expect(screen.getByText("Focus: protein folding reliability")).toBeInTheDocument();
-    expect(screen.getByText("Limited to abstract metadata.")).toBeInTheDocument();
-    expect(screen.getByText("revise")).toBeInTheDocument();
-    expect(screen.getByText("1 major · 1 minor")).toBeInTheDocument();
-    expect(screen.getByText("Target: art-report")).toBeInTheDocument();
-    expect(screen.getByText("The central claim needs stronger support.")).toBeInTheDocument();
-    expect(screen.getAllByRole("link", { name: "Open" })).toHaveLength(1);
-    expect(screen.getByRole("link", { name: "Open" })).toHaveAttribute("href", "https://example.test/folding");
+    expect(await screen.findByRole("tab", { name: "Files" })).toBeInTheDocument();
+    expect(screen.getByText("Measurements")).toBeInTheDocument();
+    expect(screen.getByText("dataset")).toBeInTheDocument();
+    expect(screen.getByText("Result figure")).toBeInTheDocument();
+    expect(screen.getByText("run output")).toBeInTheDocument();
+    expect(screen.getByText("runs/run-1/outputs/result.png")).toBeInTheDocument();
+    expect(screen.getByText(/2 KB/)).toBeInTheDocument();
+    expect(screen.getByText("notes/protocol.md")).toBeInTheDocument();
   });
 
-  it("filters artifacts by title, type, and metadata", async () => {
+  it("filters Files by name, kind, type, and relative path", async () => {
     installClient({
-      listGmScienceArtifacts: async () => ({
-        artifacts: [
-          artifact({ id: "art-paper", title: "Protein atlas", metadata: { doi: "10.1000/atlas" } }),
-          artifact({ id: "art-report", type: "report", title: "Genome review" }),
+      listGmScienceResources: async () => ({
+        resources: [
+          resource({ id: "artifact:atlas", kind: "artifact", displayName: "Protein atlas", artifactType: "paper" }),
+          resource({ id: "artifact:report", kind: "run_output", displayName: "Genome review", artifactType: "report" }),
         ],
       }),
     });
@@ -718,7 +682,7 @@ describe("gm-science App", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
     await screen.findByText("Protein atlas");
 
-    fireEvent.change(screen.getByPlaceholderText("Search artifacts..."), { target: { value: "report" } });
+    fireEvent.change(screen.getByPlaceholderText("Search files..."), { target: { value: "run output" } });
 
     expect(screen.queryByText("Protein atlas")).not.toBeInTheDocument();
     expect(screen.getByText("Genome review")).toBeInTheDocument();
@@ -843,10 +807,10 @@ describe("gm-science App", () => {
     expect(source).not.toContain('"gm-science local Python run completed.\n"');
   });
 
-  it("refreshes Artifacts when a Python run completes before polling starts", async () => {
-    const listGmScienceArtifacts = vi.fn(async () => ({ artifacts: [] }));
+  it("refreshes Files when a Python run completes before polling starts", async () => {
+    const listGmScienceResources = vi.fn(async () => ({ resources: [] }));
     installClient({
-      listGmScienceArtifacts,
+      listGmScienceResources,
       createGmSciencePythonRun: async (projectId, input) => ({
         run: scienceRun({
           taskId: "task-fast",
@@ -860,12 +824,12 @@ describe("gm-science App", () => {
 
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
-    await waitFor(() => expect(listGmScienceArtifacts).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(listGmScienceResources).toHaveBeenCalledTimes(1));
     fireEvent.click(await screen.findByRole("tab", { name: "Runs" }));
     fireEvent.click(screen.getByRole("button", { name: "New Python run" }));
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
 
-    await waitFor(() => expect(listGmScienceArtifacts).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(listGmScienceResources).toHaveBeenCalledTimes(2));
   });
 
   it("shows durable run output and exposes cancel and retry controls", async () => {
@@ -927,30 +891,30 @@ describe("gm-science App", () => {
     expect(await screen.findByText("queued")).toBeInTheDocument();
   });
 
-  it("refreshes artifacts when a run finishes", async () => {
-    const paper = artifact({ id: "art-new", title: "Newly indexed paper" });
-    const listGmScienceArtifacts = vi
+  it("refreshes Files when a run finishes", async () => {
+    const paper = resource({ id: "artifact:art-new", displayName: "Newly indexed paper", artifactType: "paper" });
+    const listGmScienceResources = vi
       .fn()
-      .mockResolvedValueOnce({ artifacts: [] })
-      .mockResolvedValueOnce({ artifacts: [paper] });
-    const { emit } = installClient({ listGmScienceArtifacts });
+      .mockResolvedValueOnce({ resources: [] })
+      .mockResolvedValueOnce({ resources: [paper] });
+    const { emit } = installClient({ listGmScienceResources });
 
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
-    await screen.findByText("No artifacts yet");
+    await screen.findByText("No files yet");
 
     await act(async () => {
       emit({ type: "run.finished", runId: "run-1", sessionId: "session-a" });
     });
 
     expect(await screen.findByText("Newly indexed paper")).toBeInTheDocument();
-    expect(listGmScienceArtifacts).toHaveBeenCalledTimes(2);
+    expect(listGmScienceResources).toHaveBeenCalledTimes(2);
   });
 
-  it("refreshes artifacts after a run request fails", async () => {
-    const listGmScienceArtifacts = vi.fn(async () => ({ artifacts: [] }));
+  it("refreshes Files after a run request fails", async () => {
+    const listGmScienceResources = vi.fn(async () => ({ resources: [] }));
     installClient({
-      listGmScienceArtifacts,
+      listGmScienceResources,
       sendMessage: async () => {
         throw new Error("run failed");
       },
@@ -958,11 +922,11 @@ describe("gm-science App", () => {
 
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
-    await screen.findByText("No artifacts yet");
+    await screen.findByText("No files yet");
     fireEvent.change(screen.getByPlaceholderText("向本地 agent 发送任务..."), { target: { value: "search" } });
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     await screen.findByText("run failed");
-    await waitFor(() => expect(listGmScienceArtifacts).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(listGmScienceResources).toHaveBeenCalledTimes(2));
   });
 });

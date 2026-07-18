@@ -68,6 +68,51 @@ def test_handler_routes_expose_gm_science_project_and_artifact_api(tmp_path: Pat
     assert sent[-1][1]["data"]["items"] == [artifact["data"]["artifact"]]
 
 
+def test_handler_routes_expose_path_safe_searchable_project_resources(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    project = coordinator.create_gm_science_project({"name": "Resource API"})["data"]["project"]
+    workspace = Path(project["workspace_path"])
+    note = workspace / "notes" / "protocol.md"
+    note.parent.mkdir(parents=True)
+    note.write_text("# Protocol\n", encoding="utf-8")
+    coordinator.create_gm_science_artifact(
+        project["id"],
+        {
+            "type": "report",
+            "title": "External review",
+            "path_or_url": "https://user:secret@example.org/review?token=secret#page",
+            "mime_type": "text/html",
+        },
+    )
+    handler, sent = _fake_handler(coordinator)
+    handler._parse = lambda: (
+        f"/api/v1/gm-science/projects/{project['id']}/resources",
+        ["api", "v1", "gm-science", "projects", project["id"], "resources"],
+        {"q": "review"},
+    )
+
+    _ClientApiHandler.do_GET(handler)
+
+    assert sent[-1][0] == 200
+    resources = sent[-1][1]["data"]["items"]
+    assert [item["display_name"] for item in resources] == ["External review"]
+    assert resources[0]["url"] == "https://example.org/review"
+    serialized = json.dumps(sent[-1][1])
+    assert str(workspace) not in serialized
+    assert "secret" not in serialized
+
+    handler._parse = lambda: (
+        f"/api/v1/gm-science/projects/{project['id']}/resources",
+        ["api", "v1", "gm-science", "projects", project["id"], "resources"],
+        {"q": "x" * 201},
+    )
+    _ClientApiHandler.do_GET(handler)
+    assert sent[-1][0] == 400
+    assert sent[-1][1]["error"]["code"] == "INVALID_REQUEST"
+
+
 def test_handler_routes_expose_project_python_runs(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("GM_SCIENCE_MODE", "1")
     monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))

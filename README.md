@@ -221,6 +221,37 @@ Project 工作区的 `Runs` 面板可以提交本地 Python 源码，并查看�
 
 `pythonExecutable` 为空时使用当前 gm-science runtime 的 Python。当前版本只开放受约束的 Python Run，不开放任意 shell、依赖安装、notebook、GPU、SSH 或远程计算。应用重启后已完成和失败的历史仍可查看；无法重新接管的活动进程会诚实标记为 `lost`，用户可以从保存的源码和输入重试。
 
+## Files 资源目录
+
+Project 右侧 `Files` 面板统一列出四类只读资源：普通 Artifact、Dataset、Run output 和 Project workspace 文件。Dataset 和 Run output 不复制成新记录，仍引用现有 Artifact；普通文件由有界扫描发现，并与 Artifact 指向的文件去重。
+
+Files 资源接口和面板不返回本机绝对路径。Project 内文件只显示相对路径；HTTP(S) 资源会移除 URL 中的凭据、query 和 fragment。`runs/`、`datasets/` 等内部目录不作为普通文件扫描，其可用结果通过 Artifact 显示。
+
+相关设置位于 `~/.gm-science/science-research/config.json`：
+
+```json
+{
+  "science": {
+    "resources": {
+      "enabled": true,
+      "maxWorkspaceFiles": 1000,
+      "maxScanDepth": 6,
+      "includeHidden": false,
+      "excludedDirectories": [
+        ".git",
+        ".venv",
+        "__pycache__",
+        "node_modules",
+        "datasets",
+        "runs"
+      ]
+    }
+  }
+}
+```
+
+当前 Files 支持浏览和搜索，尚不支持本机文件预览、从 Composer 发送结构化资源引用或附加任意本机目录。
+
 ## 数据集与 Data Analyst
 
 Project 工作区的 `Data` 面板支持导入 UTF-8 编码的 CSV、TSV、JSON、JSONL 和 NDJSON。源文件会先复制到当前 Project workspace，再生成：

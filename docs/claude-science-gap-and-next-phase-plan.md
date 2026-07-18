@@ -191,6 +191,9 @@ ResourceRef
   mime_type
   version_or_hash
   access_mode
+  artifact_id
+  relative_path | sanitized_url
+  size_bytes
 ```
 
 Composer 解析出的 `@artifact`、`#session` 和 `/skill` 必须作为结构化 message parts 发送。后端在运行前解析引用、校验 Project 归属、控制读取范围并记录 provenance。
@@ -273,9 +276,18 @@ TaskRun
 
 #### 实施内容
 
-- 将右侧面板升级为 Files 工作区，保留 Artifacts、Data、Runs 的过滤视图。
-- 支持 All artifacts、Project workspace 和用户明确附加的本机目录。
-- 本机目录默认只读；写权限和更广泛目录访问后续通过权限策略开放。
+##### Phase 8B.1：统一只读资源目录（已完成）
+
+- 新增只读 `ResourceRef` 投影，不新建资源数据库；Artifact、Dataset 和 Run output 继续使用现有 Artifact 事实源。
+- 将普通 Project 文件通过有界扫描投影为 `project_file`，并与已有 Artifact 路径去重。
+- 右侧通用 Artifacts 面板升级为 Files；Data 与 Runs 继续保留专项流程。
+- Files 支持按名称、资源类型、Artifact 类型、MIME 和相对路径搜索。
+- 本机路径仅返回 Project 内相对路径；外部 HTTP(S) URL 删除凭据、query 和 fragment；任意目录不进入 UI。
+- `science.resources` 配置扫描数量、深度、隐藏文件和排除目录。
+- 当前不支持打开/预览本机文件、选择资源进入 Composer、附加任意目录或跨 Project 引用。
+
+##### Phase 8B.2：选择、预览与结构化引用（下一阶段）
+
 - 为 Artifact、Dataset、Run output 和文件提供统一详情/预览框架。
 - 增加列表和网格视图、类型筛选和全文元数据搜索。
 - Composer 支持：
@@ -285,6 +297,12 @@ TaskRun
   - 快捷搜索打开统一命令面板。
 - 消息 API 使用结构化引用，不把引用展开为用户可见的伪文本。
 - 运行前校验引用归属和文件 hash，运行后写入 Artifact provenance。
+
+##### Phase 8B.3：附加目录与资源状态（后续）
+
+- 支持用户明确附加的本机目录，默认只读。
+- 增加缺失、移动、内容变化和重名资源状态。
+- 写权限和更广泛目录访问通过后续权限策略开放。
 
 #### 验收标准
 
@@ -621,7 +639,7 @@ Phase 8A.3 于 2026-07-18 实施：
 | 文献与科研垂直闭环 | 第一版完成 |
 | 本地执行与数据分析 | 第一版完成 |
 | 动态能力注册与组合 | Skill、MCP Connector 和配置驱动 Specialist 第一版完成；安装/编辑与治理待后续阶段 |
-| 统一 Files 与上下文引用 | 尚未完成 |
+| 统一 Files 与上下文引用 | 只读统一目录与搜索完成；预览、结构化引用和附加目录待后续迭代 |
 | 会话级调度控制 | 部分完成 |
 | 可审阅 Memory | 底座存在，产品层未完成 |
 | Credentials / Permissions / Network | 未形成产品闭环 |

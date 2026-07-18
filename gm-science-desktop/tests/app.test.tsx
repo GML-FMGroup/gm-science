@@ -185,6 +185,7 @@ function installClient(overrides: Partial<PpxClientApi> = {}): { client: PpxClie
       capabilities: [],
     }),
     listGmScienceArtifacts: async () => ({ artifacts: [] }),
+    listGmScienceResources: async () => ({ resources: [] }),
     createGmScienceArtifact: async (projectId, input) => ({
       artifact: {
         id: "art-test",

@@ -67,6 +67,19 @@ def test_bootstrap_creates_default_science_agent_with_openai_codex_provider(tmp_
     execution = config["science"]["execution"]
     assert execution["enabled"] is True
     assert execution["defaultTimeoutSeconds"] == 900
+    resources = config["science"]["resources"]
+    assert resources["enabled"] is True
+    assert resources["maxWorkspaceFiles"] == 1000
+    assert resources["maxScanDepth"] == 6
+    assert resources["includeHidden"] is False
+    assert resources["excludedDirectories"] == [
+        ".git",
+        ".venv",
+        "__pycache__",
+        "node_modules",
+        "datasets",
+        "runs",
+    ]
 
     runtime_config = json.loads(result.runtime_config_path.read_text(encoding="utf-8"))
     assert isinstance(runtime_config["env"], dict)
@@ -105,3 +118,4 @@ def test_bootstrap_persists_missing_science_defaults_into_existing_config(tmp_pa
     assert saved["science"]["data"]["profileRowLimit"] == 50_000
     assert saved["science"]["analysis"]["maxDatasets"] == 3
     assert saved["science"]["execution"]["defaultTimeoutSeconds"] == 900
+    assert saved["science"]["resources"]["maxWorkspaceFiles"] == 1000

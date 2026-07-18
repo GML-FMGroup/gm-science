@@ -32,6 +32,8 @@ const api: PpxClientApi = {
   updateGmScienceProjectCapabilities: (projectId: string, input: UpdateGmScienceCapabilitiesInput) =>
     ipcRenderer.invoke("ppx-client:update-gm-science-project-capabilities", projectId, input),
   listGmScienceArtifacts: (projectId: string) => ipcRenderer.invoke("ppx-client:list-gm-science-artifacts", projectId),
+  listGmScienceResources: (projectId: string, query?: string) =>
+    ipcRenderer.invoke("ppx-client:list-gm-science-resources", projectId, query),
   createGmScienceArtifact: (projectId: string, input: CreateGmScienceArtifactInput) =>
     ipcRenderer.invoke("ppx-client:create-gm-science-artifact", projectId, input),
   listGmScienceRuns: (projectId: string) => ipcRenderer.invoke("ppx-client:list-gm-science-runs", projectId),
