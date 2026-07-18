@@ -5,6 +5,7 @@ import {
   buildClientApiRunPayload,
   buildClientApiRunPath,
   buildClientApiSpawnEnv,
+  createRunAndOpenEventStream,
   formatClientApiStartupError,
   isOpenPpxClientApiHealthPayload,
   managedProcessAfterClose,
@@ -141,5 +142,22 @@ describe("gm-science local adapter helpers", () => {
         text: "Summarize",
       }),
     ).toBe("/api/v1/agents/science-research/sessions/session-1/runs");
+  });
+
+  it("opens the run event stream before refreshing Session summaries", async () => {
+    const order: string[] = [];
+    const createRun = vi.fn(async () => {
+      order.push("run");
+      return { runId: "run-stream" };
+    });
+    const openEventStream = vi.fn(async (runId: string) => {
+      order.push("events");
+      return { runId, stream: "open" };
+    });
+
+    const opened = await createRunAndOpenEventStream(createRun, openEventStream);
+
+    expect(order).toEqual(["run", "events"]);
+    expect(opened).toEqual({ runId: "run-stream", stream: { runId: "run-stream", stream: "open" } });
   });
 });

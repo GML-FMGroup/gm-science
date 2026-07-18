@@ -52,6 +52,7 @@ import {
   buildClientApiRunPath,
   buildClientApiRunPayload,
   buildClientApiSpawnEnv,
+  createRunAndOpenEventStream,
   formatClientApiStartupError,
   isOpenPpxClientApiHealthPayload,
   managedProcessAfterClose,
@@ -1189,36 +1190,40 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
     if (this.shouldUseMock()) {
       return mockSendMessage(input);
     }
+    const sessionSnapshot =
+      this.readSessionsCache(input.agentId)?.find((item) => item.id === input.sessionId) ?? null;
     this.invalidateSessionCaches(input.agentId, input.sessionId);
     if (!(await this.ensureClientApiAvailable())) {
       throw new Error(`Remote gateway is unavailable for target ${this.target.name}.`);
     }
-    return this.sendMessageViaClientApi(input);
+    return this.sendMessageViaClientApi(input, sessionSnapshot);
   }
 
-  private async sendMessageViaClientApi(input: SendMessageInput): Promise<{ runId: string }> {
-    const payload = await this.fetchClientApiJson(buildClientApiRunPath(input), {
-      method: "POST",
-      body: JSON.stringify(buildClientApiRunPayload(input)),
-    });
-    const run = ((payload.data as Record<string, unknown> | undefined)?.run ?? {}) as Record<string, unknown>;
-    const runId = String(run.id ?? `run-${crypto.randomUUID()}`);
-    clientDebugLog("send.client-api.run-created", {
-      runId,
-      agentId: input.agentId,
-      sessionId: input.sessionId,
-    });
-    const sessionPayload = await this.listSessions(input.agentId);
-    const session = sessionPayload.sessions.find((item) => item.id === input.sessionId) ?? {
-      id: input.sessionId,
-      agentId: input.agentId,
-      projectId: input.projectId,
-      title: "Local session",
-      updatedAt: now(),
-      lastMessagePreview: input.text,
-    };
-
-    const response = await fetch(`${this.clientApiBaseUrl}/api/v1/runs/${runId}/events`);
+  private async sendMessageViaClientApi(
+    input: SendMessageInput,
+    sessionSnapshot: SessionSummary | null = null,
+  ): Promise<{ runId: string }> {
+    const opened = await createRunAndOpenEventStream(
+      async () => {
+        const payload = await this.fetchClientApiJson(buildClientApiRunPath(input), {
+          method: "POST",
+          body: JSON.stringify(buildClientApiRunPayload(input)),
+        });
+        const run = ((payload.data as Record<string, unknown> | undefined)?.run ?? {}) as Record<
+          string,
+          unknown
+        >;
+        const runId = String(run.id ?? `run-${crypto.randomUUID()}`);
+        clientDebugLog("send.client-api.run-created", {
+          runId,
+          agentId: input.agentId,
+          sessionId: input.sessionId,
+        });
+        return { runId };
+      },
+      async (runId) => fetch(`${this.clientApiBaseUrl}/api/v1/runs/${runId}/events`),
+    );
+    const { runId, stream: response } = opened;
     if (!response.ok || !response.body) {
       throw new Error(`Failed opening run event stream for ${runId}`);
     }
@@ -1324,9 +1329,17 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
           return;
         }
         if (eventName === "run.finished") {
-          session.updatedAt = now();
-          session.lastMessagePreview = finalText || input.text;
-          this.emit({ type: "session.updated", runId, session });
+          if (sessionSnapshot) {
+            this.emit({
+              type: "session.updated",
+              runId,
+              session: {
+                ...sessionSnapshot,
+                updatedAt: now(),
+                lastMessagePreview: finalText || input.text,
+              },
+            });
+          }
           this.emit({ type: "run.finished", runId, sessionId: input.sessionId });
           clientDebugLog("send.client-api.finished", {
             runId,

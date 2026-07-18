@@ -67,6 +67,31 @@ class AgentMemoryTests(unittest.TestCase):
         self.assertEqual(kwargs["custom_metadata"]["requester_principal_id"], "u1")
         self.assertEqual(kwargs["custom_metadata"]["ingest_reason"], "after_agent_callback")
 
+    def test_after_agent_memory_callback_reports_ingest_timing_in_debug_mode(self) -> None:
+        plugin = OpenPpxMemoryIngestPlugin(target_agent_name="openppx")
+        callback_context = types.SimpleNamespace(
+            state={MEMORY_INGEST_OFFSET_STATE_KEY: 0},
+            session=types.SimpleNamespace(events=[object(), object()]),
+            add_events_to_memory=AsyncMock(return_value=None),
+        )
+
+        with (
+            patch("openppx.runtime.memory_ingest_plugin.debug_logging_enabled", return_value=True),
+            patch("openppx.runtime.memory_ingest_plugin.emit_debug") as emit_debug,
+        ):
+            asyncio.run(
+                plugin.after_agent_callback(
+                    agent=types.SimpleNamespace(name="openppx"),
+                    callback_context=callback_context,
+                )
+            )
+
+        tag, payload = emit_debug.call_args.args[:2]
+        self.assertEqual(tag, "runtime.memory_ingest.finished")
+        self.assertEqual(payload["agent_name"], "openppx")
+        self.assertEqual(payload["event_count"], 2)
+        self.assertGreaterEqual(payload["elapsed_ms"], 0)
+
     def test_after_agent_memory_callback_skips_silent_service_principal(self) -> None:
         plugin = OpenPpxMemoryIngestPlugin(target_agent_name="openppx")
         adk_agent = types.SimpleNamespace(name="openppx")

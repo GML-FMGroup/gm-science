@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.plugins.base_plugin import BasePlugin
 
+from ..core.logging_utils import debug_logging_enabled, emit_debug
 from .interaction_context import (
     INTERACTION_CONTEXT_STATE_KEY,
     MEMORY_INGEST_OFFSET_STATE_KEY,
@@ -81,6 +83,7 @@ class OpenPpxMemoryIngestPlugin(BasePlugin):
         custom_metadata: dict[str, Any] = {"ingest_reason": "after_agent_callback"}
         if isinstance(interaction_context, dict):
             custom_metadata.update(interaction_context)
+        started_at = time.monotonic()
         try:
             await callback_context.add_events_to_memory(
                 events=delta_events,
@@ -88,4 +91,15 @@ class OpenPpxMemoryIngestPlugin(BasePlugin):
             )
         except ValueError:
             return None
+        finally:
+            if debug_logging_enabled():
+                emit_debug(
+                    "runtime.memory_ingest.finished",
+                    {
+                        "agent_name": _agent_name(agent),
+                        "event_count": len(delta_events),
+                        "elapsed_ms": round((time.monotonic() - started_at) * 1000, 1),
+                    },
+                    depth=2,
+                )
         return None

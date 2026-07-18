@@ -14,6 +14,7 @@ from openppx.runtime.access_policy import AccessPolicy
 from openppx.runtime.agent_access_store import AgentAccessStore, AgentMembership
 from openppx.runtime.client_api_service import (
     ClientApiCoordinator,
+    RunHandle,
     build_agent_profile,
     list_enabled_agent_names,
     project_session_event,
@@ -66,6 +67,19 @@ class _PendingProcess:
     def wait(self) -> int:
         self.terminated = True
         return 0
+
+
+def test_run_handle_marks_only_the_first_delta() -> None:
+    handle = RunHandle(
+        run_id="run_timing",
+        agent_id="science-research",
+        session_id="session_1",
+        process=_FakeProcess(""),
+    )
+
+    assert handle.mark_first_delta() is True
+    assert handle.mark_first_delta() is False
+    assert handle.elapsed_ms() >= 0
 
 
 def _principal(*, principal_id: str, privilege_level: str = "minimal") -> ResolvedPrincipal:

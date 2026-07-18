@@ -13,9 +13,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from google.adk.agents.run_config import RunConfig
+
 from openppx.gm_science.resources import ResolvedResourceContext, ResourceCatalogService, ResourceContextService
 from openppx.gm_science.specialists.config import load_specialist_config
 from openppx.gm_science.store import GmScienceStore
+from openppx.runtime.run_config import build_run_config
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +30,19 @@ class ReviewGateResult:
     target_artifact_id: str = ""
     critique_artifact_id: str = ""
     message: str = ""
+
+
+def _build_interactive_run_config(project_id: str) -> RunConfig:
+    """Build the ADK-native streaming profile used by interactive client runs."""
+
+    return build_run_config(
+        profile="full",
+        streaming=True,
+        custom_metadata={
+            "transport": "client_api",
+            "project_id": project_id,
+        },
+    )
 
 
 def _emit(payload: dict[str, Any]) -> None:
@@ -422,6 +438,7 @@ async def _run() -> int:
         user_id=args.user_id,
         session_id=args.session_id,
         new_message=request,
+        run_config=_build_interactive_run_config(args.project_id),
     )
 
     if args.project_id:

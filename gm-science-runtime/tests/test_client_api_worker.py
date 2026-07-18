@@ -4,9 +4,27 @@ import json
 import os
 from types import SimpleNamespace
 
+from google.adk.agents.run_config import StreamingMode
+
 from openppx.gm_science.resources.context import ResolvedResourceContext
 from openppx.gm_science.resources.models import ResourceRef
-from openppx.runtime.client_api_worker import _build_adk_user_content, _restrict_mcp_servers_env, _session_title
+from openppx.runtime.client_api_worker import (
+    _build_adk_user_content,
+    _build_interactive_run_config,
+    _restrict_mcp_servers_env,
+    _session_title,
+)
+
+
+def test_interactive_run_config_uses_adk_native_sse_streaming() -> None:
+    run_config = _build_interactive_run_config("proj_1")
+
+    assert run_config.streaming_mode == StreamingMode.SSE
+    assert run_config.custom_metadata == {
+        "profile": "full",
+        "transport": "client_api",
+        "project_id": "proj_1",
+    }
 
 
 def test_session_title_uses_visible_request_after_gm_science_context() -> None:

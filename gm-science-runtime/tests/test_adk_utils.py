@@ -50,6 +50,48 @@ class AdkUtilsTests(unittest.TestCase):
 
         self.assertEqual(merged, "hello world")
 
+    def test_merge_text_stream_preserves_whitespace_only_deltas(self) -> None:
+        merged = merge_text_stream("", "first sentence", is_partial=True)
+        merged = merge_text_stream(merged, "  \n", is_partial=True)
+        merged = merge_text_stream(merged, "我", is_partial=True)
+        merged = merge_text_stream(merged, " can help", is_partial=True)
+        merged = merge_text_stream(
+            merged,
+            "first sentence  \n我 can help",
+            is_partial=False,
+        )
+
+        self.assertEqual(merged, "first sentence  \n我 can help")
+
+    def test_run_text_async_uses_adk_partial_flag_for_ambiguous_delta(self) -> None:
+        events = [
+            pytypes.SimpleNamespace(
+                partial=True,
+                content=pytypes.SimpleNamespace(parts=[pytypes.SimpleNamespace(text="我是助手。")]),
+            ),
+            pytypes.SimpleNamespace(
+                partial=True,
+                content=pytypes.SimpleNamespace(parts=[pytypes.SimpleNamespace(text="我")]),
+            ),
+            pytypes.SimpleNamespace(
+                partial=True,
+                content=pytypes.SimpleNamespace(parts=[pytypes.SimpleNamespace(text="可以帮你。")]),
+            ),
+            pytypes.SimpleNamespace(
+                partial=False,
+                content=pytypes.SimpleNamespace(parts=[pytypes.SimpleNamespace(text="我是助手。我可以帮你。")]),
+            ),
+        ]
+
+        class _FakeRunner:
+            async def run_async(self, **_kwargs):
+                for event in events:
+                    yield event
+
+        final = asyncio.run(run_text_async(_FakeRunner()))
+
+        self.assertEqual(final, "我是助手。我可以帮你。")
+
     def test_run_text_async_merges_events_and_reports_updates(self) -> None:
         events = [
             pytypes.SimpleNamespace(content=pytypes.SimpleNamespace(parts=[])),

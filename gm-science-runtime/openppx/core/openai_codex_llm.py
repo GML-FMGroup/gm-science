@@ -13,7 +13,7 @@ import hashlib
 import json
 import re
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Iterable
 
 import httpx
@@ -39,6 +39,103 @@ class _CodexToolCall:
     arguments: dict[str, Any]
 
 
+@dataclass
+class _CodexStreamAccumulator:
+    """Incrementally reduce Codex SSE events into ADK response parts."""
+
+    text: str = ""
+    finish_reason: types.FinishReason = types.FinishReason.STOP
+    tool_call_buffers: dict[str, dict[str, Any]] = field(default_factory=dict)
+    tool_calls: list[_CodexToolCall] = field(default_factory=list)
+    completed_tool_call_ids: set[str] = field(default_factory=set)
+
+    def consume(self, event: dict[str, Any]) -> list[types.Part]:
+        """Consume one Codex event and return newly publishable partial parts."""
+
+        event_type = event.get("type")
+        if event_type == "response.output_text.delta":
+            delta = str(event.get("delta") or "")
+            if not delta:
+                return []
+            self.text += delta
+            return [types.Part.from_text(text=delta)]
+
+        if event_type == "response.output_item.added":
+            item = event.get("item") or {}
+            if item.get("type") == "function_call":
+                call_id = str(item.get("call_id") or "")
+                if call_id:
+                    self.tool_call_buffers[call_id] = {
+                        "id": item.get("id") or "fc_0",
+                        "name": item.get("name"),
+                        "arguments": item.get("arguments") or "",
+                    }
+            return []
+
+        if event_type == "response.function_call_arguments.delta":
+            call_id = str(event.get("call_id") or "")
+            if call_id and call_id in self.tool_call_buffers:
+                self.tool_call_buffers[call_id]["arguments"] += event.get("delta") or ""
+            return []
+
+        if event_type == "response.function_call_arguments.done":
+            call_id = str(event.get("call_id") or "")
+            if call_id and call_id in self.tool_call_buffers:
+                self.tool_call_buffers[call_id]["arguments"] = event.get("arguments") or ""
+            return []
+
+        if event_type == "response.output_item.done":
+            item = event.get("item") or {}
+            if item.get("type") != "function_call":
+                return []
+            call_id = str(item.get("call_id") or "")
+            if not call_id or call_id in self.completed_tool_call_ids:
+                return []
+            buf = self.tool_call_buffers.get(call_id) or {}
+            raw_args = buf.get("arguments") or item.get("arguments") or "{}"
+            try:
+                parsed_args = json.loads(raw_args)
+            except Exception:
+                parsed_args = {"raw": raw_args}
+            tool_call = _CodexToolCall(
+                id=call_id,
+                name=str(buf.get("name") or item.get("name") or ""),
+                arguments=(
+                    parsed_args if isinstance(parsed_args, dict) else {"value": parsed_args}
+                ),
+            )
+            self.tool_calls.append(tool_call)
+            self.completed_tool_call_ids.add(call_id)
+            return [_tool_call_part(tool_call)]
+
+        if event_type == "response.completed":
+            status = str((event.get("response") or {}).get("status") or "completed")
+            self.finish_reason = _map_finish_reason(status)
+            return []
+
+        if event_type in {"error", "response.failed"}:
+            raise RuntimeError("Codex response failed")
+        return []
+
+    def final_parts(self) -> list[types.Part]:
+        """Build the one complete aggregate response required by ADK."""
+
+        parts: list[types.Part] = []
+        if self.text:
+            parts.append(types.Part.from_text(text=self.text))
+        parts.extend(_tool_call_part(tool_call) for tool_call in self.tool_calls)
+        return parts
+
+
+def _tool_call_part(tool_call: _CodexToolCall) -> types.Part:
+    """Convert one normalized Codex function call into an ADK part."""
+
+    part = types.Part.from_function_call(name=tool_call.name, args=tool_call.arguments)
+    if part.function_call:
+        part.function_call.id = tool_call.id
+    return part
+
+
 class OpenAICodexLlm(BaseLlm):
     """ADK-compatible Codex model adapter based on OAuth credentials."""
 
@@ -59,12 +156,11 @@ class OpenAICodexLlm(BaseLlm):
 
         Args:
             llm_request: ADK request payload.
-            stream: Streaming flag from ADK. Codex is consumed as stream internally.
+            stream: Whether to emit native ADK partial responses while Codex streams.
 
         Yields:
-            One final `LlmResponse` for the turn.
+            Partial responses when requested, followed by one complete response.
         """
-        del stream  # Current adapter emits one final event per turn.
         try:
             instructions, input_items, tools = _convert_llm_request(llm_request)
             token = await asyncio.to_thread(_get_codex_token)
@@ -92,6 +188,30 @@ class OpenAICodexLlm(BaseLlm):
                 body["max_output_tokens"] = max(1, int(config.max_output_tokens))
 
             url = self.codex_url
+            if stream:
+                accumulator = _CodexStreamAccumulator()
+                async for event in _stream_codex_with_ssl_fallback(
+                    url=url,
+                    headers=headers,
+                    body=body,
+                    timeout_seconds=self.timeout_seconds,
+                ):
+                    for part in accumulator.consume(event):
+                        yield LlmResponse(
+                            content=types.Content(role="model", parts=[part]),
+                            turn_complete=False,
+                            partial=True,
+                            model_version=self.model,
+                        )
+                yield LlmResponse(
+                    content=types.Content(role="model", parts=accumulator.final_parts()),
+                    finish_reason=accumulator.finish_reason,
+                    turn_complete=True,
+                    partial=False,
+                    model_version=self.model,
+                )
+                return
+
             try:
                 text, tool_calls, finish_reason = await _request_codex_with_retries(
                     url=url,
@@ -112,20 +232,15 @@ class OpenAICodexLlm(BaseLlm):
                     verify=False,
                 )
 
-            parts: list[types.Part] = []
-            if text:
-                parts.append(types.Part.from_text(text=text))
-            for tool_call in tool_calls:
-                part = types.Part.from_function_call(
-                    name=tool_call.name,
-                    args=tool_call.arguments,
-                )
-                if part.function_call:
-                    part.function_call.id = tool_call.id
-                parts.append(part)
+            accumulator = _CodexStreamAccumulator(
+                text=text,
+                finish_reason=finish_reason,
+                tool_calls=tool_calls,
+                completed_tool_call_ids={tool_call.id for tool_call in tool_calls},
+            )
 
             yield LlmResponse(
-                content=types.Content(role="model", parts=parts),
+                content=types.Content(role="model", parts=accumulator.final_parts()),
                 finish_reason=finish_reason,
                 turn_complete=True,
                 partial=False,
@@ -387,6 +502,25 @@ async def _request_codex(
     return _consume_codex_events(events)
 
 
+async def _stream_codex(
+    *,
+    url: str,
+    headers: dict[str, str],
+    body: dict[str, Any],
+    timeout_seconds: float,
+    verify: bool,
+) -> AsyncGenerator[dict[str, Any], None]:
+    """Execute one Codex request and yield parsed SSE events as they arrive."""
+
+    async with httpx.AsyncClient(timeout=timeout_seconds, verify=verify) as client:
+        async with client.stream("POST", url, headers=headers, json=body) as response:
+            if response.status_code != 200:
+                text = (await response.aread()).decode("utf-8", "ignore")
+                raise RuntimeError(_friendly_error(response.status_code, text))
+            async for event in _iter_sse(response):
+                yield event
+
+
 def _is_transient_codex_error(exc: Exception) -> bool:
     """Return whether a Codex request error is safe to retry."""
     if isinstance(exc, (httpx.RemoteProtocolError, httpx.ReadError, httpx.ReadTimeout)):
@@ -427,6 +561,95 @@ async def _request_codex_with_retries(
     raise RuntimeError("Codex retry loop exited unexpectedly")
 
 
+def _is_codex_content_event(event: dict[str, Any]) -> bool:
+    """Return whether retrying after this event could duplicate model output."""
+
+    return str(event.get("type") or "") in {
+        "response.output_text.delta",
+        "response.output_item.added",
+        "response.function_call_arguments.delta",
+        "response.function_call_arguments.done",
+        "response.output_item.done",
+    }
+
+
+async def _stream_codex_with_retries(
+    *,
+    url: str,
+    headers: dict[str, str],
+    body: dict[str, Any],
+    timeout_seconds: float,
+    verify: bool,
+) -> AsyncGenerator[dict[str, Any], None]:
+    """Stream Codex events, retrying only before response content starts."""
+
+    for attempt in range(1, CODEX_TRANSIENT_RETRY_ATTEMPTS + 1):
+        content_started = False
+        try:
+            async for event in _stream_codex(
+                url=url,
+                headers=headers,
+                body=body,
+                timeout_seconds=timeout_seconds,
+                verify=verify,
+            ):
+                content_started = content_started or _is_codex_content_event(event)
+                yield event
+            return
+        except Exception as exc:
+            if (
+                content_started
+                or not _is_transient_codex_error(exc)
+                or attempt >= CODEX_TRANSIENT_RETRY_ATTEMPTS
+            ):
+                raise
+            delay_seconds = CODEX_TRANSIENT_RETRY_BASE_SECONDS * (2 ** (attempt - 1))
+            logger.warning(
+                "Codex transient transport error; retrying stream",
+                attempt=attempt,
+                max_attempts=CODEX_TRANSIENT_RETRY_ATTEMPTS,
+                error=str(exc),
+            )
+            await asyncio.sleep(delay_seconds)
+    raise RuntimeError("Codex stream retry loop exited unexpectedly")
+
+
+async def _stream_codex_with_ssl_fallback(
+    *,
+    url: str,
+    headers: dict[str, str],
+    body: dict[str, Any],
+    timeout_seconds: float,
+) -> AsyncGenerator[dict[str, Any], None]:
+    """Stream with certificate fallback only before response content is emitted."""
+
+    content_started = False
+    try:
+        async for event in _stream_codex_with_retries(
+            url=url,
+            headers=headers,
+            body=body,
+            timeout_seconds=timeout_seconds,
+            verify=True,
+        ):
+            content_started = content_started or _is_codex_content_event(event)
+            yield event
+        return
+    except Exception as exc:
+        if content_started or "CERTIFICATE_VERIFY_FAILED" not in str(exc):
+            raise
+        logger.warning("Codex SSL verification failed; retrying stream with verify=False")
+
+    async for event in _stream_codex_with_retries(
+        url=url,
+        headers=headers,
+        body=body,
+        timeout_seconds=timeout_seconds,
+        verify=False,
+    ):
+        yield event
+
+
 async def _iter_sse(response: httpx.Response) -> AsyncGenerator[dict[str, Any], None]:
     """Yield parsed JSON events from an SSE response stream."""
     buffer: list[str] = []
@@ -453,66 +676,10 @@ def _consume_codex_events(
     events: Iterable[dict[str, Any]],
 ) -> tuple[str, list[_CodexToolCall], types.FinishReason]:
     """Reduce Codex events into final text, function calls and finish reason."""
-    text = ""
-    finish_reason = types.FinishReason.STOP
-    tool_call_buffers: dict[str, dict[str, Any]] = {}
-    tool_calls: list[_CodexToolCall] = []
-
+    accumulator = _CodexStreamAccumulator()
     for event in events:
-        event_type = event.get("type")
-        if event_type == "response.output_text.delta":
-            text += event.get("delta") or ""
-            continue
-        if event_type == "response.output_item.added":
-            item = event.get("item") or {}
-            if item.get("type") == "function_call":
-                call_id = item.get("call_id")
-                if call_id:
-                    tool_call_buffers[call_id] = {
-                        "id": item.get("id") or "fc_0",
-                        "name": item.get("name"),
-                        "arguments": item.get("arguments") or "",
-                    }
-            continue
-        if event_type == "response.function_call_arguments.delta":
-            call_id = event.get("call_id")
-            if call_id and call_id in tool_call_buffers:
-                tool_call_buffers[call_id]["arguments"] += event.get("delta") or ""
-            continue
-        if event_type == "response.function_call_arguments.done":
-            call_id = event.get("call_id")
-            if call_id and call_id in tool_call_buffers:
-                tool_call_buffers[call_id]["arguments"] = event.get("arguments") or ""
-            continue
-        if event_type == "response.output_item.done":
-            item = event.get("item") or {}
-            if item.get("type") != "function_call":
-                continue
-            call_id = item.get("call_id")
-            if not call_id:
-                continue
-            buf = tool_call_buffers.get(call_id) or {}
-            raw_args = buf.get("arguments") or item.get("arguments") or "{}"
-            try:
-                parsed_args = json.loads(raw_args)
-            except Exception:
-                parsed_args = {"raw": raw_args}
-            tool_calls.append(
-                _CodexToolCall(
-                    id=call_id,
-                    name=str(buf.get("name") or item.get("name") or ""),
-                    arguments=parsed_args if isinstance(parsed_args, dict) else {"value": parsed_args},
-                )
-            )
-            continue
-        if event_type == "response.completed":
-            status = str((event.get("response") or {}).get("status") or "completed")
-            finish_reason = _map_finish_reason(status)
-            continue
-        if event_type in {"error", "response.failed"}:
-            raise RuntimeError("Codex response failed")
-
-    return text, tool_calls, finish_reason
+        accumulator.consume(event)
+    return accumulator.text, accumulator.tool_calls, accumulator.finish_reason
 
 
 def _map_finish_reason(status: str) -> types.FinishReason:

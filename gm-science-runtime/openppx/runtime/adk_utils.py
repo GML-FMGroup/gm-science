@@ -32,11 +32,18 @@ def _longest_suffix_prefix_overlap(current: str, candidate: str) -> int:
     return 0
 
 
-def merge_text_stream(current: str, new_text: str) -> str:
-    """Merge streamed ADK text supporting delta chunks, snapshots, and finals."""
+def merge_text_stream(
+    current: str,
+    new_text: str,
+    *,
+    is_partial: bool | None = None,
+) -> str:
+    """Merge ADK text using explicit partial semantics when available."""
     candidate = new_text or ""
-    if not candidate.strip():
+    if not candidate:
         return current
+    if is_partial is True:
+        return current + candidate
     if not current:
         return candidate
     if candidate == current:
@@ -94,7 +101,9 @@ async def run_text_async(
         if error_text:
             raise RuntimeError(error_text)
         text = extract_text(getattr(event, "content", None))
-        merged = merge_text_stream(final, text)
+        raw_partial = getattr(event, "partial", None)
+        is_partial = raw_partial if isinstance(raw_partial, bool) else None
+        merged = merge_text_stream(final, text, is_partial=is_partial)
         if merged and merged != final and on_text_update is not None:
             delta = merged[len(final):] if final and merged.startswith(final) else merged
             if delta:

@@ -34,6 +34,15 @@ export function managedProcessAfterClose<T>(current: T | null, closed: T): T | n
   return current === closed ? null : current;
 }
 
+export async function createRunAndOpenEventStream<TStream>(
+  createRun: () => Promise<{ runId: string }>,
+  openEventStream: (runId: string) => Promise<TStream>,
+): Promise<{ runId: string; stream: TStream }> {
+  const { runId } = await createRun();
+  const stream = await openEventStream(runId);
+  return { runId, stream };
+}
+
 export function resolveGmScienceDataRoot(
   env: NodeJS.ProcessEnv = process.env,
   homeDir: string = process.env.HOME ?? ".",

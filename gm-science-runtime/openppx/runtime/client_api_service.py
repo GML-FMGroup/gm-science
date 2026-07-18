@@ -10,6 +10,7 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 import urllib.parse
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -669,6 +670,21 @@ class RunHandle:
         self._stderr_lines: list[str] = []
         self.done = threading.Event()
         self.failed = False
+        self.started_at_monotonic = time.monotonic()
+        self.first_delta_at_monotonic: float | None = None
+
+    def elapsed_ms(self) -> float:
+        """Return milliseconds elapsed since the worker run was created."""
+
+        return round((time.monotonic() - self.started_at_monotonic) * 1000, 1)
+
+    def mark_first_delta(self) -> bool:
+        """Record the first user-visible text update and report whether it was new."""
+
+        if self.first_delta_at_monotonic is not None:
+            return False
+        self.first_delta_at_monotonic = time.monotonic()
+        return True
 
     def publish(self, event: str, payload: dict[str, Any]) -> None:
         """Store and fan out one SSE event."""
@@ -2815,11 +2831,14 @@ class ClientApiCoordinator:
                             )
             elif event_type == "delta":
                 final_text = str(payload.get("text") or final_text)
+                is_first_delta = handle.mark_first_delta()
                 _debug(
                     "client_api.message.delta",
                     {
                         "run_id": handle.run_id,
                         "text_length": len(final_text),
+                        "elapsed_ms": handle.elapsed_ms(),
+                        "first_delta": is_first_delta,
                     },
                 )
                 handle.publish(
@@ -2849,6 +2868,7 @@ class ClientApiCoordinator:
                     {
                         "run_id": handle.run_id,
                         "text_length": len(final_text),
+                        "elapsed_ms": handle.elapsed_ms(),
                     },
                 )
                 handle.publish(
@@ -2879,6 +2899,7 @@ class ClientApiCoordinator:
                 "run_id": handle.run_id,
                 "exit_code": exit_code,
                 "failed": handle.failed,
+                "elapsed_ms": handle.elapsed_ms(),
                 "stderr_preview": stderr_text[:400] + ("..." if len(stderr_text) > 400 else ""),
             },
         )
@@ -2894,6 +2915,7 @@ class ClientApiCoordinator:
                 "agent_id": handle.agent_id,
                 "session_id": handle.session_id,
                 "status": "failed" if handle.failed else "completed",
+                "elapsed_ms": handle.elapsed_ms(),
             },
         )
         handle.publish(

@@ -15,6 +15,7 @@ from openppx.core.openai_codex_llm import (
     OpenAICodexLlm,
     _consume_codex_events,
     _convert_llm_request,
+    _stream_codex_with_retries,
 )
 
 
@@ -159,6 +160,60 @@ class OpenAICodexLlmTests(unittest.TestCase):
         self.assertIsNotNone(events[0].content)
         self.assertEqual(events[0].content.parts[0].text, "hello world")
 
+    def test_generate_content_async_streams_partial_chunks_and_one_complete_final(self) -> None:
+        """Codex SSE text should cross the adapter as native ADK partial responses."""
+        llm = OpenAICodexLlm(model="openai-codex/gpt-5.5")
+        llm_request = LlmRequest(
+            model="openai-codex/gpt-5.5",
+            contents=[types.Content(role="user", parts=[types.Part.from_text(text="hello")])],
+            config=types.GenerateContentConfig(system_instruction="system"),
+        )
+
+        async def _stream_mock(**_kwargs):
+            yield {"type": "response.output_text.delta", "delta": "hello "}
+            yield {"type": "response.output_text.delta", "delta": "world"}
+            yield {
+                "type": "response.output_item.added",
+                "item": {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "id": "fc_1",
+                    "name": "search_docs",
+                    "arguments": "",
+                },
+            }
+            yield {
+                "type": "response.function_call_arguments.done",
+                "call_id": "call_1",
+                "arguments": '{"q":"streaming"}',
+            }
+            yield {
+                "type": "response.output_item.done",
+                "item": {"type": "function_call", "call_id": "call_1"},
+            }
+            yield {"type": "response.completed", "response": {"status": "completed"}}
+
+        fake_token = type("Token", (), {"account_id": "acc_1", "access": "tok_1"})()
+        with patch("openppx.core.openai_codex_llm._get_codex_token", return_value=fake_token):
+            with patch("openppx.core.openai_codex_llm._stream_codex_with_retries", new=_stream_mock):
+                async def _collect():
+                    return [event async for event in llm.generate_content_async(llm_request, stream=True)]
+
+                events = asyncio.run(_collect())
+
+        self.assertGreaterEqual(len(events), 4)
+        self.assertTrue(all(event.partial for event in events[:-1]))
+        self.assertTrue(all(event.turn_complete is False for event in events[:-1]))
+        self.assertEqual(
+            [event.content.parts[0].text for event in events[:2]],
+            ["hello ", "world"],
+        )
+        self.assertFalse(events[-1].partial)
+        self.assertTrue(events[-1].turn_complete)
+        self.assertEqual(events[-1].content.parts[0].text, "hello world")
+        self.assertEqual(events[-1].content.parts[1].function_call.name, "search_docs")
+        self.assertEqual(events[-1].content.parts[1].function_call.args, {"q": "streaming"})
+
     def test_generate_content_async_retries_transient_codex_transport_error(self) -> None:
         """Transient stream disconnects should retry before surfacing an error event."""
         llm = OpenAICodexLlm(model="openai-codex/gpt-5.5")
@@ -186,6 +241,64 @@ class OpenAICodexLlmTests(unittest.TestCase):
         self.assertEqual(request_mock.await_count, 2)
         self.assertEqual(events[0].content.parts[0].text, "retry ok")
         self.assertFalse(getattr(events[0], "error_code", None))
+
+    def test_stream_retries_transport_failure_before_content(self) -> None:
+        """A disconnected SSE request may retry before any response content appears."""
+        attempts = 0
+
+        async def _stream_mock(**_kwargs):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise httpx.RemoteProtocolError("peer closed connection")
+            yield {"type": "response.output_text.delta", "delta": "recovered"}
+
+        with patch("openppx.core.openai_codex_llm._stream_codex", new=_stream_mock):
+            with patch("openppx.core.openai_codex_llm.asyncio.sleep", new=AsyncMock()):
+                async def _collect():
+                    return [
+                        event
+                        async for event in _stream_codex_with_retries(
+                            url="https://example.test/responses",
+                            headers={},
+                            body={},
+                            timeout_seconds=1,
+                            verify=True,
+                        )
+                    ]
+
+                events = asyncio.run(_collect())
+
+        self.assertEqual(attempts, 2)
+        self.assertEqual(events[0]["delta"], "recovered")
+
+    def test_stream_does_not_retry_after_content_starts(self) -> None:
+        """Retry must not duplicate partial text already delivered to ADK."""
+        attempts = 0
+        observed: list[dict[str, object]] = []
+
+        async def _stream_mock(**_kwargs):
+            nonlocal attempts
+            attempts += 1
+            yield {"type": "response.output_text.delta", "delta": "visible"}
+            raise httpx.RemoteProtocolError("peer closed connection")
+
+        async def _collect() -> None:
+            async for event in _stream_codex_with_retries(
+                url="https://example.test/responses",
+                headers={},
+                body={},
+                timeout_seconds=1,
+                verify=True,
+            ):
+                observed.append(event)
+
+        with patch("openppx.core.openai_codex_llm._stream_codex", new=_stream_mock):
+            with self.assertRaises(httpx.RemoteProtocolError):
+                asyncio.run(_collect())
+
+        self.assertEqual(attempts, 1)
+        self.assertEqual(observed[0]["delta"], "visible")
 
 
 if __name__ == "__main__":
