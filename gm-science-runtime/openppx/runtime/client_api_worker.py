@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import datetime as dt
 import json
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,7 +43,30 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--message", default="")
     parser.add_argument("--user-id", default="ppx-client-user")
     parser.add_argument("--project-id", default="")
+    parser.add_argument("--enabled-mcp-servers-json", default=None)
     return parser.parse_args()
+
+
+def _restrict_mcp_servers_env(enabled_servers_json: str) -> None:
+    """Restrict configured MCP servers to the explicit Project allowlist."""
+
+    try:
+        raw_enabled = json.loads(enabled_servers_json)
+    except (TypeError, ValueError):
+        raw_enabled = []
+    enabled = {str(name) for name in raw_enabled} if isinstance(raw_enabled, list) else set()
+    try:
+        raw_servers = json.loads(os.getenv("OPENPPX_MCP_SERVERS_JSON", "{}"))
+    except (TypeError, ValueError):
+        raw_servers = {}
+    if not isinstance(raw_servers, dict):
+        raw_servers = {}
+    filtered = {name: config for name, config in raw_servers.items() if str(name) in enabled}
+    os.environ["OPENPPX_MCP_SERVERS_JSON"] = json.dumps(
+        filtered,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 async def run_report_review_gate(
@@ -223,6 +247,8 @@ async def _run() -> int:
     from openppx.core.config import bootstrap_env_from_config
 
     bootstrap_env_from_config(config_path)
+    if args.enabled_mcp_servers_json is not None:
+        _restrict_mcp_servers_env(args.enabled_mcp_servers_json)
 
     from google.genai import types
 

@@ -482,7 +482,7 @@ General：
 
 ## 7. 推荐的立即实施迭代
 
-下一次代码迭代建议只做 **Phase 8A.1：动态 Skill 投影**，不要同时改 Connector、Specialist、Files 和 Composer。
+Phase 8A 按能力类型拆成独立小迭代，避免同时修改 Connector、Specialist、Files 和 Composer。
 
 范围：
 
@@ -504,7 +504,22 @@ Phase 8A.1 已于 2026-07-18 完成：
 - 公共能力记录已增加 `source`、`version`、`license` 和有界相对 `files` 字段，并保留 kind-specific `metadata`。
 - Project 创建和更新继续按动态 catalog 校验 `enabledSkills`，未知 Skill 会被拒绝。
 - Skills 设置页已支持搜索、Built-in/Local/External 来源分组和行内详情。
-- GitHub 安装、依赖安装和动态 MCP/Specialist 投影仍按原规划后置。
+- GitHub 安装、依赖安装和动态 Specialist 投影仍按原规划后置。
+
+### 7.2 Phase 8A.2 实施状态
+
+Phase 8A.2 于 2026-07-18 实施：
+
+- gm-science catalog 从 openppx `tools.mcpServers` 动态投影 MCP Connectors，并保留 arXiv、PubMed、OpenAlex 三个内置文献来源。
+- MCP Connector 使用 `mcp:<server-name>` 作为 Project attachment ID；有效、关闭和配置错误的条目都会进入同一目录。
+- Connector detail 返回 transport、工具前缀/过滤器、确认策略、长任务选项、命令 basename 或远端 origin，以及环境变量/header 名称。
+- capability API 不返回 MCP 参数、环境变量/header 值、URL 用户信息、查询参数或本机绝对命令路径。
+- gm-science Project run 会在 worker 导入 root agent 前按 `enabledConnectors` 过滤 MCP server；未附加的 MCP Connector 不会出现在该 Project 的 agent 工具集中。
+- 普通非 Project openppx run 不应用该过滤，继续使用 agent 的全局 MCP 配置。
+- Connector 列表的 `Ready` 只表示配置可被 runtime 构建；实际网络/进程连接仍由 MCP toolset 在加载工具时惰性完成，目录刷新不会主动探测外部服务。
+- Connectors 设置页已支持搜索、来源分组和 MCP 专用详情，并保持一次性保存 Project attachment 的交互。
+
+Phase 8A.2 不包含 MCP 安装器、凭据编辑器、持续健康探测、工具清单缓存和审批 UI。上述能力应在 Credentials / Permissions / Network 阶段基于现有 openppx runtime 继续扩展，不能建立第二套 MCP 管理器。
 
 ## 8. 测试与验收策略
 
@@ -574,7 +589,7 @@ Phase 8A.1 已于 2026-07-18 完成：
 | Project / Session / Artifact 基础 | 基本完成 |
 | 文献与科研垂直闭环 | 第一版完成 |
 | 本地执行与数据分析 | 第一版完成 |
-| 动态能力注册与组合 | 尚未完成 |
+| 动态能力注册与组合 | Skill 和 MCP Connector 第一版完成；动态 Specialist 尚未完成 |
 | 统一 Files 与上下文引用 | 尚未完成 |
 | 会话级调度控制 | 部分完成 |
 | 可审阅 Memory | 底座存在，产品层未完成 |

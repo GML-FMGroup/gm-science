@@ -80,6 +80,46 @@ gm-science 的 Skills 设置页直接读取 openppx `SkillRegistry`，不再维�
 - `version` 和 `license` 来自 `SKILL.md` frontmatter；未声明时页面会明确显示未声明。
 - 当前支持发现和附加本地 Skill，不包含 GitHub marketplace 安装、升级或依赖安装流程。
 
+## MCP Connectors
+
+gm-science 的 Connectors 设置页会读取 openppx `tools.mcpServers` 配置，并与内置 arXiv、PubMed、OpenAlex 文献来源显示在同一个 Project 能力目录中。MCP Connector 使用 `mcp:<server-name>` 作为稳定 ID，例如：
+
+```json
+{
+  "tools": {
+    "mcpServers": {
+      "filesystem": {
+        "command": "mcp-filesystem",
+        "args": ["--workspace", "/path/to/project"],
+        "env": {
+          "FILESYSTEM_TOKEN": "your-token"
+        },
+        "toolNamePrefix": "science_fs",
+        "requireConfirmation": true
+      },
+      "remote-lab": {
+        "url": "https://mcp.example.com/mcp",
+        "headers": {
+          "Authorization": "Bearer your-token"
+        }
+      }
+    }
+  },
+  "science": {
+    "projectDefaults": {
+      "enabledConnectors": ["arxiv", "pubmed", "openalex", "mcp:filesystem"]
+    }
+  }
+}
+```
+
+- 配置有效且启用的 MCP server 会显示为 Local Connector；关闭或缺少 `command`/`url` 的条目仍会显示，并标记为 Disabled 或 Needs configuration。
+- 详情只显示 transport、工具前缀、命令文件名或远端 origin，以及已配置的环境变量/header 名称，不返回参数、密钥值、URL 凭据和本机绝对命令路径。
+- Project 只会挂载其 `enabledConnectors` 中已选择的 MCP server；显式空列表不会挂载任何 MCP 工具。普通非 Project openppx 会话保持原有全局 MCP 行为。
+- `Ready` 表示配置结构可用于运行时，并不代表列表页面已连接服务器；实际连接和工具发现发生在 agent 加载 MCP 工具时。
+
+配置文件中的 `env`、`headers` 和 URL 可能包含凭据，不要提交到 Git 仓库。
+
 ## 专家智能体
 
 `science-research` 是唯一直接与用户对话的主智能体。它可以按需调用两个受限专家：

@@ -508,6 +508,61 @@ describe("gm-science App", () => {
     expect(await screen.findByRole("switch", { name: "Enable PubMed" })).toBeDisabled();
   });
 
+  it("searches configured MCP connectors and shows redacted connection details", async () => {
+    const items: GmScienceCapability[] = [
+      ...capabilities(),
+      {
+        id: "mcp:filesystem",
+        kind: "connector",
+        name: "Filesystem",
+        description: "Configured MCP server over stdio.",
+        source: "local",
+        version: "",
+        license: "",
+        files: [],
+        available: true,
+        defaultEnabled: false,
+        projectEnabled: false,
+        status: "ready",
+        statusDetail: "Configured; connection is verified when runtime tools load.",
+        metadata: {
+          connector_type: "mcp",
+          transport: "stdio",
+          tool_prefix: "mcp_filesystem",
+          command_name: "mcp-filesystem",
+          configured_env_names: ["FILESYSTEM_TOKEN", "WORKSPACE_ROOT"],
+          configured_header_names: [],
+          runtime_header_names: ["X-Project-Id"],
+          require_confirmation: true,
+        },
+      },
+    ];
+    installClient({
+      listGmScienceCapabilities: async (projectId) => ({ projectId: projectId ?? "", items }),
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Customize" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Connectors" }));
+    const panel = await screen.findByRole("region", { name: "Connectors" });
+    fireEvent.change(within(panel).getByRole("searchbox", { name: "Search connectors" }), {
+      target: { value: "filesystem" },
+    });
+
+    expect(within(panel).getByRole("heading", { name: /Local/ })).toBeInTheDocument();
+    expect(within(panel).getByText("Filesystem")).toBeInTheDocument();
+    fireEvent.click(within(panel).getByRole("button", { name: "Show details for Filesystem" }));
+    expect(within(panel).getByText("stdio")).toBeInTheDocument();
+    expect(within(panel).getByText("mcp_filesystem")).toBeInTheDocument();
+    expect(within(panel).getByText("mcp-filesystem")).toBeInTheDocument();
+    expect(within(panel).getByText("FILESYSTEM_TOKEN")).toBeInTheDocument();
+    expect(within(panel).getByText("X-Project-Id")).toBeInTheDocument();
+    expect(within(panel).getByText("Required")).toBeInTheDocument();
+    expect(within(panel).queryByText(/secret/i)).not.toBeInTheDocument();
+  });
+
   it("renders research artifact details with metadata fallbacks", async () => {
     installClient({
       listGmScienceArtifacts: async () => ({

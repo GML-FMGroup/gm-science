@@ -119,3 +119,92 @@ def test_capability_catalog_marks_skill_aliases_without_exposing_the_target_path
     assert skills["memory"]["metadata"]["alias_of"] == "self-observe"
     assert "alias_of" not in skills["self-observe"]["metadata"]
     assert str(tmp_path) not in json.dumps(skills)
+
+
+def test_capability_catalog_projects_configured_mcp_connectors_with_redacted_metadata(tmp_path: Path) -> None:
+    initialized = ensure_gm_science_initialized(root_dir=tmp_path / "data")
+    config = json.loads(initialized.config_path.read_text(encoding="utf-8"))
+    config["tools"]["mcpServers"] = {
+        "remote-lab": {
+            "url": "https://scientist:password@mcp.example.test/api?token=remote-secret",
+            "headers": {"Authorization": "Bearer remote-secret"},
+            "runtimeHeaders": {"X-Project-Id": "state.project_id"},
+            "toolFilter": ["search", "fetch"],
+            "requireConfirmation": True,
+        },
+        "filesystem": {
+            "command": "/opt/tools/mcp-filesystem",
+            "args": ["--token", "stdio-secret"],
+            "env": {"FILESYSTEM_TOKEN": "stdio-secret", "WORKSPACE_ROOT": "/private/workspace"},
+            "toolNamePrefix": "science_fs_",
+            "progressEvents": True,
+            "longTaskProxy": False,
+        },
+        "disabled-server": {
+            "enabled": False,
+            "command": "disabled-command",
+        },
+        "broken-server": {"enabled": True},
+        "invalid-server": "not-an-object",
+        "windows-command": {
+            "command": "C:\\Users\\secret-user\\bin\\mcp-windows.exe",
+        },
+    }
+    initialized.config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    catalog = build_capability_catalog(config_path=initialized.config_path)
+
+    connectors = [item for item in catalog if item["kind"] == "connector"]
+    assert [item["id"] for item in connectors] == [
+        "arxiv",
+        "pubmed",
+        "openalex",
+        "mcp:broken-server",
+        "mcp:disabled-server",
+        "mcp:filesystem",
+        "mcp:invalid-server",
+        "mcp:remote-lab",
+        "mcp:windows-command",
+    ]
+    by_id = {item["id"]: item for item in connectors}
+    assert by_id["mcp:filesystem"]["source"] == "local"
+    assert by_id["mcp:filesystem"]["available"] is True
+    assert by_id["mcp:filesystem"]["default_enabled"] is False
+    assert by_id["mcp:filesystem"]["status"] == "ready"
+    assert by_id["mcp:filesystem"]["metadata"] == {
+        "connector_type": "mcp",
+        "server_name": "filesystem",
+        "transport": "stdio",
+        "tool_prefix": "science_fs",
+        "tool_filter": [],
+        "require_confirmation": False,
+        "progress_events": True,
+        "long_task_proxy": False,
+        "inline_budget_ms": 5000,
+        "job_protocol": False,
+        "command_name": "mcp-filesystem",
+        "endpoint_origin": "",
+        "configured_env_names": ["FILESYSTEM_TOKEN", "WORKSPACE_ROOT"],
+        "configured_header_names": [],
+        "runtime_header_names": [],
+    }
+    assert by_id["mcp:remote-lab"]["metadata"]["transport"] == "http"
+    assert by_id["mcp:remote-lab"]["metadata"]["endpoint_origin"] == "https://mcp.example.test"
+    assert by_id["mcp:remote-lab"]["metadata"]["configured_header_names"] == ["Authorization"]
+    assert by_id["mcp:remote-lab"]["metadata"]["runtime_header_names"] == ["X-Project-Id"]
+    assert by_id["mcp:remote-lab"]["metadata"]["tool_filter"] == ["search", "fetch"]
+    assert by_id["mcp:remote-lab"]["metadata"]["require_confirmation"] is True
+    assert by_id["mcp:disabled-server"]["status"] == "disabled"
+    assert by_id["mcp:disabled-server"]["available"] is False
+    assert by_id["mcp:broken-server"]["status"] == "needs_configuration"
+    assert by_id["mcp:invalid-server"]["status"] == "needs_configuration"
+    assert by_id["mcp:windows-command"]["metadata"]["command_name"] == "mcp-windows.exe"
+
+    serialized = json.dumps(connectors)
+    assert "remote-secret" not in serialized
+    assert "stdio-secret" not in serialized
+    assert "scientist" not in serialized
+    assert "password" not in serialized
+    assert "/private/workspace" not in serialized
+    assert "/opt/tools" not in serialized
+    assert "secret-user" not in serialized

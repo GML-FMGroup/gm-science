@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 from typing import Any, Iterable, Literal
 
+from ..core.config import load_config
+from ..core.mcp_registry import describe_mcp_server_config
 from ..tooling.skills_adapter import SkillInfo, SkillRegistry
 from .literature.config import load_literature_config
 from .models import ProjectRecord
@@ -32,6 +34,7 @@ _DISPLAY_TOKENS = {
     "github": "GitHub",
     "imap": "IMAP",
     "minimax": "MiniMax",
+    "mcp": "MCP",
     "opencv": "OpenCV",
     "pptx": "PPTX",
     "smtp": "SMTP",
@@ -85,6 +88,35 @@ def build_capability_catalog(
                 metadata={"api_base": str(source["api_base"])},
             )
         )
+
+    config = load_config(config_path=config_path)
+    tools = config.get("tools")
+    mcp_servers = tools.get("mcpServers", {}) if isinstance(tools, dict) else {}
+    if isinstance(mcp_servers, dict):
+        for raw_server_name in sorted(mcp_servers, key=lambda value: str(value).casefold()):
+            server_name = str(raw_server_name)
+            description = describe_mcp_server_config(server_name, mcp_servers[raw_server_name])
+            metadata = description["metadata"]
+            transport = str(metadata.get("transport") or "")
+            items.append(
+                _capability_payload(
+                    capability_id=f"mcp:{server_name}",
+                    kind="connector",
+                    name=_display_skill_name(server_name) or "MCP Server",
+                    description=(
+                        f"Configured MCP server over {transport}."
+                        if transport
+                        else "MCP server configuration requires attention."
+                    ),
+                    source="local",
+                    available=bool(description["available"]),
+                    default_enabled=f"mcp:{server_name}" in defaults.enabled_connectors,
+                    project_enabled=_project_enabled(project_values, "connector", f"mcp:{server_name}"),
+                    status=str(description["status"]),
+                    status_detail=str(description["status_detail"]),
+                    metadata=metadata,
+                )
+            )
 
     for spec in list_specialist_specs(specialists):
         items.append(
@@ -206,13 +238,38 @@ def normalize_capability_selection(
 ) -> list[str]:
     """Validate capability IDs and return them in stable catalog order."""
 
-    selected = {str(value or "").strip().lower() for value in values if str(value or "").strip()}
+    selected = {str(value or "").strip().casefold() for value in values if str(value or "").strip()}
     allowed = [str(item["id"]) for item in catalog if item["kind"] == kind]
-    unknown = sorted(selected.difference(allowed))
+    allowed_normalized = {capability_id.casefold() for capability_id in allowed}
+    unknown = sorted(selected.difference(allowed_normalized))
     if unknown:
         rendered = ", ".join(unknown)
         raise ValueError(f"Unsupported {kind} capability: {rendered}")
-    return [capability_id for capability_id in allowed if capability_id in selected]
+    return [capability_id for capability_id in allowed if capability_id.casefold() in selected]
+
+
+def selected_mcp_server_names(
+    connector_ids: Iterable[str],
+    catalog: list[dict[str, Any]],
+) -> list[str]:
+    """Return available configured MCP server names selected by one Project."""
+
+    selected = {str(value) for value in connector_ids}
+    names: list[str] = []
+    for item in catalog:
+        metadata = item.get("metadata")
+        if (
+            item.get("kind") != "connector"
+            or item.get("id") not in selected
+            or item.get("available") is not True
+            or not isinstance(metadata, dict)
+            or metadata.get("connector_type") != "mcp"
+        ):
+            continue
+        server_name = str(metadata.get("server_name") or "")
+        if server_name:
+            names.append(server_name)
+    return names
 
 
 def _capability_payload(

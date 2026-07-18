@@ -609,6 +609,76 @@ def test_client_api_project_run_injects_agent_context(tmp_path: Path, monkeypatc
     assert "Summarize the papers." in message
     project_index = observed_cmd.index("--project-id") + 1
     assert observed_cmd[project_index] == project["id"]
+    mcp_index = observed_cmd.index("--enabled-mcp-servers-json") + 1
+    assert json.loads(observed_cmd[mcp_index]) == []
+
+
+def test_client_api_project_run_passes_only_selected_available_mcp_servers(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path / "gm-science"))
+    (tmp_path / "global_config.json").write_text(
+        json.dumps({"agents": [{"name": "science-research", "enabled": True}]}),
+        encoding="utf-8",
+    )
+    agent_dir = tmp_path / "science-research"
+    agent_dir.mkdir()
+    (agent_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "agent": {"workspace": "workspace/science-research"},
+                "tools": {
+                    "mcpServers": {
+                        "filesystem": {"command": "mcp-filesystem"},
+                        "remote-lab": {"url": "https://mcp.example.test"},
+                        "disabled-server": {"enabled": False, "command": "disabled-command"},
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    observed_cmd: list[str] = []
+
+    class _ImmediateProcess:
+        stdout = iter([json.dumps({"type": "final", "text": "ok"}) + "\n"])
+        stderr = iter(())
+
+        def poll(self) -> int:
+            return 0
+
+        def terminate(self) -> None:
+            return None
+
+        def wait(self) -> int:
+            return 0
+
+    def fake_popen(cmd: list[str], **_kwargs: object) -> _ImmediateProcess:
+        observed_cmd.extend(cmd)
+        return _ImmediateProcess()
+
+    monkeypatch.setattr("openppx.runtime.client_api_service.subprocess.Popen", fake_popen)
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    project = coordinator.create_gm_science_project(
+        {
+            "name": "MCP project",
+            "enabled_connectors": ["arxiv", "mcp:remote-lab"],
+        }
+    )["data"]["project"]
+    coordinator._gm_science_store.link_project_session(
+        project_id=project["id"],
+        session_id="session_mcp",
+        agent_id=GM_SCIENCE_DEFAULT_AGENT_NAME,
+    )
+
+    payload = coordinator.create_gm_science_project_run(project["id"], "session_mcp", "Query the lab tools.")
+
+    assert payload["ok"] is True
+    mcp_index = observed_cmd.index("--enabled-mcp-servers-json") + 1
+    assert json.loads(observed_cmd[mcp_index]) == ["remote-lab"]
+    assert "filesystem" not in observed_cmd[mcp_index]
+    assert "disabled-server" not in observed_cmd[mcp_index]
 
 
 def test_client_api_project_run_injects_machine_context_without_custom_context(tmp_path: Path, monkeypatch) -> None:

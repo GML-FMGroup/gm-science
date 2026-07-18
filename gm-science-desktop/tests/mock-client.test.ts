@@ -67,6 +67,16 @@ describe("mock client adapter", () => {
       license: "Private",
       files: ["SKILL.md", "scripts/analyze.py"],
     });
+    expect(catalog.items.find((item) => item.id === "mcp:filesystem")).toMatchObject({
+      kind: "connector",
+      source: "local",
+      projectEnabled: false,
+      metadata: {
+        connector_type: "mcp",
+        transport: "stdio",
+        command_name: "mcp-filesystem",
+      },
+    });
 
     const updated = await updateGmScienceProjectCapabilities(created.project.id, {
       enabledSkills: [],

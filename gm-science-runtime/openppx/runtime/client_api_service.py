@@ -19,7 +19,11 @@ from typing import Any
 from ..core.config import get_data_dir
 from ..core.logging_utils import debug_logging_enabled, emit_debug
 from ..gm_science.bootstrap import GM_SCIENCE_DEFAULT_AGENT_NAME, ensure_gm_science_initialized
-from ..gm_science.capabilities import build_capability_catalog, normalize_capability_selection
+from ..gm_science.capabilities import (
+    build_capability_catalog,
+    normalize_capability_selection,
+    selected_mcp_server_names,
+)
 from ..gm_science.analysis import AnalysisService
 from ..gm_science.data import DatasetService
 from ..gm_science.execution import ScienceExecutionService
@@ -1559,6 +1563,14 @@ class ClientApiCoordinator:
             )
             for name, status in specialist_config.public_statuses().items()
         }
+        capability_catalog = build_capability_catalog(
+            config_path=agent_config_path(agent_id, self.data_dir),
+            project=project,
+        )
+        enabled_mcp_servers = selected_mcp_server_names(
+            project.enabled_connectors,
+            capability_catalog,
+        )
         message = _gm_science_project_context_message(
             project,
             text,
@@ -1572,6 +1584,7 @@ class ClientApiCoordinator:
             message,
             user_id=user_id,
             project_id=project.id,
+            enabled_mcp_servers=enabled_mcp_servers,
         )
 
     def list_sessions(self, agent_id: str, *, user_id: str = "ppx-client-user") -> dict[str, Any]:
@@ -2261,6 +2274,7 @@ class ClientApiCoordinator:
         *,
         user_id: str = "ppx-client-user",
         project_id: str = "",
+        enabled_mcp_servers: list[str] | None = None,
     ) -> dict[str, Any]:
         """Create one streaming run and start consuming worker events in background."""
 
@@ -2306,6 +2320,13 @@ class ClientApiCoordinator:
         ]
         if project_id:
             cmd.extend(["--project-id", project_id])
+        if enabled_mcp_servers is not None:
+            cmd.extend(
+                [
+                    "--enabled-mcp-servers-json",
+                    json.dumps(enabled_mcp_servers, ensure_ascii=False, separators=(",", ":")),
+                ]
+            )
         process = subprocess.Popen(
             cmd,
             cwd=str(config_path.parent),

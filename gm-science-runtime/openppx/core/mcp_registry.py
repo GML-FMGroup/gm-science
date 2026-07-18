@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 from typing import Callable
+from urllib.parse import urlsplit
 
 from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.tools.mcp_tool import McpToolset
@@ -587,6 +588,140 @@ def _resolve_toolset_options(server_name: str, raw_cfg: dict[str, Any]) -> McpTo
         inline_budget_ms=inline_budget_ms,
         job_protocol=job_protocol,
     )
+
+
+def _public_endpoint_origin(url: str) -> str:
+    """Return a credential-free remote endpoint origin for diagnostics."""
+
+    try:
+        parsed = urlsplit(url)
+        hostname = parsed.hostname or ""
+        if parsed.scheme.lower() not in {"http", "https"} or not hostname:
+            return ""
+        host = f"[{hostname}]" if ":" in hostname else hostname
+        port = parsed.port
+    except ValueError:
+        return ""
+    authority = f"{host}:{port}" if port is not None else host
+    return f"{parsed.scheme.lower()}://{authority}"
+
+
+def _public_command_name(command: str) -> str:
+    """Return a basename for POSIX or Windows command paths."""
+
+    return command.replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def describe_mcp_server_config(server_name: str, raw_cfg: Any) -> dict[str, Any]:
+    """Describe one MCP config without returning credentials or command arguments.
+
+    The result mirrors the same enablement, transport, prefix, and option
+    normalization used by :func:`build_mcp_toolsets`, but never connects to the
+    server and never exposes secret-bearing values.
+    """
+
+    normalized_name = str(server_name)
+    empty_metadata: dict[str, Any] = {
+        "connector_type": "mcp",
+        "server_name": normalized_name,
+        "transport": "",
+        "tool_prefix": _normalize_tool_name_prefix(normalized_name, ""),
+        "tool_filter": [],
+        "require_confirmation": False,
+        "progress_events": False,
+        "long_task_proxy": True,
+        "inline_budget_ms": DEFAULT_MCP_PROXY_INLINE_BUDGET_MS,
+        "job_protocol": False,
+        "command_name": "",
+        "endpoint_origin": "",
+        "configured_env_names": [],
+        "configured_header_names": [],
+        "runtime_header_names": [],
+    }
+    if not isinstance(raw_cfg, dict):
+        return {
+            "available": False,
+            "status": "needs_configuration",
+            "status_detail": "MCP server configuration must be an object.",
+            "metadata": empty_metadata,
+        }
+
+    command = str(raw_cfg.get("command", "") or "").strip()
+    url = str(raw_cfg.get("url", "") or "").strip()
+    transport = ""
+    if command:
+        transport = "stdio"
+    elif url:
+        requested_transport = str(raw_cfg.get("transport", "") or "").strip().lower()
+        transport = (
+            "sse"
+            if requested_transport == "sse" or url.lower().rstrip("/").endswith("/sse")
+            else "http"
+        )
+
+    options = _resolve_toolset_options(normalized_name, raw_cfg)
+    raw_env = raw_cfg.get("env")
+    raw_headers = raw_cfg.get("headers")
+    env_names = (
+        sorted(
+            {
+                str(name).strip()
+                for name in raw_env
+                if str(name).strip() and "\n" not in str(name) and "\r" not in str(name)
+            },
+            key=str.casefold,
+        )
+        if isinstance(raw_env, dict)
+        else []
+    )
+    header_names = (
+        sorted(
+            {
+                safe_name
+                for name in raw_headers
+                if (safe_name := _safe_header_name(name))
+            },
+            key=str.casefold,
+        )
+        if isinstance(raw_headers, dict)
+        else []
+    )
+    metadata = {
+        **empty_metadata,
+        "transport": transport,
+        "tool_prefix": options.prefix,
+        "tool_filter": list(options.tool_filter or []),
+        "require_confirmation": options.require_confirmation,
+        "progress_events": options.progress_events,
+        "long_task_proxy": options.long_task_proxy,
+        "inline_budget_ms": options.inline_budget_ms,
+        "job_protocol": options.job_protocol is not None,
+        "command_name": _public_command_name(command) if command else "",
+        "endpoint_origin": _public_endpoint_origin(url),
+        "configured_env_names": env_names,
+        "configured_header_names": header_names,
+        "runtime_header_names": sorted(options.runtime_headers, key=str.casefold),
+    }
+    if not _is_server_enabled(raw_cfg):
+        return {
+            "available": False,
+            "status": "disabled",
+            "status_detail": "Disabled in tools.mcpServers configuration.",
+            "metadata": metadata,
+        }
+    if not transport:
+        return {
+            "available": False,
+            "status": "needs_configuration",
+            "status_detail": "Set either command for stdio or url for a remote MCP server.",
+            "metadata": metadata,
+        }
+    return {
+        "available": True,
+        "status": "ready",
+        "status_detail": "Configured; connection is verified when runtime tools load.",
+        "metadata": metadata,
+    }
 
 
 def build_mcp_toolsets(mcp_servers: dict[str, Any], *, log_registered: bool = True) -> list[ManagedMcpToolset]:

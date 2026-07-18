@@ -35,6 +35,122 @@ function statusLabel(status: GmScienceCapability["status"]): string {
   return status === "ready" ? "Ready" : "Disabled";
 }
 
+function metadataText(item: GmScienceCapability, key: string): string {
+  const value = item.metadata[key];
+  return typeof value === "string" || typeof value === "number" ? String(value) : "";
+}
+
+function metadataList(item: GmScienceCapability, key: string): string[] {
+  const value = item.metadata[key];
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+function SkillDetails({ item }: { item: GmScienceCapability }) {
+  return (
+    <div className="capability-details" id={`capability-details-${item.id}`}>
+      <dl>
+        <div>
+          <dt>Identifier</dt>
+          <dd>{item.id}</dd>
+        </div>
+        <div>
+          <dt>Version</dt>
+          <dd>{item.version || "Not declared"}</dd>
+        </div>
+        <div>
+          <dt>License</dt>
+          <dd>{item.license || "Not declared"}</dd>
+        </div>
+      </dl>
+      <div className="capability-files">
+        <strong>Files</strong>
+        {item.files.length > 0 ? (
+          <ul>
+            {item.files.map((file) => (
+              <li key={file}>{file}</li>
+            ))}
+          </ul>
+        ) : (
+          <span>No files reported</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function McpConnectorDetails({ item }: { item: GmScienceCapability }) {
+  const environmentNames = metadataList(item, "configured_env_names");
+  const configuredHeaderNames = metadataList(item, "configured_header_names");
+  const runtimeHeaderNames = metadataList(item, "runtime_header_names");
+  const headerNames = [...new Set([...configuredHeaderNames, ...runtimeHeaderNames])];
+  const toolFilter = metadataList(item, "tool_filter");
+  const connection =
+    metadataText(item, "command_name") || metadataText(item, "endpoint_origin") || "Not configured";
+
+  return (
+    <div className="capability-details" id={`capability-details-${item.id}`}>
+      <dl>
+        <div>
+          <dt>Identifier</dt>
+          <dd>{item.id}</dd>
+        </div>
+        <div>
+          <dt>Transport</dt>
+          <dd>{metadataText(item, "transport") || "Not configured"}</dd>
+        </div>
+        <div>
+          <dt>Tool prefix</dt>
+          <dd>{metadataText(item, "tool_prefix") || "Not configured"}</dd>
+        </div>
+        <div>
+          <dt>Connection</dt>
+          <dd>{connection}</dd>
+        </div>
+        <div>
+          <dt>Confirmation</dt>
+          <dd>{item.metadata.require_confirmation === true ? "Required" : "Not required"}</dd>
+        </div>
+      </dl>
+      {toolFilter.length > 0 ? (
+        <div className="capability-files">
+          <strong>Allowed tools</strong>
+          <ul>
+            {toolFilter.map((name) => (
+              <li key={name}>{name}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      <div className="capability-detail-lists">
+        <div className="capability-files">
+          <strong>Environment variables</strong>
+          {environmentNames.length > 0 ? (
+            <ul>
+              {environmentNames.map((name) => (
+                <li key={name}>{name}</li>
+              ))}
+            </ul>
+          ) : (
+            <span>None configured</span>
+          )}
+        </div>
+        <div className="capability-files">
+          <strong>HTTP headers</strong>
+          {headerNames.length > 0 ? (
+            <ul>
+              {headerNames.map((name) => (
+                <li key={name}>{name}</li>
+              ))}
+            </ul>
+          ) : (
+            <span>None configured</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function CapabilitiesPanel({
   kind,
   projectName,
@@ -59,7 +175,10 @@ export function CapabilitiesPanel({
         if (!normalizedQuery) {
           return true;
         }
-        return `${item.name} ${item.id} ${item.description} ${sourceLabels[item.source]}`
+        return `${item.name} ${item.id} ${item.description} ${sourceLabels[item.source]} ${metadataText(
+          item,
+          "server_name",
+        )} ${metadataText(item, "transport")}`
           .toLocaleLowerCase()
           .includes(normalizedQuery);
       }),
@@ -101,7 +220,7 @@ export function CapabilitiesPanel({
             placeholder={`${searchLabel}...`}
             onChange={(event) => setQuery(event.target.value)}
           />
-          <span>{visibleItems.length} available</span>
+          <span>{visibleItems.length} shown</span>
         </div>
       ) : null}
       {!loading && visibleItems.length === 0 ? (
@@ -126,6 +245,8 @@ export function CapabilitiesPanel({
                 const checked = item.projectEnabled ?? item.defaultEnabled;
                 const cannotEnable = !item.available && !checked;
                 const expanded = expandedId === item.id;
+                const isMcpConnector = kind === "connector" && item.metadata.connector_type === "mcp";
+                const hasDetails = kind === "skill" || isMcpConnector;
                 return (
                   <article className="capability-row" key={item.id}>
                     <div className="capability-copy">
@@ -137,39 +258,11 @@ export function CapabilitiesPanel({
                       </div>
                       <p>{item.description}</p>
                       {item.statusDetail ? <small>{item.statusDetail}</small> : null}
-                      {expanded ? (
-                        <div className="capability-details" id={`capability-details-${item.id}`}>
-                          <dl>
-                            <div>
-                              <dt>Identifier</dt>
-                              <dd>{item.id}</dd>
-                            </div>
-                            <div>
-                              <dt>Version</dt>
-                              <dd>{item.version || "Not declared"}</dd>
-                            </div>
-                            <div>
-                              <dt>License</dt>
-                              <dd>{item.license || "Not declared"}</dd>
-                            </div>
-                          </dl>
-                          <div className="capability-files">
-                            <strong>Files</strong>
-                            {item.files.length > 0 ? (
-                              <ul>
-                                {item.files.map((file) => (
-                                  <li key={file}>{file}</li>
-                                ))}
-                              </ul>
-                            ) : (
-                              <span>No files reported</span>
-                            )}
-                          </div>
-                        </div>
-                      ) : null}
+                      {expanded && kind === "skill" ? <SkillDetails item={item} /> : null}
+                      {expanded && isMcpConnector ? <McpConnectorDetails item={item} /> : null}
                     </div>
                     <div className="capability-controls">
-                      {kind === "skill" ? (
+                      {hasDetails ? (
                         <button
                           className="capability-details-button"
                           type="button"

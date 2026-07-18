@@ -2653,6 +2653,12 @@ button.primary.small {
   gap: 6px;
 }
 
+.capability-detail-lists {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .capability-files ul {
   display: flex;
   flex-wrap: wrap;
@@ -2981,5 +2987,13 @@ button.primary.small {
 
   .capability-actions {
     justify-content: flex-start;
+  }
+
+  .capability-details dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .capability-detail-lists {
+    grid-template-columns: 1fr;
   }
 }
