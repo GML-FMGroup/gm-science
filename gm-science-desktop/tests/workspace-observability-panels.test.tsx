@@ -60,13 +60,24 @@ const usage: GmScienceUsageSnapshot = {
 
 describe("workspace observability settings", () => {
   it("shows the actual data root, measured categories, and partial scan state", () => {
-    render(<StorageSettingsPanel snapshot={storage} loading={false} error={null} onRefresh={vi.fn()} />);
+    const onChangeLocation = vi.fn(async () => undefined);
+    render(
+      <StorageSettingsPanel
+        snapshot={storage}
+        loading={false}
+        error={null}
+        onRefresh={vi.fn()}
+        onChangeLocation={onChangeLocation}
+      />,
+    );
 
     expect(screen.getByText("/tmp/gm-science")).toBeInTheDocument();
     expect(screen.getByText("1.50 MB")).toBeInTheDocument();
     expect(screen.getByText("Workspaces")).toBeInTheDocument();
     expect(screen.getByText("Partial scan")).toBeInTheDocument();
     expect(screen.getByText("No cloud storage adapter is available in this build.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Change location" }));
+    expect(onChangeLocation).toHaveBeenCalledOnce();
   });
 
   it("shows local token and TaskRun usage and changes the selected period", () => {

@@ -141,6 +141,7 @@ class OpenAICodexLlm(BaseLlm):
 
     codex_url: str = DEFAULT_CODEX_RESPONSES_URL
     timeout_seconds: float = 60.0
+    reasoning_effort: str = ""
 
     @classmethod
     def supported_models(cls) -> list[str]:
@@ -180,6 +181,9 @@ class OpenAICodexLlm(BaseLlm):
             }
             if tools:
                 body["tools"] = tools
+            effort = self.reasoning_effort.strip().lower()
+            if effort in {"low", "medium", "high"}:
+                body["reasoning"] = {"effort": effort}
 
             config = llm_request.config
             if config and config.temperature is not None:

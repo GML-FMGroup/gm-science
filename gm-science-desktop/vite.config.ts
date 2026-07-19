@@ -3,26 +3,30 @@ import react from "@vitejs/plugin-react";
 import electron from "vite-plugin-electron";
 import renderer from "vite-plugin-electron-renderer";
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [
     react(),
-    electron([
-      {
-        entry: "electron/main/index.ts",
-        vite: {
-          build: {
-            outDir: "dist-electron/main",
-            emptyOutDir: false,
-            rollupOptions: {
-              output: {
-                entryFileNames: "index.js",
+    ...(mode === "test"
+      ? []
+      : [
+        electron([
+          {
+            entry: "electron/main/index.ts",
+            vite: {
+              build: {
+                outDir: "dist-electron/main",
+                emptyOutDir: false,
+                rollupOptions: {
+                  output: {
+                    entryFileNames: "index.js",
+                  },
+                },
               },
             },
           },
-        },
-      },
-    ]),
-    renderer(),
+        ]),
+        renderer(),
+      ]),
   ],
   resolve: {
     alias: {
@@ -34,4 +38,4 @@ export default defineConfig({
     globals: true,
     setupFiles: "./tests/setup.ts",
   },
-});
+}));

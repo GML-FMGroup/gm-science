@@ -10,6 +10,7 @@ from openppx.gm_science.resources.context import ResourceContextService
 from openppx.gm_science.resources.detail import ResourceDetailService
 from openppx.gm_science.resources.models import ResourceSelection
 from openppx.gm_science.resources.service import ResourceCatalogService
+from openppx.gm_science.resources.sources import ProjectSourceService
 from openppx.gm_science.store import GmScienceStore
 
 
@@ -60,6 +61,55 @@ def test_resource_config_is_bounded_and_reads_science_resources() -> None:
     assert parsed.max_selected_resources == 32
     assert parsed.max_context_chars_per_resource == 256
     assert parsed.max_context_chars_total == 1_000_000
+
+
+def test_project_source_import_is_durable_bounded_and_catalog_visible(tmp_path: Path) -> None:
+    catalog, store, project_id, workspace = _service(tmp_path)
+    source_folder = tmp_path / "external papers"
+    source_folder.mkdir()
+    (source_folder / "notes.md").write_text("# Notes\n", encoding="utf-8")
+    nested = source_folder / "tables"
+    nested.mkdir()
+    (nested / "results.csv").write_text("x,y\n1,2\n", encoding="utf-8")
+    if hasattr(Path, "symlink_to"):
+        try:
+            (source_folder / "outside-link").symlink_to(tmp_path / "outside.txt")
+        except OSError:
+            pass
+
+    sources = ProjectSourceService(store=store)
+    imported = sources.import_source(project_id, str(source_folder), kind="folder")
+
+    assert imported["kind"] == "folder"
+    assert imported["label"] == "external papers"
+    assert imported["file_count"] == 2
+    assert imported["available"] is True
+    assert str(tmp_path) not in json.dumps(imported)
+    assert sources.list_sources(project_id) == [imported]
+    listed = catalog.list_resources(project_id)
+    assert {resource.display_name for resource in listed} == {"notes.md", "results.csv"}
+    assert not any(resource.display_name == "sources.json" for resource in listed)
+    assert all(resource.relative_path.startswith(imported["relative_root"]) for resource in listed)
+    assert (workspace / imported["relative_root"] / "tables" / "results.csv").is_file()
+
+    sources.delete_source(project_id, imported["id"])
+
+    assert sources.list_sources(project_id) == []
+    assert catalog.list_resources(project_id) == []
+
+
+def test_project_source_rejects_project_workspace_and_kind_mismatches(tmp_path: Path) -> None:
+    _catalog, store, project_id, workspace = _service(tmp_path)
+    service = ProjectSourceService(store=store)
+    local_file = workspace / "already-local.txt"
+    local_file.write_text("local", encoding="utf-8")
+    external_file = tmp_path / "external.txt"
+    external_file.write_text("external", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="outside the Project workspace"):
+        service.import_source(project_id, str(local_file), kind="file")
+    with pytest.raises(ValueError, match="not a directory"):
+        service.import_source(project_id, str(external_file), kind="folder")
 
 
 def test_catalog_projects_artifacts_datasets_run_outputs_and_workspace_files(tmp_path: Path) -> None:
@@ -393,6 +443,7 @@ def test_detail_returns_bounded_preview_safe_provenance_and_relations(tmp_path: 
         "content_included": True,
         "content_chars": 27,
         "truncated": False,
+        "display_mode": "markdown",
     }
     assert detail["artifact"] == {
         "id": report.id,
@@ -428,6 +479,28 @@ def test_detail_returns_bounded_preview_safe_provenance_and_relations(tmp_path: 
     assert str(workspace) not in serialized
     assert str(tmp_path / "private") not in serialized
     assert "must-not-leak" not in serialized
+
+
+def test_detail_returns_structured_json_and_csv_previews(tmp_path: Path) -> None:
+    catalog, _store, project_id, workspace = _service(tmp_path)
+    json_path = workspace / "parameters.json"
+    json_path.write_text('{"alpha":1,"nested":{"enabled":true}}', encoding="utf-8")
+    csv_path = workspace / "measurements.csv"
+    csv_path.write_text('sample,value,note\nA,1,"with, comma"\nB,2,ok\n', encoding="utf-8")
+    resources = {item.display_name: item for item in catalog.list_resources(project_id)}
+    service = ResourceDetailService(catalog=catalog)
+
+    json_preview = service.get_detail(project_id, resources["parameters.json"].id).to_dict()["preview"]
+    table_preview = service.get_detail(project_id, resources["measurements.csv"].id).to_dict()["preview"]
+
+    assert json_preview["display_mode"] == "json"
+    assert json.loads(json_preview["content"]) == {"alpha": 1, "nested": {"enabled": True}}
+    assert table_preview["display_mode"] == "table"
+    assert table_preview["table"] == {
+        "columns": ["sample", "value", "note"],
+        "rows": [["A", "1", "with, comma"], ["B", "2", "ok"]],
+        "truncated": False,
+    }
 
 
 def test_detail_uses_descriptor_status_for_external_and_binary_resources(tmp_path: Path) -> None:

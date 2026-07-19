@@ -270,6 +270,58 @@ def test_project_session_event_projects_resource_metadata_without_context_text()
     ]
 
 
+def test_project_session_event_projects_session_and_skill_references_without_context_text() -> None:
+    message = project_session_event(
+        {
+            "id": "evt_references",
+            "author": "user",
+            "content": {
+                "parts": [
+                    {"text": "Compare prior work."},
+                    {
+                        "text": "private prior transcript",
+                        "part_metadata": {
+                            "gm_science_session_ref": {
+                                "id": "session-2",
+                                "display_name": "Earlier work",
+                                "truncated": True,
+                            }
+                        },
+                    },
+                    {
+                        "text": "private skill instructions",
+                        "part_metadata": {
+                            "gm_science_skill_ref": {
+                                "id": "literature-review",
+                                "display_name": "Literature Review",
+                                "truncated": False,
+                            }
+                        },
+                    },
+                ]
+            },
+        },
+        "session-1",
+    )
+
+    assert message is not None
+    assert message["parts"] == [
+        {"type": "markdown", "text": "Compare prior work."},
+        {
+            "type": "session_ref",
+            "session_id": "session-2",
+            "display_name": "Earlier work",
+            "truncated": True,
+        },
+        {
+            "type": "skill_ref",
+            "skill_id": "literature-review",
+            "display_name": "Literature Review",
+            "truncated": False,
+        },
+    ]
+
+
 def test_create_run_streams_replayable_events(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / "global_config.json").write_text(
         json.dumps({"agents": [{"name": "writer", "enabled": True}]}),

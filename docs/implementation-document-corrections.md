@@ -326,3 +326,71 @@ Phase 15A 只创建匿名 Remote URL 和无 shell 的本地 argv Connector，并
 - 新建 Capability 默认不附加 Project，Specialist 只保存用户明确选择的 Skill 和 Connector；
 - 一键启动器使用受管进程组，Electron 在退出和终止信号下幂等释放 adapter，`Ctrl+C` 不再遗留 client-api；
 - ToolUniverse 不属于当前 Claude Science 复现路线，只有收到用户明确指令后才允许重新评估。
+
+## 12. Phase 15B 新增修正记录
+
+### DOC-CORRECTION-015：鉴权 MCP 使用 write-only Credential 引用
+
+**原有判断**
+
+DOC-CORRECTION-014 正确禁止 renderer 直接把秘密写进 MCP definition，但当时后端还没有可供 MCP assembly 消费的 Credential 引用，因此结论停留在“仅支持匿名 Connector”。
+
+**新证据**
+
+Settings 现在提供 Custom Credential 的 write-only upsert/remove 契约；公共投影只返回 ID、名称和 configured 状态。MCP registry 保存 `credentialBindings`，worker 只在构建运行时配置时把引用解析为 header 或环境变量，并在交给 MCP runtime 前移除引用元数据。删除仍被 Connector 使用的 Credential 会被后端拒绝。
+
+**修正结论**
+
+自定义 Remote/Local MCP 已支持 API Key、header token 和环境变量鉴权，但只允许绑定 Custom Credential 引用。URL userinfo/query/fragment、命令参数 token 和 renderer inline secret 继续禁止。通用第三方 OAuth callback 仍未实现，不得把 Credential 引用描述为 OAuth。
+
+### DOC-CORRECTION-016：Storage 已具备本机数据根目录迁移事务
+
+**原有判断**
+
+DOC-CORRECTION-011 将数据目录迁移列为未实现能力，原因是当时缺少停写、复制校验、重启和失败回滚合同。
+
+**新证据**
+
+Electron 主进程现在独占迁移流程：要求目标为空且与源目录不存在包含关系，停止受管 client-api，复制到同级 staging，按文件数与字节数校验，原子改名，持久化新位置并完成 runtime bootstrap 后才删除旧目录。任一步失败都会删除目标副本、恢复环境和持久化位置，并重新启动旧 runtime。
+
+**修正结论**
+
+本机受管模式可以从 Storage 页面迁移数据根目录。云存储、同步和多机迁移仍未实现；外部管理的 client-api 也不能执行该迁移。
+
+### DOC-CORRECTION-017：Files 引用必须使用稳定类型合同
+
+**原有判断**
+
+早期规划把 `@`、`#`、`/` 视为输入框文本补全，容易让显示标签进入 prompt 后再由模型猜测对应资源。
+
+**新证据**
+
+资源、Session 和 Skill 都有稳定 ID；Project 文件还具有 version/hash。client-api 与 worker 可以在运行前重新校验 Project 归属、版本和 capability attachment。
+
+**修正结论**
+
+Composer 中 `@ Artifact/File`、`# Session` 和 `/ Skill` 只负责选择，提交时使用 typed reference parts。显示名称不是授权或定位依据；资源变化、跨 Project 引用和已卸载 Skill 必须在 runtime boundary 失败。Files 选中的本地文件夹会复制进 Project workspace，并通过 durable source manifest 管理，不长期依赖原始外部路径。
+
+## 13. Phase 15B 后的有效实施基线
+
+- Skill、MCP Connector、Specialist 均支持创建、读取定义、编辑、删除和 Project attachment；Skill 另支持本地 bundle、公开 GitHub 导入以及持久化草稿发布；
+- Custom Credential 支撑鉴权 MCP，秘密不进入 capability catalog、公开设置投影或 renderer 持久状态；
+- Specialist 对每个已分配 MCP Connector 可以继续限制允许工具，运行时取 Connector 全局过滤与 Specialist 过滤的交集；
+- Files 支持 Project 内 Artifact、workspace 文件和导入 source 的统一浏览、搜索、来源过滤、列表/网格、结构化引用，以及 Markdown、JSON、CSV/TSV 有界预览；
+- Artifact 支持重命名、star、hide、删除、复制链接、下载、Finder 定位和导出；Session 支持搜索、重命名、删除和 Project 默认策略；
+- General、Credentials、Storage、Usage 与 Session options 只显示后端可兑现状态；远程 Compute execution、云存储、沙箱和第三方 OAuth 仍是明确暂缓项；
+- ToolUniverse 与 TxAgent 不进入本基线，只有用户后续明确指令才能开始评估。
+
+### DOC-CORRECTION-018：已安装前端依赖不应经过包管理器启动开发服务器
+
+**原有判断**
+
+一键启动器在依赖已经准备好时仍执行 `pnpm dev`，表面上只是在运行本地脚本。
+
+**新证据**
+
+在离线回归中，包管理器会先检查或解析自身版本，导致已经完整安装的桌面端仍可能因网络不可用而报 `fetch failed`。项目内 Vite 可执行文件本身不需要该网络步骤。
+
+**修正结论**
+
+启动器只在确实缺少依赖时调用 pnpm 安装；依赖就绪后直接调用项目内 `node_modules/.bin/vite`。这样安装责任与运行责任分离，离线启动不再取决于全局 pnpm 状态或包管理器网络检查。

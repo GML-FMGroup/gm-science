@@ -126,4 +126,29 @@ describe("client api projection helpers", () => {
       truncated: true,
     });
   });
+
+  it("normalizes structured Session and Skill reference parts", () => {
+    expect(normalizeClientApiPart({
+      type: "session_ref",
+      session_id: "session-2",
+      display_name: "Earlier work",
+      truncated: true,
+    })).toEqual({
+      type: "session_ref",
+      sessionId: "session-2",
+      displayName: "Earlier work",
+      truncated: true,
+    });
+    expect(normalizeClientApiPart({
+      type: "skill_ref",
+      skill_id: "literature-review",
+      display_name: "Literature Review",
+      truncated: false,
+    })).toEqual({
+      type: "skill_ref",
+      skillId: "literature-review",
+      displayName: "Literature Review",
+      truncated: false,
+    });
+  });
 });

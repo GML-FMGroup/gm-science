@@ -55,7 +55,7 @@ gm-science 当前设计和实现已经正确吸收了以下产品结构：
 - Files 是统一的科研上下文入口，不只是 Artifact 列表。
 - Memory、Credentials、Permissions 和 Network 共同构成工作台的长期状态与治理层。
 
-因此，gm-science 当前更接近“具备若干科研流程的本地 Agent”，距离“可扩展的本地科研工作台”仍有明显差距。
+Phase 15B 后，gm-science 已具备本地科研工作台的主要产品骨架。后续差距主要来自明确暂缓的远程执行、云服务、第三方 OAuth 和专业科研生态，而不是核心工作台信息架构缺失。
 
 ### 2.3 完成度口径修正
 
@@ -63,10 +63,10 @@ gm-science 当前设计和实现已经正确吸收了以下产品结构：
 
 采用两套口径：
 
-- **已有路线完成度**：Phase 1 到 Phase 7C 的基础闭环约完成 96%。
-- **科研工作台语义完成度**：按 Claude Science 的核心产品结构估算，目前约完成 90%。
+- **当前本地复现基线**：本文纳入的 Project、Session、Files、Artifact、Capability、Memory、Settings 和本地执行基线已完成实现与自动化回归。
+- **扩展工作台范围**：远程 Compute、云存储、第三方 OAuth、进程沙箱和专业科研生态为显式暂缓，不与本地复现基线混算百分比。
 
-第二个口径仍低于已有路线完成度，主要因为能力安装/编辑、远程 Compute executor、数据目录迁移、云存储和专业科研生态尚未完成，而不是因为已有科研流程不可用。可审阅 Memory、Credentials、Permissions、Network、Compute Target registry、Session Policy、只读 Artifact inspection，以及本地 Storage/Usage 可观测性已完成第一版。
+这种口径避免为了追求一个数字，把不可执行的远程候选、伪云存储按钮或缺少后端合同的 OAuth 页面计为完成。扩展项只有在用户明确调整范围并具备真实运行时合同后，才进入新的实施阶段。
 
 ### 2.4 2026-07-18 Specialist 实机补充结论
 
@@ -640,6 +640,20 @@ Phase 15A 于 2026-07-19 完成第一版手动 authoring：
 
 实机补充验证还表明，Claude Science 支持对 Specialist 已分配 Connector 的内部工具继续做启用/禁用。Phase 8A.3 当前只实现 Connector 级白名单；工具级白名单需要先扩展 openppx MCP registry 的稳定工具描述和过滤契约，再进入 Specialist 编辑 UI，不能由前端维护第二份工具名清单。
 
+### 7.3B Phase 15B Claude Science 复现基线实施状态
+
+Phase 15B 已补齐上一节记录的主要生命周期缺口：
+
+- Skill、MCP Connector 和 Specialist 具备统一 catalog 下的查看定义、编辑、删除和 Project attachment；内置或非受管定义明确标记为不可编辑。
+- Skill 支持本地文件/目录/zip、公开 GitHub 路径导入，以及存放在产品数据根目录中的持久化草稿。草稿可恢复、更新、删除，并通过正式 Skill authoring boundary 发布。
+- MCP Connector 使用 Custom Credential 引用表达 header 或环境变量鉴权，runtime 组装时才解析秘密；Specialist 可以对每个已分配 MCP Connector 设置工具级 allowlist。
+- Files 支持导入本地文件或文件夹到 Project workspace、durable source manifest、来源过滤、列表/网格、搜索和删除 source；Composer 支持 `@` 资源、`#` Session、`/` Skill 与命令面板，提交的是稳定 typed references。
+- Artifact inspection 支持 Markdown、格式化 JSON、CSV/TSV 表格和普通文本的有界预览，并补齐 rename、star/hide、delete、copy link、download、Finder reveal 与 export。
+- Session 支持搜索、重命名和删除；Project 设置可编辑新 Session 默认策略；Reviewer 提供 Default、Main model 和 Subagent model 三类真实路由。
+- General 已提供 reasoning effort、subagent model 和 license intent；Storage 已支持受管本机数据根目录迁移；Usage 继续只展示本地事实汇总。
+
+本阶段没有扩大产品边界。第三方 OAuth callback、远程 Compute executor、云存储、进程沙箱、ToolUniverse、TxAgent 和大规模领域工具仍不属于 Claude Science 本地复现基线。
+
 ### 7.4 Phase 8C.1 实施状态
 
 Phase 8C 的会话策略核心于 2026-07-18 完成第一版：
@@ -749,13 +763,24 @@ Phase 8D 的可审阅 Memory 核心于 2026-07-19 完成第一版：
 | Project / Session / Artifact 基础 | 基本完成 |
 | 文献与科研垂直闭环 | 第一版完成 |
 | 本地执行与数据分析 | 第一版完成 |
-| 动态能力注册与组合 | 动态发现、Project attachment 和 Skill/MCP/Specialist 手动创建第一版完成；编辑、删除、上传、导入和鉴权治理待后续阶段 |
-| 统一 Files 与上下文引用 | 统一目录、搜索、Files 选择和 ADK 原生结构化资源上下文完成；内容预览、Composer 命令和附加目录待后续迭代 |
-| 会话级调度控制 | Session Policy、继承、ADK Specialist 路由、Memory 读取门控和 Auto-review 第一版完成；Reviewer 模型候选与专用生命周期 UI 待完成 |
+| 动态能力注册与组合 | Skill/MCP/Specialist 创建、编辑、删除、导入、草稿、Credential 引用、Project attachment 和 Specialist 工具过滤完成本地第一版 |
+| 统一 Files 与上下文引用 | 统一目录、source manifest、搜索/过滤、列表/网格、有界内容预览、Composer 命令和 ADK 原生 typed references 完成本地第一版 |
+| 会话级调度控制 | Session Policy、Project 默认值、ADK Specialist 路由、Memory 门控、Auto-review 和 Reviewer 模型路由完成第一版 |
 | 可审阅 Memory | User/Project note、候选审批、全局/Session 开关、来源和召回审计第一版完成；批量导入导出与更强检索待后续阶段 |
 | Credentials / Permissions / Network | Credentials、全局 registry write 授权、镜像/CA/分类域名和受管 HTTP/MCP 强制第一版完成；作用域审批和进程级隔离待后续阶段 |
 | 多 Compute Target | Local executor、统一 registry、脱敏配置和健康检查第一版完成；SSH/Modal/NIM/HTTP endpoint executor 尚未实现 |
-| Storage / Usage / General | 本地数据目录和磁盘分类、token/TaskRun 用量窗口、provider/model 分布和 General provider/model 第一版完成；迁移、云存储、官方账单和更多模型策略待真实后端契约 |
+| Storage / Usage / General | 本地数据目录迁移与磁盘分类、token/TaskRun 用量窗口、provider/model 分布、reasoning effort、subagent model 和 license intent 完成第一版；云存储与官方账单明确不在当前基线 |
 | 专业科研生态 | Claude Science 复现基线冻结后扩展；ToolUniverse 仅由用户明确指令解锁 |
 
-近期目标是按 Claude Science 顺序继续收口能力编辑/删除/导入治理、Files 内容预览和 Artifact 生命周期操作，并执行覆盖新建 Project、对话、文献、Memory、数据分析和设置页的整体人工回归。远程 Compute adapter 必须继续复用 TaskRun。ToolUniverse 不进入当前路线，只有收到用户明确指令后才重新评估。
+### 12.1 Phase 15B 基线验收结果
+
+2026-07-19 使用隔离数据目录完成当前 Claude Science 本地复现基线的收敛验收：
+
+- 完整后端回归通过 `1411 passed, 111 skipped, 15 subtests passed`；跳过项对应可选依赖或外部服务，不是本基线失败。
+- 完整桌面回归通过 `126 passed`，TypeScript 检查与 renderer/Electron 生产构建通过。
+- 从空数据目录使用一键启动器拉起真实 Electron 和受管 client-api，完成 Project 创建并确认 Project 描述与 Agent Context 正确进入工作区。
+- Customize 实机验收覆盖 Skill 草稿创建、稳定 ID、持久化恢复与删除；Credentials 确认 Custom secret 为 write-only，Project 页面确认 Session defaults，General 页面确认 model、reasoning effort、subagent model 和 license intent。
+- Files 实机验收覆盖 Artifacts/Data/Runs 标签、来源与类型过滤、列表/网格入口、本机文件与文件夹导入入口以及对应空状态。
+- 本轮没有调用外部模型或科研数据服务；真实模型流式对话、文献检索、Memory、数据分析和 Artifact 生命周期已有前序独立验收与自动化回归，本轮只验证新增基线不会破坏启动和工作区主路径。
+
+当前目标从“继续补页面”切换为缺陷收敛和真实研究任务反馈。远程 Compute adapter 必须继续复用 TaskRun。ToolUniverse 不进入当前路线，只有收到用户明确指令后才重新评估。

@@ -133,6 +133,33 @@ def test_project_session_copies_defaults_and_updates_only_its_policy(tmp_path: P
     assert store.get_project_session(first.session_id).policy["auto_review_enabled"] is False
 
 
+def test_project_session_title_and_delete_preserve_artifacts(tmp_path: Path) -> None:
+    store = GmScienceStore(tmp_path)
+    project = store.create_project(name="Session lifecycle", description="", agent_context="")
+    linked = store.link_project_session(
+        project_id=project.id,
+        session_id="session-1",
+        agent_id="science-research",
+    )
+    artifact = store.create_artifact(
+        project_id=project.id,
+        session_id=linked.session_id,
+        artifact_type="report",
+        title="Durable report",
+        path_or_url="reports/durable.md",
+        mime_type="text/markdown",
+    )
+
+    renamed = store.update_project_session_title(linked.session_id, "Evidence synthesis")
+
+    assert linked.display_title == ""
+    assert renamed.display_title == "Evidence synthesis"
+    assert store.delete_project_session(linked.session_id) is True
+    assert store.get_project_session(linked.session_id) is None
+    assert store.get_artifact(artifact.id) == artifact
+    assert store.delete_project_session(linked.session_id) is False
+
+
 def test_create_and_list_project_artifacts_round_trips_metadata(tmp_path: Path) -> None:
     store = GmScienceStore(tmp_path)
     project = store.create_project(
@@ -159,6 +186,30 @@ def test_create_and_list_project_artifacts_round_trips_metadata(tmp_path: Path) 
     assert artifact.metadata == {"source": "manual", "year": 2017}
     assert artifact.provenance == {"created_by": "science-research", "run_id": "run-1"}
     assert store.list_artifacts(project.id) == [artifact]
+
+
+def test_update_and_delete_artifact_preserve_identity(tmp_path: Path) -> None:
+    store = GmScienceStore(tmp_path)
+    project = store.create_project(name="Artifacts", description="", agent_context="")
+    artifact = store.create_artifact(
+        project_id=project.id,
+        artifact_type="report",
+        title="Draft",
+        path_or_url="report.md",
+        metadata={"stage": "draft"},
+    )
+
+    updated = store.update_artifact(
+        artifact.id,
+        title="Final report",
+        metadata={"stage": "final", "gm_science_starred": True},
+    )
+
+    assert updated.id == artifact.id
+    assert updated.title == "Final report"
+    assert updated.metadata == {"stage": "final", "gm_science_starred": True}
+    assert store.delete_artifact(artifact.id) == updated
+    assert store.get_artifact(artifact.id) is None
 
 
 def test_science_run_association_round_trips_without_task_status(tmp_path: Path) -> None:

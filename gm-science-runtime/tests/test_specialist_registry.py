@@ -4,6 +4,7 @@ import json
 from unittest.mock import patch
 
 from openppx.gm_science.specialists.agents import (
+    _specialist_server_config,
     build_specialist_tools,
     specialist_dispatch_guidance,
 )
@@ -184,6 +185,17 @@ def test_agent_factory_mounts_only_selected_mcp_connector(monkeypatch) -> None:
 
     child_toolsets = specialist_tools[0].agent.tools
     assert [tool.meta.name for tool in child_toolsets] == ["lab"]
+
+
+def test_specialist_tool_filter_intersects_connector_policy() -> None:
+    assert _specialist_server_config(
+        {"command": "lab-mcp", "toolFilter": ["read", "search"]},
+        ("search", "write"),
+    ) == {"command": "lab-mcp", "toolFilter": ["search"]}
+    assert _specialist_server_config(
+        {"command": "lab-mcp"},
+        ("search", "write"),
+    ) == {"command": "lab-mcp", "toolFilter": ["search", "write"]}
 
 
 def test_public_specialist_list_applies_project_allowlist(tmp_path, monkeypatch) -> None:

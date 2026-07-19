@@ -16,6 +16,7 @@ ResourceContentStatus = Literal[
     "budget_exhausted_descriptor_only",
     "unavailable_descriptor_only",
 ]
+ResourcePreviewMode = Literal["text", "markdown", "json", "table"]
 ArtifactRelationDirection = Literal["outgoing", "incoming"]
 
 
@@ -61,6 +62,24 @@ class ResourceRef:
 
 
 @dataclass(frozen=True, slots=True)
+class ResourceTablePreview:
+    """A bounded tabular projection parsed from a text resource."""
+
+    columns: tuple[str, ...]
+    rows: tuple[tuple[str, ...], ...]
+    truncated: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the stable client-api table representation."""
+
+        return {
+            "columns": list(self.columns),
+            "rows": [list(row) for row in self.rows],
+            "truncated": self.truncated,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ResourcePreview:
     """A bounded text preview or an explicit descriptor-only status."""
 
@@ -68,17 +87,23 @@ class ResourcePreview:
     content_status: ResourceContentStatus
     content_included: bool
     truncated: bool
+    display_mode: ResourcePreviewMode = "text"
+    table: ResourceTablePreview | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Return the public preview representation used by client-api."""
 
-        return {
+        payload: dict[str, Any] = {
             "content": self.content,
             "content_status": self.content_status,
             "content_included": self.content_included,
             "content_chars": len(self.content),
             "truncated": self.truncated,
+            "display_mode": self.display_mode,
         }
+        if self.table is not None:
+            payload["table"] = self.table.to_dict()
+        return payload
 
 
 @dataclass(frozen=True, slots=True)

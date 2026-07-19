@@ -30,6 +30,7 @@ class ProjectSessionRecord:
     project_id: str
     session_id: str
     agent_id: str
+    display_title: str
     policy: dict[str, Any]
     created_at: str
     updated_at: str

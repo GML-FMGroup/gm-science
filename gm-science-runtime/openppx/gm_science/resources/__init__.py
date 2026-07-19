@@ -12,6 +12,7 @@ from .models import (
     ResourceSelection,
 )
 from .service import ResourceCatalogService
+from .sources import ProjectSourceService
 
 __all__ = [
     "ArtifactDetail",
@@ -24,6 +25,7 @@ __all__ = [
     "ResourcePreview",
     "ResourceRef",
     "ResourceSelection",
+    "ProjectSourceService",
     "ResolvedResourceContext",
     "load_resource_catalog_config",
     "parse_resource_catalog_config",

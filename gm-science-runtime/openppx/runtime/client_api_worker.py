@@ -25,6 +25,13 @@ from openppx.gm_science.store import GmScienceStore
 from openppx.runtime.run_config import build_run_config
 
 
+_MAX_SESSION_REFS = 8
+_MAX_SESSION_CONTEXT_CHARS = 24_000
+_MAX_SESSION_EVENTS = 12
+_MAX_SKILL_REFS = 8
+_MAX_SKILL_CONTEXT_CHARS = 40_000
+
+
 @dataclass(frozen=True, slots=True)
 class ReviewGateResult:
     """Outcome of one optional annotate-only report review."""
@@ -34,6 +41,25 @@ class ReviewGateResult:
     target_artifact_id: str = ""
     critique_artifact_id: str = ""
     message: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedReferenceContext:
+    """One bounded non-resource reference resolved for an ADK user Content."""
+
+    text: str
+    metadata_key: str
+    metadata_value: dict[str, Any]
+
+    def render_text(self) -> str:
+        """Return the bounded context text supplied to the model."""
+
+        return self.text
+
+    def metadata(self) -> dict[str, Any]:
+        """Return metadata used to reconstruct the visible reference chip."""
+
+        return {self.metadata_key: self.metadata_value}
 
 
 def _build_interactive_run_config(project_id: str) -> RunConfig:
@@ -88,6 +114,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--enabled-skills-json", default=None)
     parser.add_argument("--enabled-mcp-servers-json", default=None)
     parser.add_argument("--resource-refs-json", default=None)
+    parser.add_argument("--session-refs-json", default=None)
+    parser.add_argument("--skill-refs-json", default=None)
     parser.add_argument("--session-policy-json", default=None)
     return parser.parse_args()
 
@@ -259,6 +287,23 @@ def _find_reviewer_tool(root_agent: Any) -> Any | None:
     )
 
 
+def _reviewer_tool_for_policy(root_agent: Any, reviewer_model: str) -> Any | None:
+    """Build the Reviewer with the Session-selected authoritative model route."""
+
+    if reviewer_model in {"default", "subagent"}:
+        existing = _find_reviewer_tool(root_agent)
+        if existing is not None:
+            return existing
+    from openppx.gm_science.specialists.agents import build_specialist_tools
+
+    model = None
+    if reviewer_model == "main":
+        from openppx.core.provider import build_adk_model_from_env
+
+        model = build_adk_model_from_env()
+    return _find_reviewer_tool(SimpleNamespace(tools=build_specialist_tools(model=model)))
+
+
 def _event_preview_text(event: object) -> str:
     """Build a lightweight preview string from one ADK event object."""
 
@@ -268,7 +313,7 @@ def _event_preview_text(event: object) -> str:
     for part in parts:
         if bool(getattr(part, "thought", False)):
             continue
-        if _part_resource_metadata(part) is not None:
+        if _part_reference_metadata(part) is not None:
             continue
         text = getattr(part, "text", None)
         if isinstance(text, str) and text.strip():
@@ -288,11 +333,24 @@ def _part_resource_metadata(part: object) -> dict[str, Any] | None:
     return resource if isinstance(resource, dict) and resource.get("id") else None
 
 
+def _part_reference_metadata(part: object) -> dict[str, Any] | None:
+    """Return any gm-science structured reference metadata from an ADK Part."""
+
+    raw_metadata = getattr(part, "part_metadata", None)
+    if not isinstance(raw_metadata, dict):
+        return None
+    for key in ("gm_science_resource", "gm_science_session_ref", "gm_science_skill_ref"):
+        value = raw_metadata.get(key)
+        if isinstance(value, dict) and value.get("id"):
+            return value
+    return None
+
+
 def _build_adk_user_content(
     prompt: str,
-    contexts: list[ResolvedResourceContext],
+    contexts: list[ResolvedResourceContext | ResolvedReferenceContext],
 ) -> Any:
-    """Build one ADK-native user Content with structured resource Parts."""
+    """Build one ADK-native user Content with structured reference Parts."""
 
     from google.genai import types
 
@@ -322,6 +380,156 @@ def _resolve_resource_contexts(
         raise ValueError("Project resource references require --project-id.")
     catalog = ResourceCatalogService(store=GmScienceStore(), config_path=config_path)
     return ResourceContextService(catalog=catalog).resolve_contexts(project_id, raw_refs)
+
+
+def _parse_compact_reference_ids(
+    raw_json: str | None,
+    *,
+    argument_name: str,
+    limit: int,
+) -> list[str]:
+    """Parse a bounded JSON list containing stable IDs or compact ID objects."""
+
+    if raw_json is None:
+        return []
+    try:
+        raw_items = json.loads(raw_json)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{argument_name} must contain valid JSON.") from exc
+    if not isinstance(raw_items, list):
+        raise ValueError(f"{argument_name} must contain a JSON list.")
+    if len(raw_items) > limit:
+        raise ValueError(f"{argument_name} supports at most {limit} references.")
+    resolved: list[str] = []
+    for raw_item in raw_items:
+        value = raw_item.get("id") if isinstance(raw_item, dict) else raw_item
+        reference_id = str(value or "").strip()
+        if not reference_id:
+            raise ValueError(f"{argument_name} contains an empty reference ID.")
+        if reference_id not in resolved:
+            resolved.append(reference_id)
+    return resolved
+
+
+def _bounded_text(text: str, remaining: int) -> tuple[str, bool]:
+    """Return text constrained to a shared character budget."""
+
+    if remaining <= 0:
+        return "", bool(text)
+    if len(text) <= remaining:
+        return text, False
+    return text[:remaining].rstrip(), True
+
+
+async def _resolve_session_contexts(
+    *,
+    project_id: str,
+    current_session_id: str,
+    session_refs_json: str | None,
+    session_service: Any,
+    app_name: str,
+    user_id: str,
+) -> list[ResolvedReferenceContext]:
+    """Resolve Project Session references into a bounded visible transcript."""
+
+    reference_ids = _parse_compact_reference_ids(
+        session_refs_json,
+        argument_name="--session-refs-json",
+        limit=_MAX_SESSION_REFS,
+    )
+    if reference_ids and not project_id:
+        raise ValueError("Project Session references require --project-id.")
+    store = GmScienceStore()
+    contexts: list[ResolvedReferenceContext] = []
+    remaining = _MAX_SESSION_CONTEXT_CHARS
+    for reference_id in reference_ids:
+        if reference_id == current_session_id:
+            raise ValueError("The current Session cannot reference itself.")
+        association = store.get_project_session(reference_id)
+        if association is None or association.project_id != project_id:
+            raise ValueError(f"Session '{reference_id}' does not belong to Project '{project_id}'.")
+        session = await session_service.get_session(
+            app_name=app_name,
+            user_id=user_id,
+            session_id=reference_id,
+        )
+        if session is None:
+            raise ValueError(f"Session '{reference_id}' is unavailable.")
+        transcript: list[str] = []
+        visible_events = list(getattr(session, "events", []) or [])[-_MAX_SESSION_EVENTS:]
+        for event in visible_events:
+            text = _event_preview_text(event)
+            if not text:
+                continue
+            author = str(getattr(event, "author", "") or "").strip().lower()
+            role = "User" if author == "user" else "Assistant"
+            transcript.append(f"{role}: {text}")
+        title = association.display_title or _session_title(list(getattr(session, "events", []) or [])) or "Session"
+        body = f"Referenced Session: {title}\n" + ("\n".join(transcript) or "No visible messages.")
+        bounded, truncated = _bounded_text(body, remaining)
+        if not bounded:
+            break
+        remaining -= len(bounded)
+        contexts.append(
+            ResolvedReferenceContext(
+                text=bounded,
+                metadata_key="gm_science_session_ref",
+                metadata_value={
+                    "id": reference_id,
+                    "display_name": title,
+                    "truncated": truncated,
+                },
+            )
+        )
+    return contexts
+
+
+def _resolve_skill_contexts(
+    *,
+    project_id: str,
+    skill_refs_json: str | None,
+) -> list[ResolvedReferenceContext]:
+    """Resolve attached Skill references into bounded Skill instructions."""
+
+    reference_ids = _parse_compact_reference_ids(
+        skill_refs_json,
+        argument_name="--skill-refs-json",
+        limit=_MAX_SKILL_REFS,
+    )
+    if reference_ids and not project_id:
+        raise ValueError("Project Skill references require --project-id.")
+    from openppx.tooling.skills_adapter import get_registry
+
+    store = GmScienceStore()
+    project = store.get_project(project_id) if project_id else None
+    enabled = set(project.enabled_skills if project is not None else [])
+    registry = get_registry()
+    available = {skill.name: skill for skill in registry.list_skills()}
+    contexts: list[ResolvedReferenceContext] = []
+    remaining = _MAX_SKILL_CONTEXT_CHARS
+    for reference_id in reference_ids:
+        if reference_id not in enabled or reference_id not in available:
+            raise ValueError(f"Skill '{reference_id}' is not attached to Project '{project_id}'.")
+        content = registry.read_skill(reference_id)
+        bounded, truncated = _bounded_text(
+            f"Referenced Skill: {reference_id}\n{content}",
+            remaining,
+        )
+        if not bounded:
+            break
+        remaining -= len(bounded)
+        contexts.append(
+            ResolvedReferenceContext(
+                text=bounded,
+                metadata_key="gm_science_skill_ref",
+                metadata_value={
+                    "id": reference_id,
+                    "display_name": reference_id,
+                    "truncated": truncated,
+                },
+            )
+        )
+    return contexts
 
 
 def _strip_request_time_prefix(text: str) -> str:
@@ -484,10 +692,25 @@ async def _run() -> int:
             resource_refs_json=args.resource_refs_json,
             config_path=config_path,
         )
+        session_contexts = await _resolve_session_contexts(
+            project_id=args.project_id,
+            current_session_id=args.session_id,
+            session_refs_json=args.session_refs_json,
+            session_service=session_service,
+            app_name=app_name,
+            user_id=args.user_id,
+        )
+        skill_contexts = _resolve_skill_contexts(
+            project_id=args.project_id,
+            skill_refs_json=args.skill_refs_json,
+        )
     except ValueError as exc:
         _emit({"type": "error", "message": str(exc)})
         return 1
-    request = _build_adk_user_content(prompt, resource_contexts)
+    request = _build_adk_user_content(
+        prompt,
+        [*resource_contexts, *session_contexts, *skill_contexts],
+    )
     memory_service = _build_project_memory_service(
         project_id=args.project_id,
         session_id=args.session_id,
@@ -526,11 +749,10 @@ async def _run() -> int:
     )
 
     if args.project_id and session_policy["auto_review_enabled"]:
-        reviewer_tool = _find_reviewer_tool(root_agent)
-        if reviewer_tool is None:
-            from openppx.gm_science.specialists.agents import build_specialist_tools
-
-            reviewer_tool = _find_reviewer_tool(SimpleNamespace(tools=build_specialist_tools()))
+        reviewer_tool = _reviewer_tool_for_policy(
+            root_agent,
+            session_policy["reviewer_model"],
+        )
         gate = await run_report_review_gate(
             project_id=args.project_id,
             session_id=args.session_id,

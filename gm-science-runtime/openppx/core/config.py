@@ -612,6 +612,9 @@ def default_config() -> dict[str, Any]:
             "compute": {
                 "targets": {},
             },
+            "credentials": {
+                "custom": {},
+            },
             "resources": {
                 "enabled": True,
                 "maxWorkspaceFiles": 1000,
@@ -633,6 +636,10 @@ def default_config() -> dict[str, Any]:
                 "enabledSkills": ["literature-review"],
                 "enabledConnectors": ["arxiv", "pubmed", "openalex"],
                 "enabledSpecialists": ["paper_reader", "research_reviewer"],
+            },
+            "general": {
+                "reasoningEffort": "medium",
+                "licenseUseIntent": "commercial",
             },
             "specialists": {
                 "enabled": True,
@@ -972,15 +979,42 @@ def _resolve_security(cfg: dict[str, Any]) -> tuple[bool, bool, bool, str, str]:
 
 
 def _resolve_mcp_servers_json(cfg: dict[str, Any]) -> str:
-    """Serialize configured MCP servers into a stable JSON string."""
+    """Serialize MCP servers and resolve gm-science credential references."""
     tools = cfg.get("tools")
     if not isinstance(tools, dict):
         return "{}"
     raw = tools.get("mcpServers", {})
     if not isinstance(raw, dict):
         return "{}"
-    # Compact form keeps env values readable while preserving full structure.
-    return json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
+    servers = deepcopy(raw)
+    science = cfg.get("science") if isinstance(cfg.get("science"), dict) else {}
+    credential_root = science.get("credentials") if isinstance(science.get("credentials"), dict) else {}
+    credentials = credential_root.get("custom") if isinstance(credential_root.get("custom"), dict) else {}
+    for raw_server in servers.values():
+        if not isinstance(raw_server, dict):
+            continue
+        bindings = raw_server.pop("credentialBindings", {})
+        if not isinstance(bindings, dict):
+            continue
+        for binding_key, target_key in (("headers", "headers"), ("env", "env")):
+            raw_bindings = bindings.get(binding_key)
+            if not isinstance(raw_bindings, dict):
+                continue
+            resolved: dict[str, str] = {}
+            for raw_name, raw_credential_id in raw_bindings.items():
+                credential = credentials.get(str(raw_credential_id))
+                if not isinstance(credential, dict):
+                    continue
+                secret = str(credential.get("value") or "")
+                if secret:
+                    resolved[str(raw_name)] = secret
+            if resolved:
+                existing = raw_server.get(target_key)
+                merged = dict(existing) if isinstance(existing, dict) else {}
+                merged.update(resolved)
+                raw_server[target_key] = merged
+    # Secrets exist only in the worker environment projection, not Connector definitions.
+    return json.dumps(servers, ensure_ascii=False, separators=(",", ":"))
 
 
 def _resolve_gm_science_network_policy_json(cfg: dict[str, Any]) -> str:

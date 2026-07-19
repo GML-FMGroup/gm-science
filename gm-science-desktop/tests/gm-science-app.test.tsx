@@ -20,16 +20,19 @@ import type {
   RunEvent,
   RuntimeStatus,
   SessionSummary,
+  UpdateGmScienceSessionPolicyInput,
 } from "../app/src/types";
 
 function settings(): GmScienceSettings {
   return {
     model: { provider: "openai_codex", model: "openai-codex/gpt-5.5" },
     memory: { enabled: true },
+    general: { reasoningEffort: "medium", reasoningEffortSupported: true, subagentModel: "", licenseUseIntent: "commercial" },
     providers: [
       { id: "openai_codex", name: "OpenAI Codex", defaultModel: "openai-codex/gpt-5.5", authType: "oauth", credentialRequired: true, credentialConfigured: true, credentialSource: "oauth_cache", active: true },
       { id: "openai", name: "OpenAI", defaultModel: "openai/gpt-5.4", authType: "api_key", credentialRequired: true, credentialConfigured: false, credentialSource: "none", active: false },
     ],
+    credentials: { custom: [] },
     permissions: {
       items: [
         { id: "attach_skill", name: "Attach skill", description: "Attach a Skill to a Project.", category: "registry_writes", granted: true, scope: "global", source: "default", updatedAt: "" },
@@ -164,7 +167,11 @@ function sessionPolicy(overrides: Partial<GmScienceSessionPolicy> = {}): GmScien
       { id: "paper_reader", name: "Paper Reader", description: "Read papers", status: "ready" },
     ],
     reviewerAvailable: true,
-    reviewerModels: [{ id: "default", name: "Default" }],
+    reviewerModels: [
+      { id: "default", name: "Default" },
+      { id: "main", name: "Main model" },
+      { id: "subagent", name: "Subagent model" },
+    ],
     computeTargets: [{ id: "local", name: "Local" }],
     issues: [],
     ...overrides,
@@ -367,9 +374,12 @@ function installClient(overrides: Partial<PpxClientApi> = {}): {
     runRuntimeCommand: async () => runtime(),
     listSessions: async () => ({ sessions: [session()] }),
     createSession: async () => ({ session: session() }),
+    updateGmScienceSession: async (sessionId, input) => ({ ...session(), id: sessionId, title: input.title }),
+    deleteGmScienceSession: async () => undefined,
     loadSession: async () => ({ messages: [] }),
     sendMessage: async () => ({ runId: "run-1" }),
     getGmScienceStorage: async () => { throw new Error("Unused in this test."); },
+    changeGmScienceDataLocation: async () => ({ canceled: true, migrated: false, dataLocation: "/tmp/gm-science" }),
     getGmScienceUsage: async () => { throw new Error("Unused in this test."); },
     listGmScienceProjects: async () => ({ projects: [project()] }),
     createGmScienceProject: async (input) => ({ project: project({ id: "proj_new", name: input.name }) }),
@@ -390,6 +400,15 @@ function installClient(overrides: Partial<PpxClientApi> = {}): {
       source: "local", version: "", license: "", files: [], available: true,
       defaultEnabled: false, projectEnabled: null, status: "ready", statusDetail: "", metadata: {},
     }),
+    importGmScienceSkill: async () => { throw new Error("Skill import is not configured in this test"); },
+    listGmScienceSkillDrafts: async () => [],
+    saveGmScienceSkillDraft: async () => { throw new Error("Skill drafts are not configured in this test"); },
+    publishGmScienceSkillDraft: async () => { throw new Error("Skill drafts are not configured in this test"); },
+    deleteGmScienceSkillDraft: async () => undefined,
+    selectGmScienceSkillSource: async () => ({ canceled: true, sourcePath: "" }),
+    getGmScienceCapabilityDefinition: async () => { throw new Error("Capability editing is not configured in this test"); },
+    updateGmScienceCapability: async () => { throw new Error("Capability editing is not configured in this test"); },
+    deleteGmScienceCapability: async () => undefined,
     updateGmScienceProjectCapabilities: async (projectId, input) => {
       const updated = project({
         id: projectId,
@@ -425,8 +444,16 @@ function installClient(overrides: Partial<PpxClientApi> = {}): {
     },
     getGmScienceSessionPolicy: async (sessionId) => sessionPolicy({ sessionId }),
     updateGmScienceSessionPolicy: async (sessionId, input) => sessionPolicy({ sessionId, ...input }),
+    getGmScienceProjectSessionPolicyDefaults: async (projectId) => sessionPolicy({ sessionId: "", projectId }),
+    updateGmScienceProjectSessionPolicyDefaults: async (projectId, input) => sessionPolicy({ sessionId: "", projectId, ...input }),
     listGmScienceArtifacts: async () => ({ artifacts: [] }),
     listGmScienceResources: async () => ({ resources: [] }),
+    listGmScienceProjectSources: async () => [],
+    selectGmScienceProjectSource: async () => ({ canceled: true, sourcePath: "" }),
+    importGmScienceProjectSource: async () => { throw new Error("Source import is not configured in this test"); },
+    deleteGmScienceProjectSource: async () => undefined,
+    downloadGmScienceResource: async () => ({ canceled: true, destination: "" }),
+    revealGmScienceResource: async () => undefined,
     getGmScienceResourceDetail: async () => {
       throw new Error("Resource detail is not configured in this test");
     },
@@ -445,6 +472,8 @@ function installClient(overrides: Partial<PpxClientApi> = {}): {
         updatedAt: "2026-07-10T10:00:00.000Z",
       },
     }),
+    updateGmScienceArtifact: async () => { throw new Error("Artifact updates are not configured in this test"); },
+    deleteGmScienceArtifact: async () => undefined,
     listGmScienceRuns: async () => ({ runs: [] }),
     getGmScienceRun: async (projectId, taskId) => ({ run: scienceRun({ projectId, taskId }) }),
     createGmSciencePythonRun: async (projectId, input) => ({
@@ -523,6 +552,8 @@ function resourceDetail(
       contentIncluded: true,
       contentChars: 37,
       truncated: false,
+      displayMode: "markdown",
+      table: null,
     },
     artifact: resourceValue.artifactId
       ? {
@@ -588,8 +619,12 @@ describe("gm-science App", () => {
   it("opens Session options in the Composer and persists Session-scoped policy", async () => {
     const projectSession = session();
     projectSession.projectId = "proj_123";
-    const updatePolicy = vi.fn(async (sessionId: string, input: { delegationEnabled?: boolean }) =>
-      sessionPolicy({ sessionId, delegationEnabled: input.delegationEnabled ?? false }),
+    const updatePolicy = vi.fn(async (sessionId: string, input: UpdateGmScienceSessionPolicyInput) =>
+      sessionPolicy({
+        sessionId,
+        delegationEnabled: input.delegationEnabled ?? false,
+        reviewerModel: input.reviewerModel ?? "default",
+      }),
     );
     installClient({
       listSessions: async () => ({ sessions: [projectSession] }),
@@ -614,6 +649,10 @@ describe("gm-science App", () => {
     fireEvent.click(within(menu).getByRole("switch", { name: "Delegation" }));
     await waitFor(() => expect(updatePolicy).toHaveBeenCalledWith("session-a", { delegationEnabled: true }));
     await waitFor(() => expect(within(menu).getByRole("switch", { name: "Delegation" })).toBeChecked());
+    fireEvent.change(within(menu).getByRole("combobox", { name: "Reviewer model" }), {
+      target: { value: "main" },
+    });
+    await waitFor(() => expect(updatePolicy).toHaveBeenCalledWith("session-a", { reviewerModel: "main" }));
   });
 
   it("opens Customize as a settings dialog with Claude Science section placement", async () => {
@@ -796,7 +835,7 @@ describe("gm-science App", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
     await screen.findByText("Protein design is ready");
-    fireEvent.change(screen.getByPlaceholderText("Ask anything..."), {
+    fireEvent.change(screen.getByRole("textbox", { name: "Message" }), {
       target: { value: "Summarize the new papers" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
@@ -830,8 +869,10 @@ describe("gm-science App", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
     fireEvent.click(screen.getByRole("button", { name: "Files" }));
     fireEvent.click(await screen.findByRole("checkbox", { name: "Select results.csv" }));
-    expect(screen.getByText("1 file selected")).toBeInTheDocument();
-    fireEvent.change(screen.getByPlaceholderText("Ask anything..."), {
+    const selectedReferences = screen.getByLabelText("Selected references");
+    expect(within(selectedReferences).getByText("1 selected")).toBeInTheDocument();
+    expect(within(selectedReferences).getByText("results.csv")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "Message" }), {
       target: { value: "Compare the selected results" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
@@ -845,7 +886,7 @@ describe("gm-science App", () => {
         resourceRefs: [{ id: "project_file:results", versionOrHash: "10:2048" }],
       });
     });
-    expect(screen.queryByText("1 file selected")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Selected references")).not.toBeInTheDocument();
   });
 
   it("updates the selected Project connector allowlist from Customize", async () => {
@@ -1275,6 +1316,8 @@ describe("gm-science App", () => {
             contentIncluded: false,
             contentChars: 0,
             truncated: false,
+            displayMode: "text",
+            table: null,
           },
         }),
       });
@@ -1558,7 +1601,7 @@ describe("gm-science App", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
     fireEvent.click(screen.getByRole("button", { name: "Files" }));
     await screen.findByText("No artifacts yet");
-    fireEvent.change(screen.getByPlaceholderText("Ask anything..."), { target: { value: "search" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Message" }), { target: { value: "search" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     await screen.findByText("run failed");

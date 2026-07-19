@@ -8,13 +8,22 @@ import {
   checkGmScienceComputeTarget as mockCheckGmScienceComputeTarget,
   createGmScienceAnalysis as mockCreateGmScienceAnalysis,
   createGmScienceArtifact as mockCreateGmScienceArtifact,
+  deleteGmScienceArtifact as mockDeleteGmScienceArtifact,
   createGmSciencePythonRun as mockCreateGmSciencePythonRun,
   createGmScienceProject as mockCreateGmScienceProject,
   createGmScienceSkill as mockCreateGmScienceSkill,
   createGmScienceConnector as mockCreateGmScienceConnector,
   createGmScienceSpecialist as mockCreateGmScienceSpecialist,
+  deleteGmScienceCapability as mockDeleteGmScienceCapability,
+  getGmScienceCapabilityDefinition as mockGetGmScienceCapabilityDefinition,
+  importGmScienceSkill as mockImportGmScienceSkill,
+  listGmScienceSkillDrafts as mockListGmScienceSkillDrafts,
+  saveGmScienceSkillDraft as mockSaveGmScienceSkillDraft,
+  publishGmScienceSkillDraft as mockPublishGmScienceSkillDraft,
+  deleteGmScienceSkillDraft as mockDeleteGmScienceSkillDraft,
   createGmScienceMemoryNote as mockCreateGmScienceMemoryNote,
   createSession as mockCreateSession,
+  deleteGmScienceSession as mockDeleteGmScienceSession,
   cancelGmScienceRun as mockCancelGmScienceRun,
   getGmScienceRun as mockGetGmScienceRun,
   getGmScienceAnalysis as mockGetGmScienceAnalysis,
@@ -23,8 +32,10 @@ import {
   getGmScienceProject as mockGetGmScienceProject,
   getGmScienceResourceDetail as mockGetGmScienceResourceDetail,
   getGmScienceSessionPolicy as mockGetGmScienceSessionPolicy,
+  getGmScienceProjectSessionPolicyDefaults as mockGetGmScienceProjectSessionPolicyDefaults,
   getGmScienceSettings as mockGetGmScienceSettings,
   getGmScienceStorage as mockGetGmScienceStorage,
+  changeGmScienceDataLocation as mockChangeGmScienceDataLocation,
   getGmScienceUsage as mockGetGmScienceUsage,
   getGmScienceMemory as mockGetGmScienceMemory,
   listGmScienceCapabilities as mockListGmScienceCapabilities,
@@ -32,6 +43,9 @@ import {
   listGmScienceAnalyses as mockListGmScienceAnalyses,
   listGmScienceDatasets as mockListGmScienceDatasets,
   listGmScienceProjects as mockListGmScienceProjects,
+  listGmScienceProjectSources as mockListGmScienceProjectSources,
+  importGmScienceProjectSource as mockImportGmScienceProjectSource,
+  deleteGmScienceProjectSource as mockDeleteGmScienceProjectSource,
   listGmScienceResources as mockListGmScienceResources,
   listGmScienceRuns as mockListGmScienceRuns,
   listSessions as mockListSessions,
@@ -41,9 +55,13 @@ import {
   runGmScienceAnalysis as mockRunGmScienceAnalysis,
   sendMessage as mockSendMessage,
   updateGmScienceProjectCapabilities as mockUpdateGmScienceProjectCapabilities,
+  updateGmScienceCapability as mockUpdateGmScienceCapability,
   updateGmScienceSessionPolicy as mockUpdateGmScienceSessionPolicy,
+  updateGmScienceProjectSessionPolicyDefaults as mockUpdateGmScienceProjectSessionPolicyDefaults,
+  updateGmScienceSession as mockUpdateGmScienceSession,
   updateGmScienceSettings as mockUpdateGmScienceSettings,
   updateGmScienceMemoryNote as mockUpdateGmScienceMemoryNote,
+  updateGmScienceArtifact as mockUpdateGmScienceArtifact,
   deleteGmScienceMemoryNote as mockDeleteGmScienceMemoryNote,
   clearGmScienceMemory as mockClearGmScienceMemory,
   reviewGmScienceMemoryCandidate as mockReviewGmScienceMemoryCandidate,
@@ -59,6 +77,7 @@ import {
   normalizeGmScienceAnalysis,
   normalizeGmScienceCapability,
   normalizeGmScienceProject,
+  normalizeGmScienceProjectSource,
   normalizeGmScienceResource,
   normalizeGmScienceResourceDetail,
   normalizeGmScienceDataset,
@@ -104,17 +123,24 @@ import type {
   GmScienceAnalysis,
   GmScienceCapability,
   GmScienceCapabilityCatalog,
+  GmScienceCapabilityDefinition,
+  GmScienceCapabilityKind,
   GmScienceComputeHealth,
   GmScienceProject,
+  GmScienceProjectSource,
   GmScienceResource,
   GmScienceResourceDetail,
   GmScienceDataset,
   GmScienceDatasetFileSelection,
   GmScienceRun,
   GmScienceSessionPolicy,
+  GmScienceSkillSourcePickerMode,
+  GmScienceSkillSourceSelection,
+  GmScienceSkillDraft,
   GmScienceSettings,
   GmScienceSettingsUpdateResult,
   GmScienceStorageSnapshot,
+  GmScienceDataLocationChangeResult,
   GmScienceUsageSnapshot,
   GmScienceUsageWindow,
   GmScienceMemoryCandidate,
@@ -122,6 +148,7 @@ import type {
   GmScienceMemoryScope,
   GmScienceMemoryWorkspace,
   ImportGmScienceDatasetInput,
+  ImportGmScienceSkillInput,
   MessagePart,
   PpxClientApi,
   RunEvent,
@@ -130,6 +157,7 @@ import type {
   SendMessageInput,
   SessionSummary,
   UpdateGmScienceCapabilitiesInput,
+  UpdateGmScienceArtifactInput,
   UpdateGmScienceSessionPolicyInput,
   UpdateGmScienceSettingsInput,
   UpdateGmScienceMemoryNoteInput,
@@ -222,6 +250,138 @@ function normalizeAgentProfile(payload: Record<string, unknown>): AgentProfile {
     enabled: payload.enabled !== false,
     status: (String(payload.status ?? "healthy") as AgentProfile["status"]) || "healthy",
     tags: Array.isArray(payload.tags) ? payload.tags.map((tag) => String(tag)) : [],
+  };
+}
+
+function capabilityPath(kind: GmScienceCapabilityKind): "skills" | "connectors" | "specialists" {
+  return kind === "skill" ? "skills" : kind === "connector" ? "connectors" : "specialists";
+}
+
+function capabilityMutationBody(
+  kind: GmScienceCapabilityKind,
+  input: CreateGmScienceSkillInput | CreateGmScienceConnectorInput | CreateGmScienceSpecialistInput,
+): Record<string, unknown> {
+  if (kind === "skill") {
+    const skill = input as CreateGmScienceSkillInput;
+    return {
+      name: skill.name,
+      description: skill.description,
+      content: skill.content,
+      version: skill.version ?? "",
+      license: skill.license ?? "",
+    };
+  }
+  if (kind === "connector") {
+    const connector = input as CreateGmScienceConnectorInput;
+    return {
+      name: connector.name,
+      description: connector.description,
+      connection_type: connector.connectionType,
+      url: connector.url ?? "",
+      command_line: connector.commandLine ?? "",
+      tool_filter: connector.toolFilter ?? [],
+      require_confirmation: connector.requireConfirmation ?? false,
+      ...(connector.headerCredentialRefs
+        ? { header_credential_refs: connector.headerCredentialRefs }
+        : {}),
+      ...(connector.environmentCredentialRefs
+        ? { environment_credential_refs: connector.environmentCredentialRefs }
+        : {}),
+    };
+  }
+  const specialist = input as CreateGmScienceSpecialistInput;
+  return {
+    name: specialist.name,
+    description: specialist.description,
+    instructions: specialist.instructions,
+    skills: specialist.skills,
+    connectors: specialist.connectors,
+    connector_tools: specialist.connectorTools ?? {},
+  };
+}
+
+function normalizeCapabilityDefinition(payload: unknown): GmScienceCapabilityDefinition {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("Client API returned an invalid capability definition.");
+  }
+  const raw = payload as Record<string, unknown>;
+  const id = String(raw.id ?? "").trim();
+  const name = String(raw.name ?? "").trim();
+  const description = String(raw.description ?? "").trim();
+  const kind = String(raw.kind ?? "") as GmScienceCapabilityKind;
+  if (!id || !name || !description || !["skill", "connector", "specialist"].includes(kind)) {
+    throw new Error("Client API returned an invalid capability definition.");
+  }
+  if (kind === "skill") {
+    return {
+      id,
+      kind,
+      name,
+      description,
+      content: String(raw.content ?? ""),
+      version: String(raw.version ?? ""),
+      license: String(raw.license ?? ""),
+    };
+  }
+  if (kind === "connector") {
+    const connectionType = String(raw.connection_type ?? "") as "remote" | "local";
+    if (connectionType !== "remote" && connectionType !== "local") {
+      throw new Error("Client API returned an invalid Connector definition.");
+    }
+    return {
+      id,
+      kind,
+      name,
+      description,
+      connectionType,
+      url: String(raw.url ?? ""),
+      commandLine: String(raw.command_line ?? ""),
+      toolFilter: Array.isArray(raw.tool_filter) ? raw.tool_filter.map(String) : [],
+      requireConfirmation: Boolean(raw.require_confirmation),
+      headerCredentialRefs: raw.header_credential_refs && typeof raw.header_credential_refs === "object" && !Array.isArray(raw.header_credential_refs)
+        ? Object.fromEntries(Object.entries(raw.header_credential_refs as Record<string, unknown>).map(([name, credentialId]) => [name, String(credentialId)]))
+        : {},
+      environmentCredentialRefs: raw.environment_credential_refs && typeof raw.environment_credential_refs === "object" && !Array.isArray(raw.environment_credential_refs)
+        ? Object.fromEntries(Object.entries(raw.environment_credential_refs as Record<string, unknown>).map(([name, credentialId]) => [name, String(credentialId)]))
+        : {},
+    };
+  }
+  return {
+    id,
+    kind,
+    name,
+    description,
+    instructions: String(raw.instructions ?? ""),
+    skills: Array.isArray(raw.skills) ? raw.skills.map(String) : [],
+    connectors: Array.isArray(raw.connectors) ? raw.connectors.map(String) : [],
+    connectorTools: raw.connector_tools && typeof raw.connector_tools === "object" && !Array.isArray(raw.connector_tools)
+      ? Object.fromEntries(
+        Object.entries(raw.connector_tools as Record<string, unknown>)
+          .filter(([, tools]) => Array.isArray(tools))
+          .map(([connectorId, tools]) => [connectorId, (tools as unknown[]).map(String)]),
+      )
+      : {},
+  };
+}
+
+function normalizeSkillDraft(payload: unknown): GmScienceSkillDraft {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("Client API returned an invalid Skill draft.");
+  }
+  const raw = payload as Record<string, unknown>;
+  const id = String(raw.id ?? "").trim();
+  const name = String(raw.name ?? "").trim();
+  if (!id || !name) {
+    throw new Error("Client API returned an invalid Skill draft.");
+  }
+  return {
+    id,
+    name,
+    description: String(raw.description ?? ""),
+    content: String(raw.content ?? ""),
+    version: String(raw.version ?? ""),
+    license: String(raw.license ?? ""),
+    updatedAt: String(raw.updated_at ?? raw.updatedAt ?? ""),
   };
 }
 
@@ -769,6 +929,8 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
       name: input.name,
       description: input.description,
       content: input.content,
+      version: input.version ?? "",
+      license: input.license ?? "",
     });
   }
 
@@ -783,6 +945,14 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
       connection_type: input.connectionType,
       url: input.url ?? "",
       command_line: input.commandLine ?? "",
+      tool_filter: input.toolFilter ?? [],
+      require_confirmation: input.requireConfirmation ?? false,
+      ...(input.headerCredentialRefs
+        ? { header_credential_refs: input.headerCredentialRefs }
+        : {}),
+      ...(input.environmentCredentialRefs
+        ? { environment_credential_refs: input.environmentCredentialRefs }
+        : {}),
     });
   }
 
@@ -797,7 +967,140 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
       instructions: input.instructions,
       skills: input.skills,
       connectors: input.connectors,
+      connector_tools: input.connectorTools ?? {},
     });
+  }
+
+  public async importGmScienceSkill(input: ImportGmScienceSkillInput): Promise<GmScienceCapability> {
+    if (this.shouldUseMock()) {
+      return mockImportGmScienceSkill(input);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson("/api/v1/gm-science/capabilities/skills/import", {
+      method: "POST",
+      body: JSON.stringify({
+        source_type: input.sourceType,
+        source_path: input.sourcePath ?? "",
+        url: input.url ?? "",
+        id: input.id ?? "",
+      }),
+    });
+    return this.capabilityFromPayload(payload);
+  }
+
+  public async listGmScienceSkillDrafts(): Promise<GmScienceSkillDraft[]> {
+    if (this.shouldUseMock()) {
+      return mockListGmScienceSkillDrafts();
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson("/api/v1/gm-science/capability-drafts/skills");
+    const drafts = (payload.data as Record<string, unknown> | undefined)?.drafts;
+    return Array.isArray(drafts) ? drafts.map(normalizeSkillDraft) : [];
+  }
+
+  public async saveGmScienceSkillDraft(input: CreateGmScienceSkillInput): Promise<GmScienceSkillDraft> {
+    if (this.shouldUseMock()) {
+      return mockSaveGmScienceSkillDraft(input);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson("/api/v1/gm-science/capability-drafts/skills", {
+      method: "POST",
+      body: JSON.stringify({
+        id: input.id,
+        name: input.name,
+        description: input.description,
+        content: input.content,
+        version: input.version ?? "",
+        license: input.license ?? "",
+      }),
+    });
+    return normalizeSkillDraft((payload.data as Record<string, unknown> | undefined)?.draft);
+  }
+
+  public async publishGmScienceSkillDraft(draftId: string): Promise<GmScienceCapability> {
+    if (this.shouldUseMock()) {
+      return mockPublishGmScienceSkillDraft(draftId);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/capability-drafts/skills/${encodeURIComponent(draftId)}/publish`,
+      { method: "POST", body: "{}" },
+    );
+    return this.capabilityFromPayload(payload);
+  }
+
+  public async deleteGmScienceSkillDraft(draftId: string): Promise<void> {
+    if (this.shouldUseMock()) {
+      await mockDeleteGmScienceSkillDraft(draftId);
+      return;
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    await this.fetchClientApiJson(
+      `/api/v1/gm-science/capability-drafts/skills/${encodeURIComponent(draftId)}`,
+      { method: "DELETE" },
+    );
+  }
+
+  public async getGmScienceCapabilityDefinition(
+    kind: GmScienceCapabilityKind,
+    capabilityId: string,
+  ): Promise<GmScienceCapabilityDefinition> {
+    if (this.shouldUseMock()) {
+      return mockGetGmScienceCapabilityDefinition(kind, capabilityId);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/capabilities/${capabilityPath(kind)}/${encodeURIComponent(capabilityId)}`,
+    );
+    return normalizeCapabilityDefinition((payload.data as Record<string, unknown> | undefined)?.definition);
+  }
+
+  public async updateGmScienceCapability(
+    kind: GmScienceCapabilityKind,
+    capabilityId: string,
+    input: CreateGmScienceSkillInput | CreateGmScienceConnectorInput | CreateGmScienceSpecialistInput,
+  ): Promise<GmScienceCapability> {
+    if (this.shouldUseMock()) {
+      return mockUpdateGmScienceCapability(kind, capabilityId, input);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const body = capabilityMutationBody(kind, input);
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/capabilities/${capabilityPath(kind)}/${encodeURIComponent(capabilityId)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    );
+    return this.capabilityFromPayload(payload);
+  }
+
+  public async deleteGmScienceCapability(
+    kind: GmScienceCapabilityKind,
+    capabilityId: string,
+  ): Promise<void> {
+    if (this.shouldUseMock()) {
+      await mockDeleteGmScienceCapability(kind, capabilityId);
+      return;
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    await this.fetchClientApiJson(
+      `/api/v1/gm-science/capabilities/${capabilityPath(kind)}/${encodeURIComponent(capabilityId)}`,
+      { method: "DELETE" },
+    );
   }
 
   private async createGmScienceCapability(
@@ -811,6 +1114,10 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
       method: "POST",
       body: JSON.stringify(body),
     });
+    return this.capabilityFromPayload(payload);
+  }
+
+  private capabilityFromPayload(payload: Record<string, unknown>): GmScienceCapability {
     const capability = normalizeGmScienceCapability(
       (payload.data as Record<string, unknown> | undefined)?.capability,
     );
@@ -884,11 +1191,22 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
       body: JSON.stringify({
         project_id: input.projectId,
         memory_enabled: input.memoryEnabled,
+        general: input.general ? {
+          reasoning_effort: input.general.reasoningEffort,
+          subagent_model: input.general.subagentModel,
+          license_use_intent: input.general.licenseUseIntent,
+        } : undefined,
         model: input.model,
         provider_api_key: input.providerApiKey,
         pubmed_email: input.pubmedEmail,
         pubmed_api_key: input.pubmedApiKey,
         openalex_api_key: input.openalexApiKey,
+        custom_credential: input.customCredential ? {
+          operation: input.customCredential.operation,
+          id: input.customCredential.id,
+          name: input.customCredential.name,
+          value: input.customCredential.value,
+        } : undefined,
         permission_grants: input.permissionGrants,
         network: input.network ? {
           enabled: input.network.enabled,
@@ -974,6 +1292,13 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
       throw new Error("Client API returned an invalid Storage payload.");
     }
     return storage;
+  }
+
+  public async changeGmScienceDataLocation(): Promise<GmScienceDataLocationChangeResult> {
+    if (this.shouldUseMock()) {
+      return mockChangeGmScienceDataLocation();
+    }
+    throw new Error("Data location changes are handled by the gm-science desktop host.");
   }
 
   public async getGmScienceUsage(window: GmScienceUsageWindow): Promise<GmScienceUsageSnapshot> {
@@ -1173,6 +1498,60 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
     return policy;
   }
 
+  public async getGmScienceProjectSessionPolicyDefaults(
+    projectId: string,
+  ): Promise<GmScienceSessionPolicy> {
+    if (this.shouldUseMock()) {
+      return mockGetGmScienceProjectSessionPolicyDefaults(projectId);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/session-policy-defaults`,
+    );
+    const policy = normalizeGmScienceSessionPolicy(
+      (payload.data as Record<string, unknown> | undefined)?.policy,
+    );
+    if (!policy) {
+      throw new Error("Client API returned invalid Project Session defaults.");
+    }
+    return policy;
+  }
+
+  public async updateGmScienceProjectSessionPolicyDefaults(
+    projectId: string,
+    input: UpdateGmScienceSessionPolicyInput,
+  ): Promise<GmScienceSessionPolicy> {
+    if (this.shouldUseMock()) {
+      return mockUpdateGmScienceProjectSessionPolicyDefaults(projectId, input);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/session-policy-defaults`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          delegation_enabled: input.delegationEnabled,
+          auto_review_enabled: input.autoReviewEnabled,
+          memory_enabled: input.memoryEnabled,
+          specialist_id: input.specialistId,
+          reviewer_model: input.reviewerModel,
+          compute_target: input.computeTarget,
+        }),
+      },
+    );
+    const policy = normalizeGmScienceSessionPolicy(
+      (payload.data as Record<string, unknown> | undefined)?.policy,
+    );
+    if (!policy) {
+      throw new Error("Client API returned invalid Project Session defaults.");
+    }
+    return policy;
+  }
+
   public async listGmScienceArtifacts(projectId: string): Promise<{ artifacts: GmScienceArtifact[] }> {
     if (this.shouldUseMock()) {
       return mockListGmScienceArtifacts(projectId);
@@ -1224,6 +1603,44 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
     return { artifact };
   }
 
+  public async updateGmScienceArtifact(
+    projectId: string,
+    artifactId: string,
+    input: UpdateGmScienceArtifactInput,
+  ): Promise<{ artifact: GmScienceArtifact }> {
+    if (this.shouldUseMock()) {
+      return mockUpdateGmScienceArtifact(projectId, artifactId, input);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/artifacts/${encodeURIComponent(artifactId)}`,
+      { method: "PATCH", body: JSON.stringify(input) },
+    );
+    const artifact = normalizeGmScienceArtifact(
+      (payload.data as Record<string, unknown> | undefined)?.artifact,
+    );
+    if (!artifact) {
+      throw new Error("Client API returned an invalid Artifact payload.");
+    }
+    return { artifact };
+  }
+
+  public async deleteGmScienceArtifact(projectId: string, artifactId: string): Promise<void> {
+    if (this.shouldUseMock()) {
+      await mockDeleteGmScienceArtifact(projectId, artifactId);
+      return;
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    await this.fetchClientApiJson(
+      `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/artifacts/${encodeURIComponent(artifactId)}`,
+      { method: "DELETE" },
+    );
+  }
+
   public async listGmScienceResources(
     projectId: string,
     query = "",
@@ -1247,6 +1664,81 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
         .map((item) => normalizeGmScienceResource(item))
         .filter((item): item is GmScienceResource => item !== null),
     };
+  }
+
+  public async listGmScienceProjectSources(projectId: string): Promise<GmScienceProjectSource[]> {
+    if (this.shouldUseMock()) {
+      return mockListGmScienceProjectSources(projectId);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      return [];
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/sources`,
+    );
+    const items = Array.isArray((payload.data as Record<string, unknown> | undefined)?.items)
+      ? ((payload.data as Record<string, unknown>).items as unknown[])
+      : [];
+    return items
+      .map((item) => normalizeGmScienceProjectSource(item))
+      .filter((item): item is GmScienceProjectSource => item !== null);
+  }
+
+  public async selectGmScienceProjectSource(
+    _kind: "file" | "folder",
+  ): Promise<GmScienceSkillSourceSelection> {
+    return { canceled: true, sourcePath: "" };
+  }
+
+  public async importGmScienceProjectSource(
+    projectId: string,
+    input: { sourcePath: string; kind: "file" | "folder" },
+  ): Promise<GmScienceProjectSource> {
+    if (this.shouldUseMock()) {
+      return mockImportGmScienceProjectSource(projectId, input);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/sources`,
+      {
+        method: "POST",
+        body: JSON.stringify({ source_path: input.sourcePath, kind: input.kind }),
+      },
+    );
+    const source = normalizeGmScienceProjectSource(
+      (payload.data as Record<string, unknown> | undefined)?.source,
+    );
+    if (!source) {
+      throw new Error("Client API returned an invalid Project source payload.");
+    }
+    return source;
+  }
+
+  public async deleteGmScienceProjectSource(projectId: string, sourceId: string): Promise<void> {
+    if (this.shouldUseMock()) {
+      await mockDeleteGmScienceProjectSource(projectId, sourceId);
+      return;
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    await this.fetchClientApiJson(
+      `/api/v1/gm-science/projects/${encodeURIComponent(projectId)}/sources/${encodeURIComponent(sourceId)}`,
+      { method: "DELETE" },
+    );
+  }
+
+  public async downloadGmScienceResource(
+    _projectId: string,
+    _resourceId: string,
+  ): Promise<{ canceled: boolean; destination: string }> {
+    return { canceled: true, destination: "" };
+  }
+
+  public async revealGmScienceResource(_projectId: string, _resourceId: string): Promise<void> {
+    return undefined;
   }
 
   public async getGmScienceResourceDetail(
@@ -1342,6 +1834,12 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
 
   public async selectGmScienceDatasetFile(): Promise<GmScienceDatasetFileSelection | null> {
     return null;
+  }
+
+  public async selectGmScienceSkillSource(
+    _mode: GmScienceSkillSourcePickerMode,
+  ): Promise<GmScienceSkillSourceSelection> {
+    return { canceled: true, sourcePath: "" };
   }
 
   public async listGmScienceDatasets(projectId: string): Promise<{ datasets: GmScienceDataset[] }> {
@@ -1605,6 +2103,45 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
     return { session };
   }
 
+  public async updateGmScienceSession(
+    sessionId: string,
+    input: { title: string },
+  ): Promise<SessionSummary> {
+    if (this.shouldUseMock()) {
+      return mockUpdateGmScienceSession(sessionId, input);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/sessions/${encodeURIComponent(sessionId)}`,
+      { method: "PATCH", body: JSON.stringify(input) },
+    );
+    const session = normalizeClientApiSession(
+      (payload.data as Record<string, unknown> | undefined)?.session,
+    );
+    if (!session) {
+      throw new Error("Client API returned an invalid Session payload.");
+    }
+    this.sessionsCache.clear();
+    return session;
+  }
+
+  public async deleteGmScienceSession(sessionId: string): Promise<void> {
+    if (this.shouldUseMock()) {
+      return mockDeleteGmScienceSession(sessionId);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    await this.fetchClientApiJson(
+      `/api/v1/gm-science/sessions/${encodeURIComponent(sessionId)}`,
+      { method: "DELETE" },
+    );
+    this.sessionsCache.clear();
+    this.messagesCache.delete(sessionId);
+  }
+
   public async loadSession(sessionId: string): Promise<{ messages: ChatMessage[] }> {
     if (this.shouldUseMock()) {
       return mockLoadSession(sessionId);
@@ -1862,6 +2399,27 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
   public dispose(): void {
     this.mockUnsubscribe();
     this.stopManagedClientApiProcess();
+  }
+
+  public async shutdown(): Promise<void> {
+    // Wait for the child process so SQLite and config files are closed before migration.
+    this.mockUnsubscribe();
+    const current = this.clientApiProcess;
+    if (!current || current.exitCode !== null) {
+      this.stopManagedClientApiProcess();
+      return;
+    }
+    const closed = new Promise<void>((resolve) => current.once("close", () => resolve()));
+    current.kill();
+    await Promise.race([closed, delay(2_000)]);
+    if (current.exitCode === null) {
+      current.kill("SIGKILL");
+      await Promise.race([closed, delay(1_000)]);
+    }
+    if (this.clientApiProcess === current) {
+      this.clientApiProcess = null;
+    }
+    this.healthyUntil = 0;
   }
 
   private stopManagedClientApiProcess(): void {

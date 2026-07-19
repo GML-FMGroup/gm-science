@@ -9,12 +9,16 @@ import type {
   CreateGmScienceConnectorInput,
   CreateGmScienceSkillInput,
   CreateGmScienceSpecialistInput,
+  GmScienceCapabilityKind,
+  GmScienceSkillSourcePickerMode,
+  ImportGmScienceSkillInput,
   ImportGmScienceDatasetInput,
   PpxClientApi,
   RunEvent,
   RuntimeCommand,
   SendMessageInput,
   UpdateGmScienceCapabilitiesInput,
+  UpdateGmScienceArtifactInput,
   UpdateGmScienceSessionPolicyInput,
   UpdateGmScienceSettingsInput,
   UpdateGmScienceMemoryNoteInput,
@@ -30,6 +34,10 @@ const api: PpxClientApi = {
   listSessions: (agentId: string) => ipcRenderer.invoke("ppx-client:list-sessions", agentId),
   createSession: (agentId: string, projectId?: string) =>
     ipcRenderer.invoke("ppx-client:create-session", agentId, projectId),
+  updateGmScienceSession: (sessionId: string, input: { title: string }) =>
+    ipcRenderer.invoke("ppx-client:update-gm-science-session", sessionId, input),
+  deleteGmScienceSession: (sessionId: string) =>
+    ipcRenderer.invoke("ppx-client:delete-gm-science-session", sessionId),
   loadSession: (sessionId: string) => ipcRenderer.invoke("ppx-client:load-session", sessionId),
   sendMessage: (input: SendMessageInput) => ipcRenderer.invoke("ppx-client:send-message", input),
   listGmScienceProjects: () => ipcRenderer.invoke("ppx-client:list-gm-science-projects"),
@@ -44,6 +52,26 @@ const api: PpxClientApi = {
     ipcRenderer.invoke("ppx-client:create-gm-science-connector", input),
   createGmScienceSpecialist: (input: CreateGmScienceSpecialistInput) =>
     ipcRenderer.invoke("ppx-client:create-gm-science-specialist", input),
+  importGmScienceSkill: (input: ImportGmScienceSkillInput) =>
+    ipcRenderer.invoke("ppx-client:import-gm-science-skill", input),
+  listGmScienceSkillDrafts: () => ipcRenderer.invoke("ppx-client:list-gm-science-skill-drafts"),
+  saveGmScienceSkillDraft: (input: CreateGmScienceSkillInput) =>
+    ipcRenderer.invoke("ppx-client:save-gm-science-skill-draft", input),
+  publishGmScienceSkillDraft: (draftId: string) =>
+    ipcRenderer.invoke("ppx-client:publish-gm-science-skill-draft", draftId),
+  deleteGmScienceSkillDraft: (draftId: string) =>
+    ipcRenderer.invoke("ppx-client:delete-gm-science-skill-draft", draftId),
+  selectGmScienceSkillSource: (mode: GmScienceSkillSourcePickerMode) =>
+    ipcRenderer.invoke("ppx-client:select-gm-science-skill-source", mode),
+  getGmScienceCapabilityDefinition: (kind: GmScienceCapabilityKind, capabilityId: string) =>
+    ipcRenderer.invoke("ppx-client:get-gm-science-capability-definition", kind, capabilityId),
+  updateGmScienceCapability: (
+    kind: GmScienceCapabilityKind,
+    capabilityId: string,
+    input: CreateGmScienceSkillInput | CreateGmScienceConnectorInput | CreateGmScienceSpecialistInput,
+  ) => ipcRenderer.invoke("ppx-client:update-gm-science-capability", kind, capabilityId, input),
+  deleteGmScienceCapability: (kind: GmScienceCapabilityKind, capabilityId: string) =>
+    ipcRenderer.invoke("ppx-client:delete-gm-science-capability", kind, capabilityId),
   updateGmScienceProjectCapabilities: (projectId: string, input: UpdateGmScienceCapabilitiesInput) =>
     ipcRenderer.invoke("ppx-client:update-gm-science-project-capabilities", projectId, input),
   getGmScienceSettings: () => ipcRenderer.invoke("ppx-client:get-gm-science-settings"),
@@ -52,6 +80,7 @@ const api: PpxClientApi = {
   checkGmScienceComputeTarget: (targetId: string) =>
     ipcRenderer.invoke("ppx-client:check-gm-science-compute-target", targetId),
   getGmScienceStorage: () => ipcRenderer.invoke("ppx-client:get-gm-science-storage"),
+  changeGmScienceDataLocation: () => ipcRenderer.invoke("ppx-client:change-gm-science-data-location"),
   getGmScienceUsage: (window: GmScienceUsageWindow) =>
     ipcRenderer.invoke("ppx-client:get-gm-science-usage", window),
   getGmScienceMemory: (projectId: string) =>
@@ -78,13 +107,35 @@ const api: PpxClientApi = {
     ipcRenderer.invoke("ppx-client:get-gm-science-session-policy", sessionId),
   updateGmScienceSessionPolicy: (sessionId: string, input: UpdateGmScienceSessionPolicyInput) =>
     ipcRenderer.invoke("ppx-client:update-gm-science-session-policy", sessionId, input),
+  getGmScienceProjectSessionPolicyDefaults: (projectId: string) =>
+    ipcRenderer.invoke("ppx-client:get-gm-science-project-session-policy-defaults", projectId),
+  updateGmScienceProjectSessionPolicyDefaults: (projectId: string, input: UpdateGmScienceSessionPolicyInput) =>
+    ipcRenderer.invoke("ppx-client:update-gm-science-project-session-policy-defaults", projectId, input),
   listGmScienceArtifacts: (projectId: string) => ipcRenderer.invoke("ppx-client:list-gm-science-artifacts", projectId),
   listGmScienceResources: (projectId: string, query?: string) =>
     ipcRenderer.invoke("ppx-client:list-gm-science-resources", projectId, query),
+  listGmScienceProjectSources: (projectId: string) =>
+    ipcRenderer.invoke("ppx-client:list-gm-science-project-sources", projectId),
+  selectGmScienceProjectSource: (kind: "file" | "folder") =>
+    ipcRenderer.invoke("ppx-client:select-gm-science-project-source", kind),
+  importGmScienceProjectSource: (
+    projectId: string,
+    input: { sourcePath: string; kind: "file" | "folder" },
+  ) => ipcRenderer.invoke("ppx-client:import-gm-science-project-source", projectId, input),
+  deleteGmScienceProjectSource: (projectId: string, sourceId: string) =>
+    ipcRenderer.invoke("ppx-client:delete-gm-science-project-source", projectId, sourceId),
+  downloadGmScienceResource: (projectId: string, resourceId: string) =>
+    ipcRenderer.invoke("ppx-client:download-gm-science-resource", projectId, resourceId),
+  revealGmScienceResource: (projectId: string, resourceId: string) =>
+    ipcRenderer.invoke("ppx-client:reveal-gm-science-resource", projectId, resourceId),
   getGmScienceResourceDetail: (projectId: string, resourceId: string) =>
     ipcRenderer.invoke("ppx-client:get-gm-science-resource-detail", projectId, resourceId),
   createGmScienceArtifact: (projectId: string, input: CreateGmScienceArtifactInput) =>
     ipcRenderer.invoke("ppx-client:create-gm-science-artifact", projectId, input),
+  updateGmScienceArtifact: (projectId: string, artifactId: string, input: UpdateGmScienceArtifactInput) =>
+    ipcRenderer.invoke("ppx-client:update-gm-science-artifact", projectId, artifactId, input),
+  deleteGmScienceArtifact: (projectId: string, artifactId: string) =>
+    ipcRenderer.invoke("ppx-client:delete-gm-science-artifact", projectId, artifactId),
   listGmScienceRuns: (projectId: string) => ipcRenderer.invoke("ppx-client:list-gm-science-runs", projectId),
   getGmScienceRun: (projectId: string, taskId: string) =>
     ipcRenderer.invoke("ppx-client:get-gm-science-run", projectId, taskId),

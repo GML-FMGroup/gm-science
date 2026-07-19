@@ -165,6 +165,148 @@ def test_handler_maps_capability_authoring_permission_denials_to_403(
     assert sent[-1][1]["error"]["code"] == "PERMISSION_DENIED"
 
 
+def test_handler_routes_skill_draft_lifecycle(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    handler, sent = _fake_handler(coordinator)
+    handler._parse = lambda: (
+        "/api/v1/gm-science/capability-drafts/skills",
+        ["api", "v1", "gm-science", "capability-drafts", "skills"],
+        {},
+    )
+    handler._read_json_body = lambda: {
+        "id": "draft-skill",
+        "name": "Draft Skill",
+        "description": "Review evidence.",
+        "content": "# Workflow",
+    }
+
+    _ClientApiHandler.do_POST(handler)
+    assert sent[-1][0] == 200
+    _ClientApiHandler.do_GET(handler)
+    assert sent[-1][1]["data"]["drafts"][0]["id"] == "draft-skill"
+
+    handler._parse = lambda: (
+        "/api/v1/gm-science/capability-drafts/skills/draft-skill/publish",
+        [
+            "api",
+            "v1",
+            "gm-science",
+            "capability-drafts",
+            "skills",
+            "draft-skill",
+            "publish",
+        ],
+        {},
+    )
+    handler._read_json_body = lambda: {}
+    _ClientApiHandler.do_POST(handler)
+    assert sent[-1][0] == 200
+    assert sent[-1][1]["data"]["capability"]["id"] == "draft-skill"
+
+
+def test_handler_routes_capability_definition_update_import_and_delete(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    handler, sent = _fake_handler(coordinator)
+    created = coordinator.create_gm_science_capability(
+        "skills",
+        {
+            "id": "assay-quality",
+            "name": "Assay Quality",
+            "description": "Review assays.",
+            "content": "# Assay Quality",
+        },
+    )
+    assert created["ok"] is True
+
+    handler._parse = lambda: (
+        "/api/v1/gm-science/capabilities/skills/assay-quality",
+        ["api", "v1", "gm-science", "capabilities", "skills", "assay-quality"],
+        {},
+    )
+    _ClientApiHandler.do_GET(handler)
+    assert sent[-1][0] == 200
+    assert sent[-1][1]["data"]["definition"]["content"] == "# Assay Quality"
+
+    handler._read_json_body = lambda: {
+        "name": "Assay Quality Review",
+        "description": "Review assay controls.",
+        "content": "# Updated",
+    }
+    _ClientApiHandler.do_PATCH(handler)
+    assert sent[-1][0] == 200
+    assert sent[-1][1]["data"]["capability"]["name"] == "Assay Quality Review"
+
+    _ClientApiHandler.do_DELETE(handler)
+    assert sent[-1][0] == 200
+    _ClientApiHandler.do_GET(handler)
+    assert sent[-1][0] == 404
+    assert sent[-1][1]["error"]["code"] == "CAPABILITY_NOT_FOUND"
+
+    uploaded = tmp_path / "uploaded"
+    uploaded.mkdir()
+    (uploaded / "SKILL.md").write_text(
+        "---\nname: imported-skill\ntitle: Imported Skill\ndescription: Imported locally.\n---\n\n# Imported\n",
+        encoding="utf-8",
+    )
+    handler._parse = lambda: (
+        "/api/v1/gm-science/capabilities/skills/import",
+        ["api", "v1", "gm-science", "capabilities", "skills", "import"],
+        {},
+    )
+    handler._read_json_body = lambda: {
+        "source_type": "local",
+        "source_path": str(uploaded),
+    }
+    _ClientApiHandler.do_POST(handler)
+    assert sent[-1][0] == 200
+    assert sent[-1][1]["data"]["capability"]["id"] == "imported-skill"
+
+
+def test_handler_maps_referenced_capability_delete_to_conflict(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    coordinator.create_gm_science_capability(
+        "skills",
+        {
+            "id": "assay-quality",
+            "name": "Assay Quality",
+            "description": "Review assays.",
+            "content": "# Assay Quality",
+        },
+    )
+    project = coordinator.create_gm_science_project(
+        {
+            "name": "Referenced Project",
+            "enabled_skills": ["assay-quality"],
+            "enabled_connectors": [],
+            "enabled_specialists": [],
+        }
+    )["data"]["project"]
+    assert project["enabled_skills"] == ["assay-quality"]
+    handler, sent = _fake_handler(coordinator)
+    handler._parse = lambda: (
+        "/api/v1/gm-science/capabilities/skills/assay-quality",
+        ["api", "v1", "gm-science", "capabilities", "skills", "assay-quality"],
+        {},
+    )
+
+    _ClientApiHandler.do_DELETE(handler)
+
+    assert sent[-1][0] == 409
+    assert sent[-1][1]["error"]["code"] == "CAPABILITY_IN_USE"
+
+
 def test_handler_routes_expose_gm_science_project_and_artifact_api(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path / "gm-science"))
     coordinator = ClientApiCoordinator(data_dir=tmp_path)
@@ -434,6 +576,51 @@ def test_handler_routes_session_policy_get_and_patch(tmp_path: Path, monkeypatch
     assert sent[-1][1]["data"]["policy"]["memory_enabled"] is True
 
 
+def test_project_policy_defaults_affect_only_future_sessions(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path / "gm-science"))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    project = coordinator.create_gm_science_project(
+        {"name": "Default policies", "enabled_specialists": ["paper_reader"]}
+    )["data"]["project"]
+    first = coordinator.create_session(
+        GM_SCIENCE_DEFAULT_AGENT_NAME,
+        project_id=project["id"],
+    )["data"]["session"]
+
+    updated = coordinator.update_gm_science_project_session_policy_defaults(
+        project["id"],
+        {"delegation_enabled": True, "specialist_id": "paper_reader"},
+    )
+    second = coordinator.create_session(
+        GM_SCIENCE_DEFAULT_AGENT_NAME,
+        project_id=project["id"],
+    )["data"]["session"]
+
+    assert updated["data"]["policy"]["delegation_enabled"] is True
+    assert coordinator.get_gm_science_session_policy(first["id"])["data"]["policy"]["delegation_enabled"] is False
+    assert coordinator.get_gm_science_session_policy(second["id"])["data"]["policy"]["delegation_enabled"] is True
+
+
+def test_session_rename_and_delete_use_adk_session_lifecycle(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path / "gm-science"))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    project = coordinator.create_gm_science_project({"name": "Session lifecycle"})["data"]["project"]
+    session = coordinator.create_session(
+        GM_SCIENCE_DEFAULT_AGENT_NAME,
+        project_id=project["id"],
+    )["data"]["session"]
+
+    renamed = coordinator.update_gm_science_session(session["id"], {"title": "Evidence synthesis"})
+    listed = coordinator.list_sessions(GM_SCIENCE_DEFAULT_AGENT_NAME)["data"]["items"]
+
+    assert renamed["data"]["session"]["title"] == "Evidence synthesis"
+    assert next(item for item in listed if item["id"] == session["id"])["title"] == "Evidence synthesis"
+    assert coordinator.delete_gm_science_session(session["id"])["data"]["deleted"] is True
+    assert coordinator.get_gm_science_session_policy(session["id"])["error"]["code"] == "SESSION_NOT_IN_PROJECT"
+
+
 def test_handler_routes_expose_path_safe_searchable_project_resources(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("GM_SCIENCE_MODE", "1")
     monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
@@ -569,6 +756,8 @@ def test_handler_forwards_structured_resource_refs_to_project_run() -> None:
         "text": "Compare results.",
         "agent_id": "science-research",
         "resource_refs": [{"id": "project_file:abc", "version_or_hash": "1:20"}],
+        "session_refs": [{"id": "session_2"}],
+        "skill_refs": [{"id": "literature-review"}],
     }
 
     _ClientApiHandler.do_POST(handler)
@@ -581,6 +770,8 @@ def test_handler_forwards_structured_resource_refs_to_project_run() -> None:
         "user_id": "ppx-client-user",
         "agent_id": "science-research",
         "resource_refs": [{"id": "project_file:abc", "version_or_hash": "1:20"}],
+        "session_refs": [{"id": "session_2"}],
+        "skill_refs": [{"id": "literature-review"}],
     }
 
 
@@ -1018,10 +1209,11 @@ def test_client_api_lists_capabilities_with_global_and_project_status(
         "status": "ready",
         "status_detail": "",
         "metadata": {
-            "registry_source": "builtin",
-            "catalog_group": "featured",
-            "implementation_status": "installed",
-            "file_count": 1,
+                "registry_source": "builtin",
+                "catalog_group": "featured",
+                "implementation_status": "installed",
+                "manageable": False,
+                "file_count": 1,
             "files_truncated": False,
         },
     }
@@ -1226,6 +1418,57 @@ def test_client_api_lists_gm_science_artifacts(tmp_path: Path, monkeypatch) -> N
     assert listed["data"]["items"] == [artifact["data"]["artifact"]]
 
 
+def test_client_api_updates_and_deletes_exclusive_local_artifact_file(tmp_path: Path, monkeypatch) -> None:
+    data_root = tmp_path / "gm-science"
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(data_root))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    project = coordinator.create_gm_science_project({"name": "Artifacts"})["data"]["project"]
+    workspace = Path(project["workspace_path"])
+    artifact_file = workspace / "report.md"
+    artifact_file.write_text("report", encoding="utf-8")
+    artifact = coordinator.create_gm_science_artifact(
+        project["id"],
+        {"type": "report", "title": "Draft", "path_or_url": "report.md"},
+    )["data"]["artifact"]
+
+    updated = coordinator.update_gm_science_artifact(
+        project["id"],
+        artifact["id"],
+        {"title": "Final", "starred": True, "hidden": True},
+    )
+    assert updated["ok"] is True
+    assert updated["data"]["artifact"]["title"] == "Final"
+    assert updated["data"]["artifact"]["metadata"]["gm_science_starred"] is True
+    assert coordinator.list_gm_science_resources(project["id"])["data"]["items"] == []
+
+    deleted = coordinator.delete_gm_science_artifact(project["id"], artifact["id"])
+    assert deleted["ok"] is True
+    assert artifact_file.exists() is False
+
+
+def test_client_api_refuses_to_delete_referenced_artifact(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path / "gm-science"))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    project = coordinator.create_gm_science_project({"name": "Artifacts"})["data"]["project"]
+    source = coordinator.create_gm_science_artifact(
+        project["id"],
+        {"type": "paper", "title": "Source", "path_or_url": "https://example.test/paper"},
+    )["data"]["artifact"]
+    coordinator.create_gm_science_artifact(
+        project["id"],
+        {
+            "type": "report",
+            "title": "Report",
+            "path_or_url": "report.md",
+            "provenance": {"source_artifact_id": source["id"]},
+        },
+    )
+
+    deleted = coordinator.delete_gm_science_artifact(project["id"], source["id"])
+    assert deleted["ok"] is False
+    assert deleted["error"]["code"] == "ARTIFACT_IN_USE"
+
+
 def test_client_api_project_run_injects_agent_context(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path / "gm-science"))
     (tmp_path / "global_config.json").write_text(
@@ -1271,6 +1514,12 @@ def test_client_api_project_run_injects_agent_context(tmp_path: Path, monkeypatc
         session_id="session_1",
         agent_id=GM_SCIENCE_DEFAULT_AGENT_NAME,
     )
+    coordinator._gm_science_store.link_project_session(
+        project_id=project["id"],
+        session_id="session_2",
+        agent_id=GM_SCIENCE_DEFAULT_AGENT_NAME,
+    )
+    coordinator._gm_science_store.update_project_session_title("session_2", "Earlier analysis")
 
     resource_path = Path(project["workspace_path"]) / "papers.md"
     resource_path.write_text("# Saved papers\n", encoding="utf-8")
@@ -1281,6 +1530,8 @@ def test_client_api_project_run_injects_agent_context(tmp_path: Path, monkeypatc
         "session_1",
         "Summarize the papers.",
         resource_refs=[{"id": resource["id"], "version_or_hash": resource["version_or_hash"]}],
+        session_refs=[{"id": "session_2"}],
+        skill_refs=[{"id": "literature-review"}],
     )
 
     assert payload["ok"] is True
@@ -1310,6 +1561,10 @@ def test_client_api_project_run_injects_agent_context(tmp_path: Path, monkeypatc
     assert json.loads(observed_cmd[resource_index]) == [
         {"id": resource["id"], "version_or_hash": resource["version_or_hash"]}
     ]
+    session_ref_index = observed_cmd.index("--session-refs-json") + 1
+    assert json.loads(observed_cmd[session_ref_index]) == ["session_2"]
+    skill_ref_index = observed_cmd.index("--skill-refs-json") + 1
+    assert json.loads(observed_cmd[skill_ref_index]) == ["literature-review"]
 
     stale = coordinator.create_gm_science_project_run(
         project["id"],
@@ -1319,6 +1574,24 @@ def test_client_api_project_run_injects_agent_context(tmp_path: Path, monkeypatc
     )
     assert stale["ok"] is False
     assert stale["error"]["code"] == "INVALID_RESOURCE_REFS"
+
+    self_reference = coordinator.create_gm_science_project_run(
+        project["id"],
+        "session_1",
+        "Compare this Session.",
+        session_refs=[{"id": "session_1"}],
+    )
+    assert self_reference["ok"] is False
+    assert self_reference["error"]["code"] == "INVALID_SESSION_REFS"
+
+    unavailable_skill = coordinator.create_gm_science_project_run(
+        project["id"],
+        "session_1",
+        "Use an unavailable Skill.",
+        skill_refs=[{"id": "not-attached"}],
+    )
+    assert unavailable_skill["ok"] is False
+    assert unavailable_skill["error"]["code"] == "INVALID_SKILL_REFS"
 
 
 def test_client_api_project_run_passes_only_selected_available_mcp_servers(

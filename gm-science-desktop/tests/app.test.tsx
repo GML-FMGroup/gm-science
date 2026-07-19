@@ -18,7 +18,9 @@ function buildSettings(): GmScienceSettings {
   return {
     model: { provider: "openai_codex", model: "openai-codex/gpt-5.5" },
     memory: { enabled: true },
+    general: { reasoningEffort: "medium", reasoningEffortSupported: true, subagentModel: "", licenseUseIntent: "commercial" },
     providers: [{ id: "openai_codex", name: "OpenAI Codex", defaultModel: "openai-codex/gpt-5.5", authType: "oauth", credentialRequired: true, credentialConfigured: true, credentialSource: "oauth_cache", active: true }],
+    credentials: { custom: [] },
     permissions: { items: [] },
     network: {
       enabled: true,
@@ -193,11 +195,17 @@ function installClient(overrides: Partial<PpxClientApi> = {}): { client: PpxClie
     runRuntimeCommand: async () => buildBootstrapPayload().runtime,
     listSessions: async () => ({ sessions: buildBootstrapPayload().sessions }),
     createSession: async () => ({ session: buildBootstrapPayload().sessions[0] }),
+    updateGmScienceSession: async (sessionId, input) => ({
+      ...buildBootstrapPayload().sessions.find((item) => item.id === sessionId)!,
+      title: input.title,
+    }),
+    deleteGmScienceSession: async () => undefined,
     loadSession: async (sessionId) => ({
       messages: buildBootstrapPayload().messages.filter((message) => message.sessionId === sessionId),
     }),
     sendMessage: async () => new Promise<{ runId: string }>(() => undefined),
     getGmScienceStorage: async () => { throw new Error("Unused in this test."); },
+    changeGmScienceDataLocation: async () => ({ canceled: true, migrated: false, dataLocation: "/tmp/gm-science" }),
     getGmScienceUsage: async () => { throw new Error("Unused in this test."); },
     listGmScienceProjects: async () => ({ projects: [buildProject()] }),
     createGmScienceProject: async (input) => ({
@@ -235,6 +243,12 @@ function installClient(overrides: Partial<PpxClientApi> = {}): { client: PpxClie
       },
     }),
     listGmScienceCapabilities: async (projectId) => ({ projectId: projectId ?? "", items: [] }),
+    listGmScienceProjectSources: async () => [],
+    selectGmScienceProjectSource: async () => ({ canceled: true, sourcePath: "" }),
+    importGmScienceProjectSource: async () => { throw new Error("Source import is not configured in this test"); },
+    deleteGmScienceProjectSource: async () => undefined,
+    downloadGmScienceResource: async () => ({ canceled: true, destination: "" }),
+    revealGmScienceResource: async () => undefined,
     createGmScienceSkill: async (input) => ({
       id: input.id, kind: "skill", name: input.name, description: input.description,
       source: "local", version: "", license: "", files: ["SKILL.md"], available: true,
@@ -250,6 +264,15 @@ function installClient(overrides: Partial<PpxClientApi> = {}): { client: PpxClie
       source: "local", version: "", license: "", files: [], available: true,
       defaultEnabled: false, projectEnabled: null, status: "ready", statusDetail: "", metadata: {},
     }),
+    importGmScienceSkill: async () => { throw new Error("Skill import is not configured in this test"); },
+    listGmScienceSkillDrafts: async () => [],
+    saveGmScienceSkillDraft: async () => { throw new Error("Skill drafts are not configured in this test"); },
+    publishGmScienceSkillDraft: async () => { throw new Error("Skill drafts are not configured in this test"); },
+    deleteGmScienceSkillDraft: async () => undefined,
+    selectGmScienceSkillSource: async () => ({ canceled: true, sourcePath: "" }),
+    getGmScienceCapabilityDefinition: async () => { throw new Error("Capability editing is not configured in this test"); },
+    updateGmScienceCapability: async () => { throw new Error("Capability editing is not configured in this test"); },
+    deleteGmScienceCapability: async () => undefined,
     updateGmScienceProjectCapabilities: async (projectId, input) => ({
       project: buildProject({
         id: projectId,
@@ -285,6 +308,8 @@ function installClient(overrides: Partial<PpxClientApi> = {}): { client: PpxClie
     },
     getGmScienceSessionPolicy: async (sessionId) => buildSessionPolicy(sessionId),
     updateGmScienceSessionPolicy: async (sessionId, input) => ({ ...buildSessionPolicy(sessionId), ...input }),
+    getGmScienceProjectSessionPolicyDefaults: async () => buildSessionPolicy(""),
+    updateGmScienceProjectSessionPolicyDefaults: async (_projectId, input) => ({ ...buildSessionPolicy(""), ...input }),
     listGmScienceArtifacts: async () => ({ artifacts: [] }),
     listGmScienceResources: async () => ({ resources: [] }),
     getGmScienceResourceDetail: async () => {
@@ -305,6 +330,8 @@ function installClient(overrides: Partial<PpxClientApi> = {}): { client: PpxClie
         updatedAt: "2026-04-02T10:00:00.000Z",
       },
     }),
+    updateGmScienceArtifact: async () => { throw new Error("Artifact updates are not configured in this test"); },
+    deleteGmScienceArtifact: async () => undefined,
     listGmScienceRuns: async () => ({ runs: [] }),
     getGmScienceRun: async (projectId, taskId) => ({ run: buildScienceRun({ projectId, taskId }) }),
     createGmSciencePythonRun: async (projectId, input) => ({
@@ -484,6 +511,52 @@ describe("App sending state", () => {
     fireEvent.keyDown(composer, { key: "Enter", code: "Enter", charCode: 13, shiftKey: true });
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("selects Session and Skill references from Composer commands", async () => {
+    const sendMessage = vi.fn(async () => ({ runId: "run-refs" }));
+    installClient({
+      sendMessage,
+      listGmScienceCapabilities: async (projectId) => ({
+        projectId: projectId ?? "",
+        items: [{
+          id: "literature-review",
+          kind: "skill",
+          name: "Literature Review",
+          description: "Review research literature.",
+          source: "built_in",
+          version: "",
+          license: "",
+          files: ["SKILL.md"],
+          available: true,
+          defaultEnabled: true,
+          projectEnabled: true,
+          status: "ready",
+          statusDetail: "",
+          metadata: {},
+        }],
+      }),
+    });
+
+    render(<App />);
+    await openDefaultProject();
+    const composer = messageComposer();
+
+    fireEvent.change(composer, { target: { value: "#Session" } });
+    fireEvent.click(await screen.findByRole("option", { name: /Session B/ }));
+    fireEvent.change(composer, { target: { value: "/Literature" } });
+    fireEvent.click(await screen.findByRole("option", { name: /Literature Review/ }));
+    fireEvent.change(composer, { target: { value: "Compare the prior evidence." } });
+    fireEvent.click(sendButton());
+
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledWith({
+      agentId: "agent-1",
+      sessionId: "session-a",
+      projectId: "proj-test",
+      text: "Compare the prior evidence.",
+      sessionRefs: [{ id: "session-b" }],
+      skillRefs: [{ id: "literature-review" }],
+    }));
   });
 
   it("does not create an orphan session on startup and creates one for the project on first send", async () => {

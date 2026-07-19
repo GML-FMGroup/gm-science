@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import { Plus, RefreshCw } from "lucide-react";
-import type { GmScienceCapability, GmScienceCapabilityKind } from "../types";
+import { Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import type { GmScienceCapability, GmScienceCapabilityKind, GmScienceSkillDraft } from "../types";
 
 interface CapabilitiesPanelProps {
   kind: GmScienceCapabilityKind;
@@ -8,9 +8,14 @@ interface CapabilitiesPanelProps {
   loading: boolean;
   saving: boolean;
   error: string | null;
+  drafts?: GmScienceSkillDraft[];
   onToggle: (capabilityId: string) => void;
   onRefresh: () => void;
   onAdd: () => void;
+  onEdit: (item: GmScienceCapability) => void;
+  onDelete: (item: GmScienceCapability) => void;
+  onEditDraft?: (draft: GmScienceSkillDraft) => void;
+  onDeleteDraft?: (draft: GmScienceSkillDraft) => void;
 }
 
 const headings: Record<GmScienceCapabilityKind, string> = {
@@ -106,8 +111,14 @@ function SkillDetails({ item }: { item: GmScienceCapability }) {
 }
 
 function McpConnectorDetails({ item }: { item: GmScienceCapability }) {
-  const environmentNames = metadataList(item, "configured_env_names");
-  const configuredHeaderNames = metadataList(item, "configured_header_names");
+  const environmentNames = [
+    ...metadataList(item, "configured_env_names"),
+    ...metadataList(item, "credential_environment_names"),
+  ];
+  const configuredHeaderNames = [
+    ...metadataList(item, "configured_header_names"),
+    ...metadataList(item, "credential_header_names"),
+  ];
   const runtimeHeaderNames = metadataList(item, "runtime_header_names");
   const headerNames = [...new Set([...configuredHeaderNames, ...runtimeHeaderNames])];
   const toolFilter = metadataList(item, "tool_filter");
@@ -253,9 +264,14 @@ export function CapabilitiesPanel({
   loading,
   saving,
   error,
+  drafts = [],
   onToggle,
   onRefresh,
   onAdd,
+  onEdit,
+  onDelete,
+  onEditDraft,
+  onDeleteDraft,
 }: CapabilitiesPanelProps) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -344,6 +360,36 @@ export function CapabilitiesPanel({
       ) : null}
 
       <div className="capability-groups">
+        {kind === "skill" && drafts.length > 0 ? (
+          <section className="capability-group capability-draft-group" aria-labelledby="skill-drafts-heading">
+            <h3 id="skill-drafts-heading">
+              <span>Drafts</span>
+              <small>{drafts.length}</small>
+            </h3>
+            <div className="capability-list">
+              {drafts.map((draft) => (
+                <article className="capability-row" key={draft.id}>
+                  <div className="capability-copy">
+                    <div className="capability-title-row">
+                      <strong>{draft.name}</strong>
+                      <span className="capability-source local">Draft</span>
+                    </div>
+                    <p>{draft.description || "No description yet"}</p>
+                    <small>Updated {new Date(draft.updatedAt).toLocaleString()}</small>
+                  </div>
+                  <div className="capability-controls">
+                    <button className="icon-control compact" type="button" aria-label={`Edit draft ${draft.name}`} title={`Edit draft ${draft.name}`} disabled={saving} onClick={() => onEditDraft?.(draft)}>
+                      <Pencil size={15} />
+                    </button>
+                    <button className="icon-control compact danger" type="button" aria-label={`Delete draft ${draft.name}`} title={`Delete draft ${draft.name}`} disabled={saving} onClick={() => onDeleteDraft?.(draft)}>
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
         {groups.map((group) => (
           <section
             className="capability-group"
@@ -361,6 +407,7 @@ export function CapabilitiesPanel({
                 const expanded = expandedId === item.id;
                 const isMcpConnector = kind === "connector" && item.metadata.connector_type === "mcp";
                 const hasDetails = kind === "skill" || kind === "specialist" || isMcpConnector;
+                const manageable = item.metadata.manageable === true;
                 return (
                   <article className="capability-row" key={item.id}>
                     <div className="capability-copy">
@@ -377,6 +424,16 @@ export function CapabilitiesPanel({
                       {expanded && kind === "specialist" ? <SpecialistDetails item={item} /> : null}
                     </div>
                     <div className="capability-controls">
+                      {manageable ? (
+                        <button className="icon-control compact" type="button" aria-label={`Edit ${item.name}`} title={`Edit ${item.name}`} disabled={saving} onClick={() => onEdit(item)}>
+                          <Pencil size={15} />
+                        </button>
+                      ) : null}
+                      {manageable ? (
+                        <button className="icon-control compact danger" type="button" aria-label={`Delete ${item.name}`} title={`Delete ${item.name}`} disabled={saving} onClick={() => onDelete(item)}>
+                          <Trash2 size={15} />
+                        </button>
+                      ) : null}
                       {hasDetails ? (
                         <button
                           className="capability-details-button"

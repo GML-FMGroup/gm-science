@@ -156,6 +156,20 @@ function renderPart(part: MessagePart) {
       </div>
     );
   }
+  if (part.type === "session_ref" || part.type === "skill_ref") {
+    const kind = part.type === "session_ref" ? "Session" : "Skill";
+    const symbol = part.type === "session_ref" ? "#" : "/";
+    return (
+      <div className="resource-ref-card">
+        <span className="resource-ref-symbol" aria-hidden="true">{symbol}</span>
+        <div>
+          <strong>{part.displayName}</strong>
+          <span>{kind} context included</span>
+          {part.truncated ? <small>Context was truncated to the configured limit.</small> : null}
+        </div>
+      </div>
+    );
+  }
   const detailText = part.detail
     .split("\n")
     .map((line) => line.trimEnd())

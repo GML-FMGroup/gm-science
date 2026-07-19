@@ -37,11 +37,16 @@ def test_session_policy_partial_update_preserves_other_fields() -> None:
     assert updated["memory_enabled"] is False
 
 
+@pytest.mark.parametrize("reviewer_model", ["default", "main", "subagent"])
+def test_session_policy_accepts_supported_reviewer_routes(reviewer_model: str) -> None:
+    assert normalize_session_policy({"reviewer_model": reviewer_model})["reviewer_model"] == reviewer_model
+
+
 @pytest.mark.parametrize(
     ("value", "message"),
     [
         ({"delegation_enabled": "yes"}, "must be a boolean"),
-        ({"reviewer_model": "other"}, "only 'default'"),
+        ({"reviewer_model": "other"}, "must be default, main, or subagent"),
         ({"compute_target": "ssh"}, "only 'local'"),
         ({"unknown": True}, "Unknown Session policy fields"),
     ],

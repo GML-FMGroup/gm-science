@@ -4,8 +4,16 @@ import {
   FileText,
   GitBranch,
   History,
+  Download,
+  FileOutput,
+  FolderOpen,
+  Link,
   MoreHorizontal,
+  Pencil,
   RefreshCw,
+  Star,
+  Trash2,
+  EyeOff,
   X,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -28,6 +36,14 @@ interface ArtifactInspectorProps {
   onOpenProvenance: () => void;
   onCloseProvenance: () => void;
   onOpenRelation: (resourceId: string) => void;
+  onRename: () => void;
+  onToggleStar: () => void;
+  onHide: () => void;
+  onDelete: () => void;
+  onCopyLink: () => void;
+  onDownload: () => void;
+  onReveal: () => void;
+  onExport: () => void;
 }
 
 function displayValue(value: unknown): string {
@@ -85,6 +101,14 @@ export function ArtifactInspector({
   onOpenProvenance,
   onCloseProvenance,
   onOpenRelation,
+  onRename,
+  onToggleStar,
+  onHide,
+  onDelete,
+  onCopyLink,
+  onDownload,
+  onReveal,
+  onExport,
 }: ArtifactInspectorProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -160,6 +184,8 @@ export function ArtifactInspector({
           </button>
           {menuOpen ? (
             <div className="artifact-actions-menu" role="menu">
+              {detail?.artifact ? <button role="menuitem" onClick={() => { setMenuOpen(false); onToggleStar(); }}><Star size={16} />{detail.resource.metadata.starred === true ? "Unstar" : "Star"}</button> : null}
+              {detail?.artifact ? <button role="menuitem" onClick={() => { setMenuOpen(false); onHide(); }}><EyeOff size={16} />Hide</button> : null}
               <button
                 role="menuitem"
                 onClick={() => {
@@ -180,6 +206,12 @@ export function ArtifactInspector({
                 <GitBranch size={16} />
                 Provenance
               </button>
+              <button role="menuitem" onClick={() => { setMenuOpen(false); onCopyLink(); }}><Link size={16} />Copy link</button>
+              {detail?.artifact ? <button role="menuitem" onClick={() => { setMenuOpen(false); onRename(); }}><Pencil size={16} />Rename</button> : null}
+              <button role="menuitem" onClick={() => { setMenuOpen(false); onDownload(); }}><Download size={16} />Download</button>
+              <button role="menuitem" onClick={() => { setMenuOpen(false); onReveal(); }}><FolderOpen size={16} />Reveal in Finder</button>
+              <button role="menuitem" onClick={() => { setMenuOpen(false); onExport(); }}><FileOutput size={16} />Export</button>
+              {detail?.artifact ? <button className="danger" role="menuitem" onClick={() => { setMenuOpen(false); onDelete(); }}><Trash2 size={16} />Delete</button> : null}
             </div>
           ) : null}
         </div>
@@ -215,12 +247,26 @@ export function ArtifactInspector({
             </div>
             {actionError ? <p className="artifact-action-error">{actionError}</p> : null}
             {detail.preview.contentIncluded ? (
-              isMarkdown(detail) ? (
+              detail.preview.displayMode === "table" && detail.preview.table ? (
+                <div className="artifact-table-preview" role="region" aria-label="Table preview" tabIndex={0}>
+                  <table>
+                    <thead>
+                      <tr>{detail.preview.table.columns.map((column, index) => <th key={`${column}-${index}`}>{column}</th>)}</tr>
+                    </thead>
+                    <tbody>
+                      {detail.preview.table.rows.map((row, rowIndex) => (
+                        <tr key={rowIndex}>{row.map((value, columnIndex) => <td key={columnIndex}>{value}</td>)}</tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {detail.preview.table.truncated ? <p>Table preview truncated</p> : null}
+                </div>
+              ) : detail.preview.displayMode === "markdown" || isMarkdown(detail) ? (
                 <article className="artifact-markdown rich-markdown">
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{detail.preview.content}</ReactMarkdown>
                 </article>
               ) : (
-                <pre className="artifact-text-preview">{detail.preview.content}</pre>
+                <pre className={detail.preview.displayMode === "json" ? "artifact-text-preview json" : "artifact-text-preview"}>{detail.preview.content}</pre>
               )
             ) : (
               <div className="artifact-descriptor">

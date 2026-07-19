@@ -16,13 +16,17 @@ import type {
   GmScienceAnalysis,
   GmScienceCapability,
   GmScienceCapabilityCatalog,
+  GmScienceCapabilityDefinition,
+  GmScienceCapabilityKind,
   GmScienceProject,
+  GmScienceProjectSource,
   GmScienceResource,
   GmScienceResourceDetail,
   GmScienceDataset,
   GmScienceRun,
   GmScienceSessionPolicy,
   GmScienceSessionPolicyValues,
+  GmScienceSkillDraft,
   GmScienceSettings,
   GmScienceSettingsUpdateResult,
   GmScienceStorageSnapshot,
@@ -34,6 +38,7 @@ import type {
   GmScienceMemoryScope,
   GmScienceMemoryWorkspace,
   ImportGmScienceDatasetInput,
+  ImportGmScienceSkillInput,
   MessagePart,
   RuntimeCommand,
   RuntimeStatus,
@@ -41,6 +46,7 @@ import type {
   SendMessageInput,
   SessionSummary,
   UpdateGmScienceCapabilitiesInput,
+  UpdateGmScienceArtifactInput,
   UpdateGmScienceSessionPolicyInput,
   UpdateGmScienceSettingsInput,
   UpdateGmScienceMemoryNoteInput,
@@ -55,6 +61,7 @@ interface StoreState {
   memoryByProject: Record<string, GmScienceMemoryWorkspace>;
   projects: GmScienceProject[];
   artifactsByProject: Record<string, GmScienceArtifact[]>;
+  sourcesByProject: Record<string, GmScienceProjectSource[]>;
   datasetsByProject: Record<string, GmScienceDataset[]>;
   analysesByProject: Record<string, GmScienceAnalysis[]>;
   runsByProject: Record<string, GmScienceRun[]>;
@@ -132,6 +139,12 @@ const state: StoreState = {
   settings: {
     model: { provider: "openai_codex", model: "openai-codex/gpt-5.5" },
     memory: { enabled: true },
+    general: {
+      reasoningEffort: "medium",
+      reasoningEffortSupported: true,
+      subagentModel: "",
+      licenseUseIntent: "commercial",
+    },
     providers: [
       { id: "openai_codex", name: "OpenAI Codex", defaultModel: "openai-codex/gpt-5.5", authType: "oauth", credentialRequired: true, credentialConfigured: true, credentialSource: "oauth_cache", active: true },
       { id: "openai", name: "OpenAI", defaultModel: "openai/gpt-5.4", authType: "api_key", credentialRequired: true, credentialConfigured: false, credentialSource: "none", active: false },
@@ -140,6 +153,7 @@ const state: StoreState = {
       { id: "custom", name: "Custom OpenAI-Compatible", defaultModel: "openai/gpt-5.4", authType: "optional_api_key", credentialRequired: false, credentialConfigured: false, credentialSource: "none", active: false },
       { id: "vllm", name: "vLLM/Local", defaultModel: "meta-llama/Llama-3.1-8B-Instruct", authType: "optional_api_key", credentialRequired: false, credentialConfigured: false, credentialSource: "none", active: false },
     ],
+    credentials: { custom: [] },
     permissions: {
       items: [
         ["create_agent", "Create agent", "Create a persistent specialist Agent definition."],
@@ -297,6 +311,9 @@ const state: StoreState = {
     },
   ],
   artifactsByProject: {
+    [firstProjectId]: [],
+  },
+  sourcesByProject: {
     [firstProjectId]: [],
   },
   datasetsByProject: {
@@ -484,6 +501,52 @@ export async function listSessions(agentId: string): Promise<{ sessions: Session
   return { sessions: getSessions(agentId) };
 }
 
+export async function updateGmScienceSession(
+  sessionId: string,
+  input: { title: string },
+): Promise<SessionSummary> {
+  const title = input.title.trim();
+  if (!title) {
+    throw new Error("Session title is required.");
+  }
+  let updated: SessionSummary | undefined;
+  for (const [agentId, sessions] of Object.entries(state.sessionsByAgent)) {
+    state.sessionsByAgent[agentId] = sessions.map((session) => {
+      if (session.id !== sessionId) {
+        return session;
+      }
+      updated = { ...session, title, updatedAt: now() };
+      return updated;
+    });
+  }
+  if (!updated) {
+    throw new Error(`Session ${sessionId} was not found.`);
+  }
+  return updated;
+}
+
+export async function deleteGmScienceSession(sessionId: string): Promise<void> {
+  let removed: SessionSummary | undefined;
+  for (const [agentId, sessions] of Object.entries(state.sessionsByAgent)) {
+    const existing = sessions.find((session) => session.id === sessionId);
+    if (existing) {
+      removed = existing;
+      state.sessionsByAgent[agentId] = sessions.filter((session) => session.id !== sessionId);
+    }
+  }
+  if (!removed) {
+    throw new Error(`Session ${sessionId} was not found.`);
+  }
+  delete state.messagesBySession[sessionId];
+  delete state.sessionPoliciesBySession[sessionId];
+  state.projects = state.projects.map((project) => project.id === removed?.projectId
+    ? { ...project, sessionsCount: Math.max(0, project.sessionsCount - 1), updatedAt: now() }
+    : project);
+  if (state.selectedSessionId === sessionId) {
+    state.selectedSessionId = "";
+  }
+}
+
 export async function loadSession(sessionId: string): Promise<{ messages: ChatMessage[] }> {
   return { messages: getMessages(sessionId) };
 }
@@ -557,6 +620,14 @@ function buildMockSessionPolicy(sessionId: string): GmScienceSessionPolicy {
   if (!session || !project || !policy) {
     throw new Error(`Session ${sessionId} is not attached to a Project.`);
   }
+  return buildMockPolicyProjection(project, sessionId, policy);
+}
+
+function buildMockPolicyProjection(
+  project: GmScienceProject,
+  sessionId: string,
+  policy: GmScienceSessionPolicyValues,
+): GmScienceSessionPolicy {
   const specialists = capabilityDefinitions
     .filter((item) => item.kind === "specialist" && item.id !== "research_reviewer")
     .filter((item) => project.enabledSpecialists.includes(item.id) && item.available && item.status === "ready")
@@ -570,10 +641,22 @@ function buildMockSessionPolicy(sessionId: string): GmScienceSessionPolicy {
     reviewerAvailable: Boolean(
       reviewer && project.enabledSpecialists.includes(reviewer.id) && reviewer.available && reviewer.status === "ready",
     ),
-    reviewerModels: [{ id: "default", name: "Default" }],
+    reviewerModels: [
+      { id: "default", name: "Default" },
+      { id: "main", name: "Main model" },
+      { id: "subagent", name: "Subagent model" },
+    ],
     computeTargets: [{ id: "local", name: "Local" }],
     issues: [],
   };
+}
+
+function buildMockProjectPolicy(projectId: string): GmScienceSessionPolicy {
+  const project = state.projects.find((item) => item.id === projectId);
+  if (!project) {
+    throw new Error(`Project ${projectId} was not found.`);
+  }
+  return buildMockPolicyProjection(project, "", project.sessionPolicyDefaults);
 }
 
 export async function getGmScienceSessionPolicy(sessionId: string): Promise<GmScienceSessionPolicy> {
@@ -594,6 +677,30 @@ export async function updateGmScienceSessionPolicy(
   }
   state.sessionPoliciesBySession[sessionId] = next;
   return buildMockSessionPolicy(sessionId);
+}
+
+export async function getGmScienceProjectSessionPolicyDefaults(
+  projectId: string,
+): Promise<GmScienceSessionPolicy> {
+  return buildMockProjectPolicy(projectId);
+}
+
+export async function updateGmScienceProjectSessionPolicyDefaults(
+  projectId: string,
+  input: UpdateGmScienceSessionPolicyInput,
+): Promise<GmScienceSessionPolicy> {
+  const current = buildMockProjectPolicy(projectId);
+  const next = cloneSessionPolicyValues({ ...current, ...input });
+  if (next.specialistId && !current.specialists.some((item) => item.id === next.specialistId)) {
+    throw new Error(`Specialist '${next.specialistId}' is not ready for this Project.`);
+  }
+  if (next.autoReviewEnabled && !current.reviewerAvailable) {
+    throw new Error("Research Reviewer is not ready for this Project.");
+  }
+  state.projects = state.projects.map((project) => project.id === projectId
+    ? { ...project, sessionPolicyDefaults: next, updatedAt: now() }
+    : project);
+  return buildMockProjectPolicy(projectId);
 }
 
 const capabilityDefinitions: Omit<GmScienceCapability, "projectEnabled">[] = [
@@ -656,6 +763,7 @@ const capabilityDefinitions: Omit<GmScienceCapability, "projectEnabled">[] = [
       implementation_status: "installed",
       file_count: 2,
       files_truncated: false,
+      manageable: true,
     },
   },
   {
@@ -752,6 +860,7 @@ const capabilityDefinitions: Omit<GmScienceCapability, "projectEnabled">[] = [
       configured_header_names: [],
       runtime_header_names: ["X-Project-Id"],
       catalog_group: "custom",
+      manageable: true,
     },
   },
   {
@@ -809,9 +918,56 @@ const capabilityDefinitions: Omit<GmScienceCapability, "projectEnabled">[] = [
       assigned_connectors: ["pubmed", "openalex"],
       execution_mode: "agent_tool",
       additional_instructions: "Prefer primary sources and state evidence limitations.",
+      manageable: true,
     },
   },
 ];
+
+const editableCapabilityDefinitions = new Map<string, GmScienceCapabilityDefinition>([
+  [
+    "skill:local-analysis",
+    {
+      id: "local-analysis",
+      kind: "skill",
+      name: "Local Analysis",
+      description: "Analyze local tabular datasets.",
+      content: "Use local Python tools to inspect and analyze Project datasets.",
+      version: "0.1.0",
+      license: "Private",
+    },
+  ],
+  [
+    "connector:mcp:filesystem",
+    {
+      id: "mcp:filesystem",
+      kind: "connector",
+      name: "Filesystem",
+      description: "Configured MCP server over stdio.",
+      connectionType: "local",
+      commandLine: "mcp-filesystem",
+      url: "",
+      toolFilter: [],
+      requireConfirmation: false,
+      headerCredentialRefs: {},
+      environmentCredentialRefs: {},
+    },
+  ],
+  [
+    "specialist:literature_scout",
+    {
+      id: "literature_scout",
+      kind: "specialist",
+      name: "Literature Scout",
+      description: "Find focused research evidence with assigned literature capabilities.",
+      instructions: "Prefer primary sources and state evidence limitations.",
+      skills: ["literature-review"],
+      connectors: ["pubmed", "openalex"],
+      connectorTools: {},
+    },
+  ],
+]);
+
+const skillDrafts = new Map<string, GmScienceSkillDraft>();
 
 function projectCapabilityIds(project: GmScienceProject, kind: GmScienceCapability["kind"]): string[] {
   if (kind === "skill") {
@@ -849,7 +1005,7 @@ function createMockCapability(
 }
 
 export async function createGmScienceSkill(input: CreateGmScienceSkillInput): Promise<GmScienceCapability> {
-  return createMockCapability({
+  const created = createMockCapability({
     id: input.id,
     kind: "skill",
     name: input.name,
@@ -862,15 +1018,23 @@ export async function createGmScienceSkill(input: CreateGmScienceSkillInput): Pr
     defaultEnabled: false,
     status: "ready",
     statusDetail: "",
-    metadata: { catalog_group: "personal", registry_source: "workspace" },
+    metadata: { catalog_group: "personal", registry_source: "workspace", manageable: true },
   });
+  editableCapabilityDefinitions.set(`skill:${input.id}`, {
+    ...input,
+    kind: "skill",
+    version: "",
+    license: "",
+  });
+  return created;
 }
 
 export async function createGmScienceConnector(
   input: CreateGmScienceConnectorInput,
 ): Promise<GmScienceCapability> {
-  return createMockCapability({
-    id: `mcp:${input.id}`,
+  const id = `mcp:${input.id}`;
+  const created = createMockCapability({
+    id,
     kind: "connector",
     name: input.name,
     description: input.description,
@@ -887,14 +1051,25 @@ export async function createGmScienceConnector(
       connector_type: "mcp",
       server_name: input.id,
       transport: input.connectionType === "remote" ? "http" : "stdio",
+      manageable: true,
     },
   });
+  editableCapabilityDefinitions.set(`connector:${id}`, {
+    ...input,
+    id,
+    kind: "connector",
+    toolFilter: input.toolFilter ?? [],
+    requireConfirmation: input.requireConfirmation ?? false,
+    headerCredentialRefs: { ...(input.headerCredentialRefs ?? {}) },
+    environmentCredentialRefs: { ...(input.environmentCredentialRefs ?? {}) },
+  });
+  return created;
 }
 
 export async function createGmScienceSpecialist(
   input: CreateGmScienceSpecialistInput,
 ): Promise<GmScienceCapability> {
-  return createMockCapability({
+  const created = createMockCapability({
     id: input.id,
     kind: "specialist",
     name: input.name,
@@ -915,8 +1090,148 @@ export async function createGmScienceSpecialist(
       additional_instructions: input.instructions,
       model: "inherit",
       execution_mode: "agent_tool",
+      manageable: true,
     },
   });
+  editableCapabilityDefinitions.set(`specialist:${input.id}`, {
+    ...input,
+    connectorTools: input.connectorTools ?? {},
+    kind: "specialist",
+  });
+  return created;
+}
+
+export async function importGmScienceSkill(input: ImportGmScienceSkillInput): Promise<GmScienceCapability> {
+  const fallback = input.sourceType === "github"
+    ? input.url?.split("/").filter(Boolean).at(-1)
+    : input.sourcePath?.split(/[\\/]/).filter(Boolean).at(-1)?.replace(/\.(zip|md)$/i, "");
+  const id = input.id?.trim() || fallback || "imported-skill";
+  return createGmScienceSkill({
+    id,
+    name: id.replace(/[-_]+/g, " ").replace(/^./, (value) => value.toUpperCase()),
+    description: `Imported from ${input.sourceType}.`,
+    content: "Imported Skill content is available in the local registry.",
+  });
+}
+
+export async function listGmScienceSkillDrafts(): Promise<GmScienceSkillDraft[]> {
+  return [...skillDrafts.values()]
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    .map((draft) => structuredClone(draft));
+}
+
+export async function saveGmScienceSkillDraft(
+  input: CreateGmScienceSkillInput,
+): Promise<GmScienceSkillDraft> {
+  const draft: GmScienceSkillDraft = {
+    ...input,
+    version: input.version ?? "",
+    license: input.license ?? "",
+    updatedAt: now(),
+  };
+  skillDrafts.set(draft.id, structuredClone(draft));
+  return structuredClone(draft);
+}
+
+export async function publishGmScienceSkillDraft(draftId: string): Promise<GmScienceCapability> {
+  const draft = skillDrafts.get(draftId);
+  if (!draft) {
+    throw new Error(`Skill draft '${draftId}' was not found.`);
+  }
+  const capability = await createGmScienceSkill(draft);
+  skillDrafts.delete(draftId);
+  return capability;
+}
+
+export async function deleteGmScienceSkillDraft(draftId: string): Promise<void> {
+  if (!skillDrafts.delete(draftId)) {
+    throw new Error(`Skill draft '${draftId}' was not found.`);
+  }
+}
+
+export async function getGmScienceCapabilityDefinition(
+  kind: GmScienceCapabilityKind,
+  capabilityId: string,
+): Promise<GmScienceCapabilityDefinition> {
+  const definition = editableCapabilityDefinitions.get(`${kind}:${capabilityId}`);
+  if (!definition) {
+    throw new Error(`Editable ${kind} '${capabilityId}' was not found.`);
+  }
+  return structuredClone(definition);
+}
+
+export async function updateGmScienceCapability(
+  kind: GmScienceCapabilityKind,
+  capabilityId: string,
+  input: CreateGmScienceSkillInput | CreateGmScienceConnectorInput | CreateGmScienceSpecialistInput,
+): Promise<GmScienceCapability> {
+  const index = capabilityDefinitions.findIndex((item) => item.kind === kind && item.id === capabilityId);
+  if (index < 0 || !editableCapabilityDefinitions.has(`${kind}:${capabilityId}`)) {
+    throw new Error(`Editable ${kind} '${capabilityId}' was not found.`);
+  }
+  const current = capabilityDefinitions[index];
+  const metadata = { ...current.metadata, manageable: true };
+  if (kind === "connector") {
+    const connector = input as CreateGmScienceConnectorInput;
+    Object.assign(metadata, {
+      transport: connector.connectionType === "remote" ? "http" : "stdio",
+      endpoint_origin: connector.url ?? "",
+      command_name: connector.commandLine?.split(/\s+/)[0] ?? "",
+    });
+    editableCapabilityDefinitions.set(`connector:${capabilityId}`, {
+      ...connector,
+      id: capabilityId,
+      kind: "connector",
+      toolFilter: connector.toolFilter ?? [],
+      requireConfirmation: connector.requireConfirmation ?? false,
+      headerCredentialRefs: { ...(connector.headerCredentialRefs ?? {}) },
+      environmentCredentialRefs: { ...(connector.environmentCredentialRefs ?? {}) },
+    });
+  } else if (kind === "specialist") {
+    const specialist = input as CreateGmScienceSpecialistInput;
+    Object.assign(metadata, {
+      assigned_skills: [...specialist.skills],
+      assigned_connectors: [...specialist.connectors],
+      additional_instructions: specialist.instructions,
+    });
+    editableCapabilityDefinitions.set(`specialist:${capabilityId}`, {
+      ...specialist,
+      id: capabilityId,
+      connectorTools: specialist.connectorTools ?? {},
+      kind: "specialist",
+    });
+  } else {
+    const skill = input as CreateGmScienceSkillInput;
+    editableCapabilityDefinitions.set(`skill:${capabilityId}`, {
+      ...skill,
+      id: capabilityId,
+      kind: "skill",
+      version: "",
+      license: "",
+    });
+  }
+  const next = { ...current, name: input.name, description: input.description, metadata };
+  capabilityDefinitions[index] = next;
+  return { ...next, projectEnabled: null };
+}
+
+export async function deleteGmScienceCapability(
+  kind: GmScienceCapabilityKind,
+  capabilityId: string,
+): Promise<void> {
+  if (!editableCapabilityDefinitions.has(`${kind}:${capabilityId}`)) {
+    throw new Error(`Editable ${kind} '${capabilityId}' was not found.`);
+  }
+  const referencedProject = state.projects.find((project) => projectCapabilityIds(project, kind).includes(capabilityId));
+  if (referencedProject) {
+    throw new Error(`${kind} '${capabilityId}' is still in use by Project '${referencedProject.name}'.`);
+  }
+  capabilityDefinitions.splice(
+    0,
+    capabilityDefinitions.length,
+    ...capabilityDefinitions.filter((item) => !(item.kind === kind && item.id === capabilityId)),
+  );
+  editableCapabilityDefinitions.delete(`${kind}:${capabilityId}`);
 }
 
 function cloneSettings(): GmScienceSettings {
@@ -929,6 +1244,14 @@ export async function getGmScienceSettings(): Promise<GmScienceSettings> {
 
 export async function getGmScienceStorage(): Promise<GmScienceStorageSnapshot> {
   return structuredClone(state.storage);
+}
+
+export async function changeGmScienceDataLocation(): Promise<{
+  canceled: boolean;
+  migrated: boolean;
+  dataLocation: string;
+}> {
+  return { canceled: true, migrated: false, dataLocation: state.storage.dataLocation };
 }
 
 export async function getGmScienceUsage(window: GmScienceUsageWindow): Promise<GmScienceUsageSnapshot> {
@@ -956,6 +1279,14 @@ export async function updateGmScienceSettings(
 ): Promise<GmScienceSettingsUpdateResult> {
   if (input.memoryEnabled !== undefined) {
     state.settings.memory.enabled = input.memoryEnabled;
+  }
+  if (input.general) {
+    state.settings.general = {
+      ...state.settings.general,
+      reasoningEffort: input.general.reasoningEffort ?? state.settings.general.reasoningEffort,
+      subagentModel: input.general.subagentModel ?? state.settings.general.subagentModel,
+      licenseUseIntent: input.general.licenseUseIntent ?? state.settings.general.licenseUseIntent,
+    };
   }
   if (input.model) {
     const selected = state.settings.providers.find((provider) => provider.id === input.model?.provider);
@@ -993,6 +1324,32 @@ export async function updateGmScienceSettings(
     state.settings.literature.openalex.apiKeyConfigured,
     input.openalexApiKey,
   );
+  if (input.customCredential?.operation === "upsert") {
+    const credential = input.customCredential;
+    if (!credential.name?.trim() || !credential.value?.trim()) {
+      throw new Error("Custom credential name and secret value are required.");
+    }
+    state.settings.credentials.custom = [
+      ...state.settings.credentials.custom.filter((item) => item.id !== credential.id),
+      { id: credential.id, name: credential.name.trim(), configured: true },
+    ];
+  }
+  if (input.customCredential?.operation === "remove") {
+    const credentialId = input.customCredential.id;
+    const inUse = [...editableCapabilityDefinitions.values()].some((definition) => (
+      definition.kind === "connector"
+      && [
+        ...Object.values(definition.headerCredentialRefs),
+        ...Object.values(definition.environmentCredentialRefs),
+      ].includes(credentialId)
+    ));
+    if (inUse) {
+      throw new Error(`Custom credential '${credentialId}' is still used by a Connector.`);
+    }
+    state.settings.credentials.custom = state.settings.credentials.custom.filter(
+      (item) => item.id !== credentialId,
+    );
+  }
   if (input.permissionGrants) {
     state.settings.permissions.items = state.settings.permissions.items.map((permission) => (
       Object.hasOwn(input.permissionGrants ?? {}, permission.id)
@@ -1277,6 +1634,33 @@ export async function listGmScienceResources(
   };
 }
 
+export async function listGmScienceProjectSources(projectId: string): Promise<GmScienceProjectSource[]> {
+  return (state.sourcesByProject[projectId] ?? []).map((source) => ({ ...source }));
+}
+
+export async function importGmScienceProjectSource(
+  projectId: string,
+  input: { sourcePath: string; kind: "file" | "folder" },
+): Promise<GmScienceProjectSource> {
+  const label = input.sourcePath.split(/[\\/]/).filter(Boolean).at(-1) ?? "Imported source";
+  const source: GmScienceProjectSource = {
+    id: `source_${crypto.randomUUID()}`,
+    kind: input.kind,
+    label,
+    relativeRoot: `references/${label}`,
+    fileCount: input.kind === "file" ? 1 : 0,
+    sizeBytes: 0,
+    importedAt: now(),
+    available: true,
+  };
+  state.sourcesByProject[projectId] = [...(state.sourcesByProject[projectId] ?? []), source];
+  return { ...source };
+}
+
+export async function deleteGmScienceProjectSource(projectId: string, sourceId: string): Promise<void> {
+  state.sourcesByProject[projectId] = (state.sourcesByProject[projectId] ?? []).filter((source) => source.id !== sourceId);
+}
+
 const SAFE_DETAIL_METADATA_KEYS = new Set([
   "abstract",
   "authors",
@@ -1343,6 +1727,8 @@ export async function getGmScienceResourceDetail(
         contentIncluded: false,
         contentChars: 0,
         truncated: false,
+        displayMode: "text",
+        table: null,
       },
       artifact: artifact
         ? {
@@ -1410,6 +1796,39 @@ export async function createGmScienceArtifact(
       : project,
   );
   return { artifact };
+}
+
+export async function updateGmScienceArtifact(
+  projectId: string,
+  artifactId: string,
+  input: UpdateGmScienceArtifactInput,
+): Promise<{ artifact: GmScienceArtifact }> {
+  const artifacts = state.artifactsByProject[projectId] ?? [];
+  const index = artifacts.findIndex((item) => item.id === artifactId);
+  if (index < 0) {
+    throw new Error(`Artifact '${artifactId}' was not found.`);
+  }
+  const current = artifacts[index];
+  const metadata = { ...current.metadata };
+  if (input.starred !== undefined) {
+    metadata.gm_science_starred = input.starred;
+  }
+  if (input.hidden !== undefined) {
+    metadata.gm_science_hidden = input.hidden;
+  }
+  const artifact = {
+    ...current,
+    title: input.title?.trim() || current.title,
+    metadata,
+    updatedAt: new Date().toISOString(),
+  };
+  artifacts[index] = artifact;
+  return { artifact: structuredClone(artifact) };
+}
+
+export async function deleteGmScienceArtifact(projectId: string, artifactId: string): Promise<void> {
+  const artifacts = state.artifactsByProject[projectId] ?? [];
+  state.artifactsByProject[projectId] = artifacts.filter((item) => item.id !== artifactId);
 }
 
 export async function listGmScienceRuns(projectId: string): Promise<{ runs: GmScienceRun[] }> {
@@ -1666,13 +2085,30 @@ export function subscribe(listener: EventSink): () => void {
 
 export async function sendMessage(input: SendMessageInput): Promise<{ runId: string }> {
   const runId = `run-${crypto.randomUUID()}`;
+  const referencedSessions = Object.values(state.sessionsByAgent)
+    .flat()
+    .filter((session) => input.sessionRefs?.some((reference) => reference.id === session.id));
   const userMessage: ChatMessage = {
     id: `user-${crypto.randomUUID()}`,
     sessionId: input.sessionId,
     role: "user",
     status: "completed",
     createdAt: now(),
-    parts: [{ type: "markdown", text: input.text }],
+    parts: [
+      { type: "markdown", text: input.text },
+      ...referencedSessions.map((session) => ({
+        type: "session_ref" as const,
+        sessionId: session.id,
+        displayName: session.title,
+        truncated: false,
+      })),
+      ...(input.skillRefs ?? []).map((skill) => ({
+        type: "skill_ref" as const,
+        skillId: skill.id,
+        displayName: skill.id,
+        truncated: false,
+      })),
+    ],
   };
   const sessionList = state.sessionsByAgent[input.agentId] ?? [];
   const session = sessionList.find((item) => item.id === input.sessionId);

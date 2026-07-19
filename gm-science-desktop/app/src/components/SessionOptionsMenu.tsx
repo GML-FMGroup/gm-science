@@ -1,4 +1,4 @@
-import type { GmScienceSessionPolicy, UpdateGmScienceSessionPolicyInput } from "../types";
+import type { GmScienceReviewerModel, GmScienceSessionPolicy, UpdateGmScienceSessionPolicyInput } from "../types";
 
 interface SessionOptionsMenuProps {
   policy: GmScienceSessionPolicy | null;
@@ -6,6 +6,7 @@ interface SessionOptionsMenuProps {
   saving: boolean;
   error: string | null;
   onChange: (input: UpdateGmScienceSessionPolicyInput) => void;
+  variant?: "menu" | "panel";
 }
 
 interface ToggleRowProps {
@@ -32,11 +33,11 @@ function ToggleRow({ label, checked, disabled = false, onChange }: ToggleRowProp
 }
 
 /** Render the Session-scoped runtime policy controls used by the message composer. */
-export function SessionOptionsMenu({ policy, loading, saving, error, onChange }: SessionOptionsMenuProps) {
+export function SessionOptionsMenu({ policy, loading, saving, error, onChange, variant = "menu" }: SessionOptionsMenuProps) {
   const disabled = loading || saving || !policy;
 
   return (
-    <div className="session-options-menu" role="menu" aria-label="Session options">
+    <div className={`session-options-menu ${variant === "panel" ? "settings-policy-controls" : ""}`} role={variant === "menu" ? "menu" : undefined} aria-label={variant === "menu" ? "Session options" : "Project Session defaults"}>
       {loading && !policy ? <div className="session-options-state">Loading...</div> : null}
       {policy ? (
         <>
@@ -58,7 +59,7 @@ export function SessionOptionsMenu({ policy, loading, saving, error, onChange }:
               aria-label="Reviewer model"
               value={policy.reviewerModel}
               disabled={disabled}
-              onChange={(event) => onChange({ reviewerModel: event.target.value as "default" })}
+              onChange={(event) => onChange({ reviewerModel: event.target.value as GmScienceReviewerModel })}
             >
               {policy.reviewerModels.map((option) => (
                 <option key={option.id} value={option.id}>{option.name}</option>

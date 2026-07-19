@@ -23,6 +23,18 @@ export type MessagePart =
       contentStatus: string;
       truncated: boolean;
     }
+  | {
+      type: "session_ref";
+      sessionId: string;
+      displayName: string;
+      truncated: boolean;
+    }
+  | {
+      type: "skill_ref";
+      skillId: string;
+      displayName: string;
+      truncated: boolean;
+    }
   | { type: "step_ref"; stepId: string; title: string; status: "running" | "completed" | "failed"; detail: string };
 
 export interface ConnectionTarget {
@@ -89,7 +101,7 @@ export interface GmScienceSessionPolicyValues {
   autoReviewEnabled: boolean;
   memoryEnabled: boolean;
   specialistId: string;
-  reviewerModel: "default";
+  reviewerModel: GmScienceReviewerModel;
   computeTarget: "local";
 }
 
@@ -118,9 +130,11 @@ export interface UpdateGmScienceSessionPolicyInput {
   autoReviewEnabled?: boolean;
   memoryEnabled?: boolean;
   specialistId?: string;
-  reviewerModel?: "default";
+  reviewerModel?: GmScienceReviewerModel;
   computeTarget?: "local";
 }
+
+export type GmScienceReviewerModel = "default" | "main" | "subagent";
 
 export interface GmScienceProject {
   id: string;
@@ -181,6 +195,14 @@ export interface CreateGmScienceSkillInput {
   name: string;
   description: string;
   content: string;
+  version?: string;
+  license?: string;
+}
+
+export interface GmScienceSkillDraft extends CreateGmScienceSkillInput {
+  version: string;
+  license: string;
+  updatedAt: string;
 }
 
 export interface CreateGmScienceConnectorInput {
@@ -190,6 +212,10 @@ export interface CreateGmScienceConnectorInput {
   connectionType: "remote" | "local";
   url?: string;
   commandLine?: string;
+  toolFilter?: string[];
+  requireConfirmation?: boolean;
+  headerCredentialRefs?: Record<string, string>;
+  environmentCredentialRefs?: Record<string, string>;
 }
 
 export interface CreateGmScienceSpecialistInput {
@@ -199,6 +225,45 @@ export interface CreateGmScienceSpecialistInput {
   instructions: string;
   skills: string[];
   connectors: string[];
+  connectorTools?: Record<string, string[]>;
+}
+
+export interface GmScienceSkillDefinition extends CreateGmScienceSkillInput {
+  kind: "skill";
+  version: string;
+  license: string;
+}
+
+export interface GmScienceConnectorDefinition extends CreateGmScienceConnectorInput {
+  kind: "connector";
+  toolFilter: string[];
+  requireConfirmation: boolean;
+  headerCredentialRefs: Record<string, string>;
+  environmentCredentialRefs: Record<string, string>;
+}
+
+export interface GmScienceSpecialistDefinition extends CreateGmScienceSpecialistInput {
+  kind: "specialist";
+  connectorTools: Record<string, string[]>;
+}
+
+export type GmScienceCapabilityDefinition =
+  | GmScienceSkillDefinition
+  | GmScienceConnectorDefinition
+  | GmScienceSpecialistDefinition;
+
+export interface ImportGmScienceSkillInput {
+  sourceType: "local" | "github";
+  sourcePath?: string;
+  url?: string;
+  id?: string;
+}
+
+export type GmScienceSkillSourcePickerMode = "file" | "directory";
+
+export interface GmScienceSkillSourceSelection {
+  canceled: boolean;
+  sourcePath: string;
 }
 
 export interface UpdateGmScienceCapabilitiesInput {
@@ -220,6 +285,12 @@ export interface GmScienceProviderOption {
   credentialConfigured: boolean;
   credentialSource: GmScienceCredentialSource;
   active: boolean;
+}
+
+export interface GmScienceCustomCredential {
+  id: string;
+  name: string;
+  configured: boolean;
 }
 
 export type GmScienceInfrastructureStatus =
@@ -314,6 +385,12 @@ export interface GmScienceStorageSnapshot {
   };
 }
 
+export interface GmScienceDataLocationChangeResult {
+  canceled: boolean;
+  migrated: boolean;
+  dataLocation: string;
+}
+
 export type GmScienceUsageWindow = "24h" | "7d" | "30d";
 
 export interface GmScienceUsageSnapshot {
@@ -364,7 +441,16 @@ export interface GmScienceSettings {
   memory: {
     enabled: boolean;
   };
+  general: {
+    reasoningEffort: "low" | "medium" | "high";
+    reasoningEffortSupported: boolean;
+    subagentModel: string;
+    licenseUseIntent: "commercial" | "non_commercial";
+  };
   providers: GmScienceProviderOption[];
+  credentials: {
+    custom: GmScienceCustomCredential[];
+  };
   permissions: {
     items: GmSciencePermissionGrant[];
   };
@@ -399,6 +485,11 @@ export interface GmScienceSecretMutation {
 export interface UpdateGmScienceSettingsInput {
   projectId?: string;
   memoryEnabled?: boolean;
+  general?: {
+    reasoningEffort?: "low" | "medium" | "high";
+    subagentModel?: string;
+    licenseUseIntent?: "commercial" | "non_commercial";
+  };
   model?: {
     provider: string;
     model: string;
@@ -407,6 +498,12 @@ export interface UpdateGmScienceSettingsInput {
   pubmedEmail?: string;
   pubmedApiKey?: GmScienceSecretMutation;
   openalexApiKey?: GmScienceSecretMutation;
+  customCredential?: {
+    operation: "upsert" | "remove";
+    id: string;
+    name?: string;
+    value?: string;
+  };
   permissionGrants?: Record<string, boolean>;
   network?: {
     enabled?: boolean;
@@ -556,12 +653,37 @@ export interface GmScienceResourceSelection {
   versionOrHash: string;
 }
 
+export interface GmScienceProjectSource {
+  id: string;
+  kind: "file" | "folder";
+  label: string;
+  relativeRoot: string;
+  fileCount: number;
+  sizeBytes: number;
+  importedAt: string;
+  available: boolean;
+}
+
+export interface GmScienceSessionSelection {
+  id: string;
+}
+
+export interface GmScienceSkillSelection {
+  id: string;
+}
+
 export interface GmScienceResourcePreview {
   content: string;
   contentStatus: GmScienceResourceContentStatus;
   contentIncluded: boolean;
   contentChars: number;
   truncated: boolean;
+  displayMode: "text" | "markdown" | "json" | "table";
+  table: {
+    columns: string[];
+    rows: string[][];
+    truncated: boolean;
+  } | null;
 }
 
 export interface GmScienceArtifactDetail {
@@ -601,6 +723,12 @@ export interface CreateGmScienceArtifactInput {
   sessionId?: string;
   metadata?: Record<string, unknown>;
   provenance?: Record<string, unknown>;
+}
+
+export interface UpdateGmScienceArtifactInput {
+  title?: string;
+  starred?: boolean;
+  hidden?: boolean;
 }
 
 export type GmScienceRunStatus =
@@ -801,6 +929,8 @@ export interface SendMessageInput {
   text: string;
   projectId?: string;
   resourceRefs?: GmScienceResourceSelection[];
+  sessionRefs?: GmScienceSessionSelection[];
+  skillRefs?: GmScienceSkillSelection[];
 }
 
 export interface PpxClientApi {
@@ -810,6 +940,8 @@ export interface PpxClientApi {
   runRuntimeCommand(command: RuntimeCommand): Promise<RuntimeStatus>;
   listSessions(agentId: string): Promise<{ sessions: SessionSummary[] }>;
   createSession(agentId: string, projectId?: string): Promise<{ session: SessionSummary }>;
+  updateGmScienceSession(sessionId: string, input: { title: string }): Promise<SessionSummary>;
+  deleteGmScienceSession(sessionId: string): Promise<void>;
   loadSession(sessionId: string): Promise<{ messages: ChatMessage[] }>;
   sendMessage(input: SendMessageInput): Promise<{ runId: string }>;
   listGmScienceProjects(): Promise<{ projects: GmScienceProject[] }>;
@@ -819,6 +951,22 @@ export interface PpxClientApi {
   createGmScienceSkill(input: CreateGmScienceSkillInput): Promise<GmScienceCapability>;
   createGmScienceConnector(input: CreateGmScienceConnectorInput): Promise<GmScienceCapability>;
   createGmScienceSpecialist(input: CreateGmScienceSpecialistInput): Promise<GmScienceCapability>;
+  importGmScienceSkill(input: ImportGmScienceSkillInput): Promise<GmScienceCapability>;
+  listGmScienceSkillDrafts(): Promise<GmScienceSkillDraft[]>;
+  saveGmScienceSkillDraft(input: CreateGmScienceSkillInput): Promise<GmScienceSkillDraft>;
+  publishGmScienceSkillDraft(draftId: string): Promise<GmScienceCapability>;
+  deleteGmScienceSkillDraft(draftId: string): Promise<void>;
+  selectGmScienceSkillSource(mode: GmScienceSkillSourcePickerMode): Promise<GmScienceSkillSourceSelection>;
+  getGmScienceCapabilityDefinition(
+    kind: GmScienceCapabilityKind,
+    capabilityId: string,
+  ): Promise<GmScienceCapabilityDefinition>;
+  updateGmScienceCapability(
+    kind: GmScienceCapabilityKind,
+    capabilityId: string,
+    input: CreateGmScienceSkillInput | CreateGmScienceConnectorInput | CreateGmScienceSpecialistInput,
+  ): Promise<GmScienceCapability>;
+  deleteGmScienceCapability(kind: GmScienceCapabilityKind, capabilityId: string): Promise<void>;
   updateGmScienceProjectCapabilities(
     projectId: string,
     input: UpdateGmScienceCapabilitiesInput,
@@ -827,6 +975,7 @@ export interface PpxClientApi {
   updateGmScienceSettings(input: UpdateGmScienceSettingsInput): Promise<GmScienceSettingsUpdateResult>;
   checkGmScienceComputeTarget(targetId: string): Promise<GmScienceComputeHealth>;
   getGmScienceStorage(): Promise<GmScienceStorageSnapshot>;
+  changeGmScienceDataLocation(): Promise<GmScienceDataLocationChangeResult>;
   getGmScienceUsage(window: GmScienceUsageWindow): Promise<GmScienceUsageSnapshot>;
   getGmScienceMemory(projectId: string): Promise<GmScienceMemoryWorkspace>;
   createGmScienceMemoryNote(
@@ -850,13 +999,33 @@ export interface PpxClientApi {
     sessionId: string,
     input: UpdateGmScienceSessionPolicyInput,
   ): Promise<GmScienceSessionPolicy>;
+  getGmScienceProjectSessionPolicyDefaults(projectId: string): Promise<GmScienceSessionPolicy>;
+  updateGmScienceProjectSessionPolicyDefaults(
+    projectId: string,
+    input: UpdateGmScienceSessionPolicyInput,
+  ): Promise<GmScienceSessionPolicy>;
   listGmScienceArtifacts(projectId: string): Promise<{ artifacts: GmScienceArtifact[] }>;
   listGmScienceResources(projectId: string, query?: string): Promise<{ resources: GmScienceResource[] }>;
+  listGmScienceProjectSources(projectId: string): Promise<GmScienceProjectSource[]>;
+  selectGmScienceProjectSource(kind: "file" | "folder"): Promise<GmScienceSkillSourceSelection>;
+  importGmScienceProjectSource(
+    projectId: string,
+    input: { sourcePath: string; kind: "file" | "folder" },
+  ): Promise<GmScienceProjectSource>;
+  deleteGmScienceProjectSource(projectId: string, sourceId: string): Promise<void>;
+  downloadGmScienceResource(projectId: string, resourceId: string): Promise<{ canceled: boolean; destination: string }>;
+  revealGmScienceResource(projectId: string, resourceId: string): Promise<void>;
   getGmScienceResourceDetail(projectId: string, resourceId: string): Promise<{ detail: GmScienceResourceDetail }>;
   createGmScienceArtifact(
     projectId: string,
     input: CreateGmScienceArtifactInput,
   ): Promise<{ artifact: GmScienceArtifact }>;
+  updateGmScienceArtifact(
+    projectId: string,
+    artifactId: string,
+    input: UpdateGmScienceArtifactInput,
+  ): Promise<{ artifact: GmScienceArtifact }>;
+  deleteGmScienceArtifact(projectId: string, artifactId: string): Promise<void>;
   listGmScienceRuns(projectId: string): Promise<{ runs: GmScienceRun[] }>;
   getGmScienceRun(projectId: string, taskId: string): Promise<{ run: GmScienceRun }>;
   createGmSciencePythonRun(

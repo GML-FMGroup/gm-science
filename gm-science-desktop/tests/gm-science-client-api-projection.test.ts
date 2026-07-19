@@ -94,6 +94,12 @@ describe("gm-science client-api projection", () => {
       normalizeGmScienceSettings({
         model: { provider: "openai_codex", model: "openai-codex/gpt-5.5" },
         memory: { enabled: true },
+        general: {
+          reasoning_effort: "high",
+          reasoning_effort_supported: true,
+          subagent_model: "openai-codex/gpt-5.4-mini",
+          license_use_intent: "commercial",
+        },
         providers: [
           {
             id: "openai_codex",
@@ -107,6 +113,9 @@ describe("gm-science client-api projection", () => {
             access_token: "must-not-project",
           },
         ],
+        credentials: {
+          custom: [{ id: "lab-token", name: "Lab token", configured: true, value: "must-not-project" }],
+        },
         permissions: {
           items: [{
             id: "attach_skill",
@@ -170,6 +179,12 @@ describe("gm-science client-api projection", () => {
     ).toEqual({
       model: { provider: "openai_codex", model: "openai-codex/gpt-5.5" },
       memory: { enabled: true },
+      general: {
+        reasoningEffort: "high",
+        reasoningEffortSupported: true,
+        subagentModel: "openai-codex/gpt-5.4-mini",
+        licenseUseIntent: "commercial",
+      },
       providers: [
         {
           id: "openai_codex",
@@ -182,6 +197,9 @@ describe("gm-science client-api projection", () => {
           active: true,
         },
       ],
+      credentials: {
+        custom: [{ id: "lab-token", name: "Lab token", configured: true }],
+      },
       permissions: {
         items: [{
           id: "attach_skill",
@@ -515,6 +533,7 @@ describe("gm-science client-api projection", () => {
         content_included: true,
         content_chars: 10,
         truncated: false,
+        display_mode: "markdown",
       },
       artifact: {
         id: "art_123",
@@ -541,7 +560,7 @@ describe("gm-science client-api projection", () => {
     });
 
     expect(detail).toMatchObject({
-      preview: { contentStatus: "included", contentChars: 10 },
+      preview: { contentStatus: "included", contentChars: 10, displayMode: "markdown" },
       artifact: { id: "art_123", sessionId: "session-1" },
       relations: [{ resourceId: "artifact:art_paper", direction: "outgoing" }],
     });
@@ -551,6 +570,25 @@ describe("gm-science client-api projection", () => {
       relations: [],
       artifact: null,
     })).toBeNull();
+
+    const tableDetail = normalizeGmScienceResourceDetail({
+      resource: detail?.resource,
+      preview: {
+        content: "sample,value\nA,1\n",
+        content_status: "included",
+        content_included: true,
+        content_chars: 17,
+        truncated: false,
+        display_mode: "table",
+        table: { columns: ["sample", "value"], rows: [["A", "1"]], truncated: false },
+      },
+      relations: [],
+      artifact: null,
+    });
+    expect(tableDetail?.preview).toMatchObject({
+      displayMode: "table",
+      table: { columns: ["sample", "value"], rows: [["A", "1"]] },
+    });
   });
 
   it("normalizes capability status without leaking unknown fields", () => {

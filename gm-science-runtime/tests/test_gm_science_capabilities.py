@@ -95,8 +95,9 @@ def test_capability_catalog_projects_discovered_skills_without_absolute_paths(tm
         "metadata": {
             "registry_source": "builtin",
             "catalog_group": "featured",
-            "implementation_status": "installed",
-            "file_count": 2,
+                "implementation_status": "installed",
+                "manageable": False,
+                "file_count": 2,
             "files_truncated": False,
         },
     }
@@ -215,8 +216,9 @@ def test_capability_catalog_projects_configured_mcp_connectors_with_redacted_met
         "configured_env_names": ["FILESYSTEM_TOKEN", "WORKSPACE_ROOT"],
         "configured_header_names": [],
         "runtime_header_names": [],
-        "catalog_group": "custom",
-    }
+            "catalog_group": "custom",
+            "manageable": False,
+        }
     assert by_id["mcp:remote-lab"]["metadata"]["transport"] == "http"
     assert by_id["mcp:remote-lab"]["metadata"]["endpoint_origin"] == "https://mcp.example.test"
     assert by_id["mcp:remote-lab"]["metadata"]["configured_header_names"] == ["Authorization"]

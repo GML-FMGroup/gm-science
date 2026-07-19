@@ -3,18 +3,39 @@ from __future__ import annotations
 import json
 import os
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from google.adk.agents.run_config import StreamingMode
 
 from openppx.gm_science.resources.context import ResolvedResourceContext
 from openppx.gm_science.resources.models import ResourceRef
 from openppx.runtime.client_api_worker import (
+    ResolvedReferenceContext,
     _build_project_memory_service,
     _build_adk_user_content,
     _build_interactive_run_config,
     _restrict_mcp_servers_env,
+    _reviewer_tool_for_policy,
     _session_title,
 )
+
+
+def test_reviewer_policy_uses_existing_subagent_or_rebuilds_with_main_model() -> None:
+    existing = SimpleNamespace(name="research_reviewer")
+    rebuilt = SimpleNamespace(name="research_reviewer")
+    root = SimpleNamespace(tools=[existing])
+
+    assert _reviewer_tool_for_policy(root, "default") is existing
+    assert _reviewer_tool_for_policy(root, "subagent") is existing
+    with (
+        patch("openppx.core.provider.build_adk_model_from_env", return_value="main-model"),
+        patch(
+            "openppx.gm_science.specialists.agents.build_specialist_tools",
+            return_value=[rebuilt],
+        ) as build_tools,
+    ):
+        assert _reviewer_tool_for_policy(root, "main") is rebuilt
+    build_tools.assert_called_once_with(model="main-model")
 
 
 def test_project_memory_service_is_only_built_for_project_runs(tmp_path) -> None:
@@ -123,6 +144,32 @@ def test_build_adk_user_content_uses_native_parts_and_provenance() -> None:
     assert "untrusted research data" in request.parts[1].text
     assert request.parts[1].part_metadata["gm_science_resource"]["id"] == "project_file:abc"
     assert request.parts[1].part_metadata["gm_science_resource"]["content_chars"] == 7
+
+
+def test_build_adk_user_content_preserves_structured_session_and_skill_metadata() -> None:
+    request = _build_adk_user_content(
+        "Compare prior findings.",
+        [
+            ResolvedReferenceContext(
+                text="Referenced Session: Earlier work\nUser: Measure X",
+                metadata_key="gm_science_session_ref",
+                metadata_value={"id": "session-2", "display_name": "Earlier work", "truncated": False},
+            ),
+            ResolvedReferenceContext(
+                text="Referenced Skill: literature-review\nUse primary sources.",
+                metadata_key="gm_science_skill_ref",
+                metadata_value={"id": "literature-review", "display_name": "Literature Review", "truncated": False},
+            ),
+        ],
+    )
+
+    assert [part.text for part in request.parts] == [
+        "Compare prior findings.",
+        "Referenced Session: Earlier work\nUser: Measure X",
+        "Referenced Skill: literature-review\nUse primary sources.",
+    ]
+    assert request.parts[1].part_metadata["gm_science_session_ref"]["id"] == "session-2"
+    assert request.parts[2].part_metadata["gm_science_skill_ref"]["id"] == "literature-review"
 
 
 def test_restrict_mcp_servers_env_keeps_only_explicit_project_selection(monkeypatch) -> None:

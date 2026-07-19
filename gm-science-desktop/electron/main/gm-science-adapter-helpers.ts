@@ -76,8 +76,11 @@ export function buildClientApiRunPath(input: SendMessageInput): string {
 }
 
 export function buildClientApiRunPayload(input: SendMessageInput): Record<string, unknown> {
-  if (input.resourceRefs?.length && !input.projectId?.trim()) {
-    throw new Error("Project resource references require a Project-scoped run.");
+  if (
+    (input.resourceRefs?.length || input.sessionRefs?.length || input.skillRefs?.length)
+    && !input.projectId?.trim()
+  ) {
+    throw new Error("Structured references require a Project-scoped run.");
   }
   return {
     text: input.text,
@@ -89,6 +92,12 @@ export function buildClientApiRunPayload(input: SendMessageInput): Record<string
             version_or_hash: resource.versionOrHash,
           })),
         }
+      : {}),
+    ...(input.sessionRefs?.length
+      ? { session_refs: input.sessionRefs.map((session) => ({ id: session.id })) }
+      : {}),
+    ...(input.skillRefs?.length
+      ? { skill_refs: input.skillRefs.map((skill) => ({ id: skill.id })) }
       : {}),
   };
 }

@@ -222,7 +222,10 @@ def _configured_specialist_tools(spec: SpecialistSpec) -> tuple[list[Any], tuple
         if connector.casefold().startswith("mcp:") and ":" in connector
     }
     selected_servers = {
-        name: value
+        name: _specialist_server_config(
+            value,
+            _connector_tool_filter(spec, f"mcp:{name}"),
+        )
         for name, value in raw_servers.items()
         if str(name).casefold() in selected_server_names
     }
@@ -232,6 +235,31 @@ def _configured_specialist_tools(spec: SpecialistSpec) -> tuple[list[Any], tuple
     if missing_servers:
         issues.append(f"Unavailable MCP servers: {', '.join(missing_servers)}.")
     return tools, tuple(issues)
+
+
+def _connector_tool_filter(spec: SpecialistSpec, connector_id: str) -> tuple[str, ...]:
+    configured = spec.connector_tools or {}
+    for raw_id, tools in configured.items():
+        if raw_id.casefold() == connector_id.casefold():
+            return tools
+    return ()
+
+
+def _specialist_server_config(raw_config: Any, assigned_tools: tuple[str, ...]) -> Any:
+    """Apply a Specialist allowlist without widening the Connector-level policy."""
+
+    if not isinstance(raw_config, dict) or not assigned_tools:
+        return raw_config
+    config = dict(raw_config)
+    global_filter = config.get("toolFilter", config.get("tool_filter"))
+    if isinstance(global_filter, list) and global_filter:
+        allowed = {str(item).casefold() for item in global_filter}
+        filtered = [tool for tool in assigned_tools if tool.casefold() in allowed]
+    else:
+        filtered = list(assigned_tools)
+    config.pop("tool_filter", None)
+    config["toolFilter"] = filtered
+    return config
 
 
 def _literature_search_tool(allowed_sources: tuple[str, ...]):

@@ -11,7 +11,9 @@ function settings(): GmScienceSettings {
   return {
     model: { provider: "openai_codex", model: "openai-codex/gpt-5.5" },
     memory: { enabled: true },
+    general: { reasoningEffort: "medium", reasoningEffortSupported: true, subagentModel: "", licenseUseIntent: "commercial" },
     providers: [],
+    credentials: { custom: [] },
     permissions: {
       items: [{
         id: "attach_skill",

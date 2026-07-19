@@ -22,6 +22,8 @@ from ..core.logging_utils import debug_logging_enabled, emit_debug
 from ..gm_science.bootstrap import GM_SCIENCE_DEFAULT_AGENT_NAME, ensure_gm_science_initialized
 from ..gm_science.authoring import (
     CapabilityConflictError,
+    CapabilityInUseError,
+    CapabilityNotFoundError,
     GmScienceCapabilityAuthoringService,
 )
 from ..gm_science.capabilities import (
@@ -41,6 +43,7 @@ from ..gm_science.resources import (
     ResourceCatalogService,
     ResourceContextService,
     ResourceDetailService,
+    ProjectSourceService,
     ResourceSelection,
 )
 from ..gm_science.session_policy import normalize_session_policy, update_session_policy
@@ -57,6 +60,10 @@ from .memory_query_service import MemoryQueryService
 from .memory_shared import memory_entry_text
 from .session_service import SessionConfig, create_session_service
 from .sqlite_memory_service import SQLiteMemoryService
+
+
+_MAX_PROJECT_SESSION_REFS = 8
+_MAX_PROJECT_SKILL_REFS = 8
 
 
 def _iso_now() -> str:
@@ -125,6 +132,31 @@ def _project_run_http_status(payload: dict[str, Any]) -> int:
     if code in {"AGENT_NOT_FOUND", "PROJECT_NOT_FOUND", "SESSION_NOT_FOUND", "SESSION_NOT_IN_PROJECT"}:
         return 404
     return 400
+
+
+def _compact_reference_ids(
+    value: object,
+    *,
+    field_name: str,
+    limit: int,
+) -> list[str]:
+    """Validate one bounded list of stable IDs or compact ID objects."""
+
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"Field '{field_name}' must be a list.")
+    if len(value) > limit:
+        raise ValueError(f"Field '{field_name}' supports at most {limit} references.")
+    resolved: list[str] = []
+    for raw_item in value:
+        raw_id = raw_item.get("id") if isinstance(raw_item, dict) else raw_item
+        reference_id = str(raw_id or "").strip()
+        if not reference_id:
+            raise ValueError(f"Field '{field_name}' contains an empty reference ID.")
+        if reference_id not in resolved:
+            resolved.append(reference_id)
+    return resolved
 
 
 def _normalize_agent_name(value: str) -> str:
@@ -380,6 +412,55 @@ def _gm_science_artifact_payload(artifact: ArtifactRecord) -> dict[str, Any]:
     }
 
 
+def _payload_contains_string(value: Any, expected: str) -> bool:
+    """Return whether one JSON-like payload contains an exact string value."""
+
+    if isinstance(value, str):
+        return value == expected
+    if isinstance(value, dict):
+        return any(_payload_contains_string(item, expected) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_payload_contains_string(item, expected) for item in value)
+    return False
+
+
+def _exclusive_artifact_file(
+    workspace_path: str,
+    artifact_location: str,
+    other_locations: list[str],
+) -> Path | None:
+    """Resolve an exclusive regular Artifact file inside one Project workspace."""
+
+    location = str(artifact_location or "").strip()
+    if not location:
+        return None
+    parsed = urllib.parse.urlsplit(location)
+    if parsed.scheme or parsed.netloc:
+        return None
+    workspace = Path(workspace_path).expanduser().resolve(strict=False)
+    candidate = Path(location).expanduser()
+    if not candidate.is_absolute():
+        candidate = workspace / candidate
+    candidate = candidate.resolve(strict=False)
+    try:
+        candidate.relative_to(workspace)
+    except ValueError:
+        return None
+    if candidate == workspace or not candidate.is_file() or candidate.is_symlink():
+        return None
+    for raw_other in other_locations:
+        other = str(raw_other or "").strip()
+        parsed_other = urllib.parse.urlsplit(other)
+        if not other or parsed_other.scheme or parsed_other.netloc:
+            continue
+        other_path = Path(other).expanduser()
+        if not other_path.is_absolute():
+            other_path = workspace / other_path
+        if other_path.resolve(strict=False) == candidate:
+            return None
+    return candidate
+
+
 def _gm_science_project_context_message(
     project: ProjectRecord,
     text: str,
@@ -488,7 +569,11 @@ def _gm_science_session_policy_payload(
             and reviewer.get("available") is True
             and reviewer.get("status") == "ready"
         ),
-        "reviewer_models": [{"id": "default", "name": "Default"}],
+        "reviewer_models": [
+            {"id": "default", "name": "Default"},
+            {"id": "main", "name": "Main model"},
+            {"id": "subagent", "name": "Subagent model"},
+        ],
         "compute_targets": [{"id": "local", "name": "Local"}],
         "issues": _session_policy_issues(association.policy, catalog),
     }
@@ -676,6 +761,34 @@ def project_session_event(event: dict[str, Any], session_id: str) -> dict[str, A
         if resource_metadata is not None:
             parts.append(_resource_ref_message_part(resource_metadata))
             continue
+        session_metadata = _structured_reference_part_metadata(
+            raw_part,
+            metadata_key="gm_science_session_ref",
+        )
+        if session_metadata is not None:
+            parts.append(
+                {
+                    "type": "session_ref",
+                    "session_id": str(session_metadata.get("id") or ""),
+                    "display_name": str(session_metadata.get("display_name") or "Session"),
+                    "truncated": bool(session_metadata.get("truncated")),
+                }
+            )
+            continue
+        skill_metadata = _structured_reference_part_metadata(
+            raw_part,
+            metadata_key="gm_science_skill_ref",
+        )
+        if skill_metadata is not None:
+            parts.append(
+                {
+                    "type": "skill_ref",
+                    "skill_id": str(skill_metadata.get("id") or ""),
+                    "display_name": str(skill_metadata.get("display_name") or "Skill"),
+                    "truncated": bool(skill_metadata.get("truncated")),
+                }
+            )
+            continue
         text = raw_part.get("text")
         if isinstance(text, str) and text.strip():
             normalized_text = _strip_request_time_prefix(text)
@@ -739,6 +852,22 @@ def _resource_part_metadata(raw_part: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(resource, dict) or not str(resource.get("id") or "").strip():
         return None
     return resource
+
+
+def _structured_reference_part_metadata(
+    raw_part: dict[str, Any],
+    *,
+    metadata_key: str,
+) -> dict[str, Any] | None:
+    """Return one validated structured reference from a serialized ADK Part."""
+
+    raw_metadata = raw_part.get("part_metadata") or raw_part.get("partMetadata")
+    if not isinstance(raw_metadata, dict):
+        return None
+    reference = raw_metadata.get(metadata_key)
+    if not isinstance(reference, dict) or not str(reference.get("id") or "").strip():
+        return None
+    return reference
 
 
 def _resource_ref_message_part(resource: dict[str, Any]) -> dict[str, Any]:
@@ -955,6 +1084,7 @@ class ClientApiCoordinator:
         )
         self._gm_science_authoring = GmScienceCapabilityAuthoringService(
             config_path=agent_config_path(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir),
+            store=self._gm_science_store,
             lock=self._gm_science_config_lock,
         )
         self._gm_science_observability = GmScienceObservabilityService(data_dir=self.data_dir)
@@ -971,6 +1101,7 @@ class ClientApiCoordinator:
             catalog=self._resource_catalog,
             context=self._resource_context,
         )
+        self._project_sources = ProjectSourceService(store=self._gm_science_store)
         self._analysis_service = AnalysisService(
             store=self._gm_science_store,
             dataset_service=self._dataset_service,
@@ -1208,6 +1339,20 @@ class ClientApiCoordinator:
             }
 
         return asyncio.run(_load())
+
+    def _delete_session_direct(self, config_path: Path, *, user_id: str, session_id: str) -> None:
+        """Delete one principal-scoped ADK Session from its native session service."""
+
+        async def _delete() -> None:
+            service = create_session_service(SessionConfig(db_url=_session_db_url_for_config_path(config_path)))
+            async with service:
+                await service.delete_session(
+                    app_name="openppx",
+                    user_id=user_id,
+                    session_id=session_id,
+                )
+
+        asyncio.run(_delete())
 
     def _get_session_worker(self, config_path: Path, *, user_id: str, session_id: str) -> dict[str, Any] | None:
         """Read one session through the worker fallback path."""
@@ -1509,6 +1654,121 @@ class ClientApiCoordinator:
             return _error("INVALID_REQUEST", str(exc))
         return _ok({"capability": capability})
 
+    def import_gm_science_skill(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Import one local or public GitHub Skill into the Agent-local registry."""
+
+        source_type = str(body.get("source_type") or body.get("sourceType") or "local").strip().lower()
+        importer = (
+            self._gm_science_authoring.import_skill_from_github
+            if source_type == "github"
+            else self._gm_science_authoring.import_skill
+            if source_type == "local"
+            else None
+        )
+        if importer is None:
+            return _error("INVALID_REQUEST", "Skill import source must be 'local' or 'github'.")
+        try:
+            capability = importer(body)
+        except RegistryPermissionError as exc:
+            return _error("PERMISSION_DENIED", str(exc))
+        except CapabilityConflictError as exc:
+            return _error("CAPABILITY_CONFLICT", str(exc))
+        except ValueError as exc:
+            return _error("INVALID_REQUEST", str(exc))
+        return _ok({"capability": capability})
+
+    def list_gm_science_skill_drafts(self) -> dict[str, Any]:
+        """Return private local Skill authoring drafts."""
+
+        return _ok({"drafts": self._gm_science_authoring.list_skill_drafts()})
+
+    def save_gm_science_skill_draft(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Create or replace one private local Skill draft."""
+
+        try:
+            draft = self._gm_science_authoring.save_skill_draft(body)
+        except ValueError as exc:
+            return _error("INVALID_REQUEST", str(exc))
+        return _ok({"draft": draft})
+
+    def publish_gm_science_skill_draft(self, draft_id: str) -> dict[str, Any]:
+        """Publish one complete draft through the canonical Skill registry."""
+
+        try:
+            capability = self._gm_science_authoring.publish_skill_draft(draft_id)
+        except RegistryPermissionError as exc:
+            return _error("PERMISSION_DENIED", str(exc))
+        except CapabilityNotFoundError as exc:
+            return _error("CAPABILITY_NOT_FOUND", str(exc))
+        except CapabilityConflictError as exc:
+            return _error("CAPABILITY_CONFLICT", str(exc))
+        except ValueError as exc:
+            return _error("INVALID_REQUEST", str(exc))
+        return _ok({"capability": capability})
+
+    def delete_gm_science_skill_draft(self, draft_id: str) -> dict[str, Any]:
+        """Delete one private local Skill draft."""
+
+        try:
+            self._gm_science_authoring.delete_skill_draft(draft_id)
+        except CapabilityNotFoundError as exc:
+            return _error("CAPABILITY_NOT_FOUND", str(exc))
+        except ValueError as exc:
+            return _error("INVALID_REQUEST", str(exc))
+        return _ok({"deleted": True, "draft_id": draft_id})
+
+    def get_gm_science_capability_definition(self, kind: str, capability_id: str) -> dict[str, Any]:
+        """Return one renderer-safe editable local capability definition."""
+
+        try:
+            definition = self._gm_science_authoring.get_definition(kind, capability_id)
+        except CapabilityNotFoundError as exc:
+            return _error("CAPABILITY_NOT_FOUND", str(exc))
+        except ValueError as exc:
+            return _error("INVALID_REQUEST", str(exc))
+        return _ok({"definition": definition})
+
+    def update_gm_science_capability(
+        self,
+        kind: str,
+        capability_id: str,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Update one user-owned capability while retaining its stable ID."""
+
+        updaters = {
+            "skills": self._gm_science_authoring.update_skill,
+            "connectors": self._gm_science_authoring.update_connector,
+            "specialists": self._gm_science_authoring.update_specialist,
+        }
+        updater = updaters.get(str(kind or "").strip().lower())
+        if updater is None:
+            return _error("INVALID_REQUEST", f"Unsupported capability kind '{kind}'.")
+        try:
+            capability = updater(capability_id, body)
+        except RegistryPermissionError as exc:
+            return _error("PERMISSION_DENIED", str(exc))
+        except CapabilityNotFoundError as exc:
+            return _error("CAPABILITY_NOT_FOUND", str(exc))
+        except ValueError as exc:
+            return _error("INVALID_REQUEST", str(exc))
+        return _ok({"capability": capability})
+
+    def delete_gm_science_capability(self, kind: str, capability_id: str) -> dict[str, Any]:
+        """Delete one unreferenced user-owned capability."""
+
+        try:
+            self._gm_science_authoring.delete_capability(kind, capability_id)
+        except RegistryPermissionError as exc:
+            return _error("PERMISSION_DENIED", str(exc))
+        except CapabilityNotFoundError as exc:
+            return _error("CAPABILITY_NOT_FOUND", str(exc))
+        except CapabilityInUseError as exc:
+            return _error("CAPABILITY_IN_USE", str(exc))
+        except ValueError as exc:
+            return _error("INVALID_REQUEST", str(exc))
+        return _ok({"deleted": True, "capability_id": capability_id})
+
     def get_gm_science_session_policy(self, session_id: str) -> dict[str, Any]:
         """Return one Project Session's effective policy and valid candidates."""
 
@@ -1523,6 +1783,27 @@ class ClientApiCoordinator:
             return _error("PROJECT_NOT_FOUND", f"Project '{association.project_id}' was not found.")
         catalog = build_capability_catalog(
             config_path=agent_config_path(association.agent_id, self.data_dir),
+            project=project,
+        )
+        return _ok({"policy": _gm_science_session_policy_payload(association, catalog)})
+
+    def get_gm_science_project_session_policy_defaults(self, project_id: str) -> dict[str, Any]:
+        """Return defaults copied into Sessions created later for one Project."""
+
+        project = self._gm_science_store.get_project(project_id)
+        if project is None:
+            return _error("PROJECT_NOT_FOUND", f"Project '{project_id}' was not found.")
+        association = ProjectSessionRecord(
+            project_id=project.id,
+            session_id="",
+            agent_id=GM_SCIENCE_DEFAULT_AGENT_NAME,
+            display_title="",
+            policy=project.session_policy_defaults,
+            created_at=project.created_at,
+            updated_at=project.updated_at,
+        )
+        catalog = build_capability_catalog(
+            config_path=agent_config_path(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir),
             project=project,
         )
         return _ok({"policy": _gm_science_session_policy_payload(association, catalog)})
@@ -1556,6 +1837,39 @@ class ClientApiCoordinator:
             return _error("SESSION_POLICY_UNAVAILABLE", " ".join(issues))
         updated = self._gm_science_store.update_project_session_policy(session_id, policy)
         return _ok({"policy": _gm_science_session_policy_payload(updated, catalog)})
+
+    def update_gm_science_project_session_policy_defaults(
+        self,
+        project_id: str,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Validate and replace defaults used only by future Project Sessions."""
+
+        project = self._gm_science_store.get_project(project_id)
+        if project is None:
+            return _error("PROJECT_NOT_FOUND", f"Project '{project_id}' was not found.")
+        try:
+            policy = update_session_policy(project.session_policy_defaults, body)
+        except ValueError as exc:
+            return _error("INVALID_REQUEST", str(exc))
+        catalog = build_capability_catalog(
+            config_path=agent_config_path(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir),
+            project=project,
+        )
+        issues = _session_policy_issues(policy, catalog)
+        if issues:
+            return _error("SESSION_POLICY_UNAVAILABLE", " ".join(issues))
+        updated = self._gm_science_store.update_project_session_policy_defaults(project.id, policy)
+        association = ProjectSessionRecord(
+            project_id=updated.id,
+            session_id="",
+            agent_id=GM_SCIENCE_DEFAULT_AGENT_NAME,
+            display_title="",
+            policy=updated.session_policy_defaults,
+            created_at=updated.created_at,
+            updated_at=updated.updated_at,
+        )
+        return _ok({"policy": _gm_science_session_policy_payload(association, catalog)})
 
     def get_gm_science_settings(self) -> dict[str, Any]:
         """Return renderer-safe global settings for the gm-science agent."""
@@ -1838,6 +2152,61 @@ class ClientApiCoordinator:
             return _error("INVALID_REQUEST", str(exc))
         return _ok({"artifact": _gm_science_artifact_payload(artifact)})
 
+    def update_gm_science_artifact(
+        self,
+        project_id: str,
+        artifact_id: str,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Rename, star, or hide one Project-owned Artifact."""
+
+        artifact = self._gm_science_store.get_artifact(artifact_id)
+        if artifact is None or artifact.project_id != project_id:
+            return _error("ARTIFACT_NOT_FOUND", f"Artifact '{artifact_id}' was not found in Project '{project_id}'.")
+        metadata = dict(artifact.metadata)
+        if "starred" in body:
+            metadata["gm_science_starred"] = bool(body["starred"])
+        if "hidden" in body:
+            metadata["gm_science_hidden"] = bool(body["hidden"])
+        title = body.get("title") if "title" in body else None
+        try:
+            updated = self._gm_science_store.update_artifact(
+                artifact_id,
+                title=str(title) if title is not None else None,
+                metadata=metadata,
+            )
+        except ValueError as exc:
+            return _error("INVALID_REQUEST", str(exc))
+        return _ok({"artifact": _gm_science_artifact_payload(updated)})
+
+    def delete_gm_science_artifact(self, project_id: str, artifact_id: str) -> dict[str, Any]:
+        """Delete one unreferenced Artifact and its exclusive local workspace file."""
+
+        project = self._gm_science_store.get_project(project_id)
+        artifact = self._gm_science_store.get_artifact(artifact_id)
+        if project is None:
+            return _error("PROJECT_NOT_FOUND", f"Project '{project_id}' was not found.")
+        if artifact is None or artifact.project_id != project_id:
+            return _error("ARTIFACT_NOT_FOUND", f"Artifact '{artifact_id}' was not found in Project '{project_id}'.")
+        for other in self._gm_science_store.list_artifacts(project_id):
+            if other.id != artifact_id and _payload_contains_string(other.metadata, artifact_id):
+                return _error("ARTIFACT_IN_USE", f"Artifact '{artifact_id}' is referenced by Artifact '{other.id}'.")
+            if other.id != artifact_id and _payload_contains_string(other.provenance, artifact_id):
+                return _error("ARTIFACT_IN_USE", f"Artifact '{artifact_id}' is referenced by Artifact '{other.id}'.")
+
+        local_file = _exclusive_artifact_file(
+            project.workspace_path,
+            artifact.path_or_url,
+            [other.path_or_url for other in self._gm_science_store.list_artifacts(project_id) if other.id != artifact_id],
+        )
+        if local_file is not None:
+            try:
+                local_file.unlink()
+            except OSError as exc:
+                return _error("ARTIFACT_DELETE_FAILED", f"Could not delete Artifact file: {exc}")
+        self._gm_science_store.delete_artifact(artifact_id)
+        return _ok({"deleted": True, "artifact_id": artifact_id})
+
     def list_gm_science_resources(self, project_id: str, query: str = "") -> dict[str, Any]:
         """Return one Project's unified, path-safe resource catalog."""
 
@@ -1865,6 +2234,48 @@ class ClientApiCoordinator:
         except ValueError as exc:
             return _error("INVALID_REQUEST", str(exc))
         return _ok({"detail": detail.to_dict()})
+
+    def list_gm_science_project_sources(self, project_id: str) -> dict[str, Any]:
+        """Return imported file and folder sources for one Project."""
+
+        try:
+            return _ok({"items": self._project_sources.list_sources(project_id)})
+        except ValueError as exc:
+            return _error("PROJECT_NOT_FOUND", str(exc))
+        except RuntimeError as exc:
+            return _error("SOURCE_MANIFEST_INVALID", str(exc))
+
+    def import_gm_science_project_source(
+        self,
+        project_id: str,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Copy one explicitly selected local file or folder into a Project."""
+
+        try:
+            source = self._project_sources.import_source(
+                project_id,
+                str(body.get("source_path") or body.get("sourcePath") or ""),
+                kind=str(body.get("kind") or "folder"),  # type: ignore[arg-type]
+            )
+        except ValueError as exc:
+            return _error("INVALID_REQUEST", str(exc))
+        except (OSError, RuntimeError) as exc:
+            return _error("SOURCE_IMPORT_FAILED", str(exc))
+        return _ok({"source": source})
+
+    def delete_gm_science_project_source(self, project_id: str, source_id: str) -> dict[str, Any]:
+        """Delete one imported source and its copied Project files."""
+
+        try:
+            self._project_sources.delete_source(project_id, source_id)
+        except LookupError as exc:
+            return _error("SOURCE_NOT_FOUND", str(exc))
+        except ValueError as exc:
+            return _error("PROJECT_NOT_FOUND", str(exc))
+        except (OSError, RuntimeError) as exc:
+            return _error("SOURCE_DELETE_FAILED", str(exc))
+        return _ok({"deleted": True, "source_id": source_id})
 
     def list_gm_science_datasets(self, project_id: str) -> dict[str, Any]:
         """Return imported datasets for one gm-science Project."""
@@ -2043,6 +2454,8 @@ class ClientApiCoordinator:
         user_id: str = "ppx-client-user",
         agent_id: str = _GM_SCIENCE_DEFAULT_AGENT_ID,
         resource_refs: object | None = None,
+        session_refs: object | None = None,
+        skill_refs: object | None = None,
     ) -> dict[str, Any]:
         """Create one run for a gm-science project using the default research agent."""
 
@@ -2067,6 +2480,28 @@ class ClientApiCoordinator:
             )
         except ValueError as exc:
             return _error("INVALID_RESOURCE_REFS", str(exc))
+        try:
+            session_reference_ids = _compact_reference_ids(
+                [] if session_refs is None else session_refs,
+                field_name="session_refs",
+                limit=_MAX_PROJECT_SESSION_REFS,
+            )
+            skill_reference_ids = _compact_reference_ids(
+                [] if skill_refs is None else skill_refs,
+                field_name="skill_refs",
+                limit=_MAX_PROJECT_SKILL_REFS,
+            )
+        except ValueError as exc:
+            return _error("INVALID_REFERENCE", str(exc))
+        for reference_id in session_reference_ids:
+            referenced = self._gm_science_store.get_project_session(reference_id)
+            if referenced is None or referenced.project_id != project.id:
+                return _error(
+                    "INVALID_SESSION_REFS",
+                    f"Session '{reference_id}' does not belong to Project '{project.id}'.",
+                )
+            if reference_id == session_id:
+                return _error("INVALID_SESSION_REFS", "The current Session cannot reference itself.")
         literature_config = load_literature_config(agent_config_path(agent_id, self.data_dir))
         source_selection = select_literature_sources(
             literature_config,
@@ -2093,6 +2528,22 @@ class ClientApiCoordinator:
             config_path=agent_config_path(agent_id, self.data_dir),
             project=project,
         )
+        available_project_skills = {
+            str(item.get("id") or "")
+            for item in capability_catalog
+            if item.get("kind") == "skill"
+            and bool(item.get("available"))
+            and bool(item.get("project_enabled"))
+        }
+        unavailable_skill_refs = [
+            skill_id for skill_id in skill_reference_ids if skill_id not in available_project_skills
+        ]
+        if unavailable_skill_refs:
+            return _error(
+                "INVALID_SKILL_REFS",
+                "Referenced Skills must be available and attached to this Project: "
+                + ", ".join(unavailable_skill_refs),
+            )
         policy_issues = _session_policy_issues(association.policy, capability_catalog)
         if policy_issues:
             return _error("SESSION_POLICY_UNAVAILABLE", " ".join(policy_issues))
@@ -2130,6 +2581,8 @@ class ClientApiCoordinator:
             enabled_skills=list(project.enabled_skills),
             enabled_mcp_servers=enabled_mcp_servers,
             resource_refs=resource_selections,
+            session_refs=session_reference_ids,
+            skill_refs=skill_reference_ids,
             session_policy=association.policy,
         )
 
@@ -2181,7 +2634,11 @@ class ClientApiCoordinator:
                         else ""
                     ),
                     "subject_principal_id": subject_principal_id,
-                    "title": str(session.get("title") or "").strip() or f"Session {session_id[:8]}",
+                    "title": (
+                        association.display_title
+                        if association is not None and association.display_title
+                        else str(session.get("title") or "").strip() or f"Session {session_id[:8]}"
+                    ),
                     "updated_at": updated_at,
                     "last_message_preview": str(session.get("last_preview") or "OpenPPX session"),
                     "archived": False,
@@ -2190,6 +2647,58 @@ class ClientApiCoordinator:
         items.sort(key=lambda item: item["updated_at"], reverse=True)
         self._write_cache(self._sessions_cache, cache_key, items)
         return _ok({"items": items})
+
+    def update_gm_science_session(self, session_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Update product-owned metadata for one Project Session."""
+
+        association = self._gm_science_store.get_project_session(session_id)
+        if association is None:
+            return _error("SESSION_NOT_IN_PROJECT", f"Session '{session_id}' is not attached to a Project.")
+        unknown = sorted(set(body).difference({"title"}))
+        if unknown:
+            return _error("INVALID_REQUEST", f"Unknown Session fields: {', '.join(unknown)}.")
+        try:
+            updated = self._gm_science_store.update_project_session_title(session_id, body.get("title"))
+        except ValueError as exc:
+            return _error("INVALID_REQUEST", str(exc))
+        self._invalidate_agent_access_caches(association.agent_id)
+        return _ok(
+            {
+                "session": {
+                    "id": updated.session_id,
+                    "agent_id": updated.agent_id,
+                    "project_id": updated.project_id,
+                    "title": updated.display_title,
+                    "updated_at": updated.updated_at,
+                    "last_message_preview": "",
+                    "archived": False,
+                }
+            }
+        )
+
+    def delete_gm_science_session(
+        self,
+        session_id: str,
+        *,
+        user_id: str = "ppx-client-user",
+    ) -> dict[str, Any]:
+        """Delete one ADK Session and its Project association, retaining Artifacts."""
+
+        association = self._gm_science_store.get_project_session(session_id)
+        if association is None:
+            return _error("SESSION_NOT_IN_PROJECT", f"Session '{session_id}' is not attached to a Project.")
+        requester = self._ensure_requester_principal(user_id)
+        owner_id = self._session_owners.get(session_id, requester.principal_id)
+        config_path = agent_config_path(association.agent_id, self.data_dir)
+        try:
+            self._delete_session_direct(config_path, user_id=owner_id, session_id=session_id)
+        except Exception as exc:
+            return _error("RUNTIME_UNAVAILABLE", f"Could not delete ADK Session: {exc}")
+        self._gm_science_store.delete_project_session(session_id)
+        self._invalidate_agent_access_caches(association.agent_id)
+        self._session_agents.pop(session_id, None)
+        self._session_owners.pop(session_id, None)
+        return _ok({"deleted": True, "session_id": session_id})
 
     def create_session(
         self,
@@ -2823,6 +3332,8 @@ class ClientApiCoordinator:
         enabled_skills: list[str] | None = None,
         enabled_mcp_servers: list[str] | None = None,
         resource_refs: list[ResourceSelection] | None = None,
+        session_refs: list[str] | None = None,
+        skill_refs: list[str] | None = None,
         session_policy: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create one streaming run and start consuming worker events in background."""
@@ -2894,6 +3405,24 @@ class ClientApiCoordinator:
                         ensure_ascii=False,
                         separators=(",", ":"),
                     ),
+                ]
+            )
+        if session_refs:
+            if not project_id:
+                return _error("INVALID_SESSION_REFS", "Session references require a Project run.")
+            cmd.extend(
+                [
+                    "--session-refs-json",
+                    json.dumps(session_refs, ensure_ascii=False, separators=(",", ":")),
+                ]
+            )
+        if skill_refs:
+            if not project_id:
+                return _error("INVALID_SKILL_REFS", "Skill references require a Project run.")
+            cmd.extend(
+                [
+                    "--skill-refs-json",
+                    json.dumps(skill_refs, ensure_ascii=False, separators=(",", ":")),
                 ]
             )
         if session_policy is not None:
@@ -3488,6 +4017,23 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
         if segments == ["api", "v1", "gm-science", "capabilities"]:
             self._send_json(200, self.coordinator.list_gm_science_capabilities())
             return
+        if segments == ["api", "v1", "gm-science", "capability-drafts", "skills"]:
+            self._send_json(200, self.coordinator.list_gm_science_skill_drafts())
+            return
+        if (
+            len(segments) == 6
+            and segments[:4] == ["api", "v1", "gm-science", "capabilities"]
+            and segments[4] in {"skills", "connectors", "specialists"}
+        ):
+            payload = self.coordinator.get_gm_science_capability_definition(
+                segments[4],
+                segments[5],
+            )
+            status = 200 if payload.get("ok") else 400
+            if not payload.get("ok") and payload.get("error", {}).get("code") == "CAPABILITY_NOT_FOUND":
+                status = 404
+            self._send_json(status, payload)
+            return
         if segments == ["api", "v1", "gm-science", "settings"]:
             self._send_json(200, self.coordinator.get_gm_science_settings())
             return
@@ -3503,6 +4049,14 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
             return
         if len(segments) == 5 and segments[:4] == ["api", "v1", "gm-science", "projects"]:
             payload = self.coordinator.get_gm_science_project(segments[4])
+            self._send_json(200 if payload.get("ok") else 404, payload)
+            return
+        if (
+            len(segments) == 6
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "session-policy-defaults"
+        ):
+            payload = self.coordinator.get_gm_science_project_session_policy_defaults(segments[4])
             self._send_json(200 if payload.get("ok") else 404, payload)
             return
         if (
@@ -3534,6 +4088,17 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
             if not payload.get("ok"):
                 code = payload.get("error", {}).get("code")
                 status = 404 if code == "PROJECT_NOT_FOUND" else 503 if code == "RESOURCE_CATALOG_UNAVAILABLE" else 400
+            self._send_json(status, payload)
+            return
+        if (
+            len(segments) == 6
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "sources"
+        ):
+            payload = self.coordinator.list_gm_science_project_sources(segments[4])
+            status = 200 if payload.get("ok") else 404
+            if not payload.get("ok") and payload.get("error", {}).get("code") == "SOURCE_MANIFEST_INVALID":
+                status = 500
             self._send_json(status, payload)
             return
         if (
@@ -3716,6 +4281,21 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
             self._send_json(status, payload)
             return
         if (
+            len(segments) == 5
+            and segments[:4] == ["api", "v1", "gm-science", "sessions"]
+        ):
+            payload = self.coordinator.update_gm_science_session(segments[4], body)
+            self._send_json(200 if payload.get("ok") else 404 if payload.get("error", {}).get("code") == "SESSION_NOT_IN_PROJECT" else 400, payload)
+            return
+        if (
+            len(segments) == 6
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "session-policy-defaults"
+        ):
+            payload = self.coordinator.update_gm_science_project_session_policy_defaults(segments[4], body)
+            self._send_json(200 if payload.get("ok") else 404 if payload.get("error", {}).get("code") == "PROJECT_NOT_FOUND" else 400, payload)
+            return
+        if (
             len(segments) == 8
             and segments[:4] == ["api", "v1", "gm-science", "projects"]
             and segments[5] == "memory"
@@ -3751,6 +4331,25 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
             return
         if (
             len(segments) == 6
+            and segments[:4] == ["api", "v1", "gm-science", "capabilities"]
+            and segments[4] in {"skills", "connectors", "specialists"}
+        ):
+            payload = self.coordinator.update_gm_science_capability(
+                segments[4],
+                segments[5],
+                body,
+            )
+            status = 200 if payload.get("ok") else 400
+            if not payload.get("ok"):
+                code = payload.get("error", {}).get("code")
+                if code == "PERMISSION_DENIED":
+                    status = 403
+                elif code == "CAPABILITY_NOT_FOUND":
+                    status = 404
+            self._send_json(status, payload)
+            return
+        if (
+            len(segments) == 6
             and segments[:4] == ["api", "v1", "gm-science", "sessions"]
             and segments[5] == "policy"
         ):
@@ -3763,6 +4362,20 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
                 status = 404
             self._send_json(status, payload)
             return
+        if (
+            len(segments) == 7
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "artifacts"
+        ):
+            payload = self.coordinator.update_gm_science_artifact(segments[4], segments[6], body)
+            status = 200 if payload.get("ok") else 400
+            if not payload.get("ok") and payload.get("error", {}).get("code") in {
+                "PROJECT_NOT_FOUND",
+                "ARTIFACT_NOT_FOUND",
+            }:
+                status = 404
+            self._send_json(status, payload)
+            return
         self._send_json(404, _error("NOT_FOUND", f"Unknown path: {path}"))
 
     def do_POST(self) -> None:  # noqa: N802
@@ -3770,12 +4383,44 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
         body = self._read_json_body_or_error()
         if body is None:
             return
+        if segments == ["api", "v1", "gm-science", "capability-drafts", "skills"]:
+            payload = self.coordinator.save_gm_science_skill_draft(body)
+            self._send_json(200 if payload.get("ok") else 400, payload)
+            return
+        if (
+            len(segments) == 7
+            and segments[:5] == ["api", "v1", "gm-science", "capability-drafts", "skills"]
+            and segments[6] == "publish"
+        ):
+            payload = self.coordinator.publish_gm_science_skill_draft(segments[5])
+            status = 200 if payload.get("ok") else 400
+            if not payload.get("ok"):
+                code = payload.get("error", {}).get("code")
+                if code == "PERMISSION_DENIED":
+                    status = 403
+                elif code == "CAPABILITY_NOT_FOUND":
+                    status = 404
+                elif code == "CAPABILITY_CONFLICT":
+                    status = 409
+            self._send_json(status, payload)
+            return
         if (
             len(segments) == 5
             and segments[:4] == ["api", "v1", "gm-science", "capabilities"]
             and segments[4] in {"skills", "connectors", "specialists"}
         ):
             payload = self.coordinator.create_gm_science_capability(segments[4], body)
+            status = 200 if payload.get("ok") else 400
+            if not payload.get("ok"):
+                code = payload.get("error", {}).get("code")
+                if code == "PERMISSION_DENIED":
+                    status = 403
+                elif code == "CAPABILITY_CONFLICT":
+                    status = 409
+            self._send_json(status, payload)
+            return
+        if segments == ["api", "v1", "gm-science", "capabilities", "skills", "import"]:
+            payload = self.coordinator.import_gm_science_skill(body)
             status = 200 if payload.get("ok") else 400
             if not payload.get("ok"):
                 code = payload.get("error", {}).get("code")
@@ -3836,6 +4481,18 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
             status = 200 if payload.get("ok") else 400
             if not payload.get("ok") and payload.get("error", {}).get("code") == "PROJECT_NOT_FOUND":
                 status = 404
+            self._send_json(status, payload)
+            return
+        if (
+            len(segments) == 6
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "sources"
+        ):
+            payload = self.coordinator.import_gm_science_project_source(segments[4], body)
+            status = 200 if payload.get("ok") else 400
+            if not payload.get("ok"):
+                code = payload.get("error", {}).get("code")
+                status = 404 if code == "PROJECT_NOT_FOUND" else 500 if code == "SOURCE_IMPORT_FAILED" else 400
             self._send_json(status, payload)
             return
         if (
@@ -3922,6 +4579,8 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
                 user_id=user_id,
                 agent_id=agent_id,
                 resource_refs=body.get("resource_refs", body.get("resourceRefs", [])),
+                session_refs=body.get("session_refs", body.get("sessionRefs", [])),
+                skill_refs=body.get("skill_refs", body.get("skillRefs", [])),
             )
             self._send_json(_project_run_http_status(payload), payload)
             return
@@ -4016,6 +4675,29 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:  # noqa: N802
         path, segments, query = self._parse()
         if (
+            len(segments) == 6
+            and segments[:5] == ["api", "v1", "gm-science", "capability-drafts", "skills"]
+        ):
+            payload = self.coordinator.delete_gm_science_skill_draft(segments[5])
+            status = 200 if payload.get("ok") else 400
+            if not payload.get("ok") and payload.get("error", {}).get("code") == "CAPABILITY_NOT_FOUND":
+                status = 404
+            self._send_json(status, payload)
+            return
+        if (
+            len(segments) == 5
+            and segments[:4] == ["api", "v1", "gm-science", "sessions"]
+        ):
+            payload = self.coordinator.delete_gm_science_session(
+                segments[4],
+                user_id=str(query.get("user_id") or "ppx-client-user"),
+            )
+            status = 200 if payload.get("ok") else 404
+            if not payload.get("ok") and payload.get("error", {}).get("code") == "RUNTIME_UNAVAILABLE":
+                status = 503
+            self._send_json(status, payload)
+            return
+        if (
             len(segments) == 8
             and segments[:4] == ["api", "v1", "gm-science", "projects"]
             and segments[5] == "memory"
@@ -4032,6 +4714,23 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
                 "MEMORY_NOTE_NOT_FOUND",
             }:
                 status = 404
+            self._send_json(status, payload)
+            return
+        if (
+            len(segments) == 6
+            and segments[:4] == ["api", "v1", "gm-science", "capabilities"]
+            and segments[4] in {"skills", "connectors", "specialists"}
+        ):
+            payload = self.coordinator.delete_gm_science_capability(segments[4], segments[5])
+            status = 200 if payload.get("ok") else 400
+            if not payload.get("ok"):
+                code = payload.get("error", {}).get("code")
+                if code == "PERMISSION_DENIED":
+                    status = 403
+                elif code == "CAPABILITY_NOT_FOUND":
+                    status = 404
+                elif code == "CAPABILITY_IN_USE":
+                    status = 409
             self._send_json(status, payload)
             return
         if (
@@ -4057,6 +4756,33 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
                 user_id=user_id,
             )
             self._send_json(200 if payload.get("ok") else 403, payload)
+            return
+        if (
+            len(segments) == 7
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "artifacts"
+        ):
+            payload = self.coordinator.delete_gm_science_artifact(segments[4], segments[6])
+            status = 200 if payload.get("ok") else 400
+            if not payload.get("ok"):
+                code = payload.get("error", {}).get("code")
+                if code in {"PROJECT_NOT_FOUND", "ARTIFACT_NOT_FOUND"}:
+                    status = 404
+                elif code == "ARTIFACT_IN_USE":
+                    status = 409
+            self._send_json(status, payload)
+            return
+        if (
+            len(segments) == 7
+            and segments[:4] == ["api", "v1", "gm-science", "projects"]
+            and segments[5] == "sources"
+        ):
+            payload = self.coordinator.delete_gm_science_project_source(segments[4], segments[6])
+            status = 200 if payload.get("ok") else 400
+            if not payload.get("ok"):
+                code = payload.get("error", {}).get("code")
+                status = 404 if code in {"PROJECT_NOT_FOUND", "SOURCE_NOT_FOUND"} else 500
+            self._send_json(status, payload)
             return
         self._send_json(404, _error("NOT_FOUND", f"Unknown path: {path}"))
 

@@ -8,12 +8,14 @@ import type {
   GmScienceDatasetColumnProfile,
   GmScienceDatasetProfile,
   GmScienceProject,
+  GmScienceProjectSource,
   GmScienceResource,
   GmScienceResourceAccessMode,
   GmScienceArtifactRelationDirection,
   GmScienceResourceContentStatus,
   GmScienceResourceDetail,
   GmScienceResourceKind,
+  GmScienceResourcePreview,
   GmScienceResourceSource,
   GmScienceRun,
   GmScienceRunStatus,
@@ -153,6 +155,30 @@ export function normalizeClientApiPart(payload: unknown): MessagePart | null {
       truncated: Boolean(part.truncated),
     };
   }
+  if (type === "session_ref") {
+    const sessionId = asString(part.session_id ?? part.sessionId);
+    if (!sessionId) {
+      return null;
+    }
+    return {
+      type,
+      sessionId,
+      displayName: asString(part.display_name ?? part.displayName, "Session"),
+      truncated: Boolean(part.truncated),
+    };
+  }
+  if (type === "skill_ref") {
+    const skillId = asString(part.skill_id ?? part.skillId);
+    if (!skillId) {
+      return null;
+    }
+    return {
+      type,
+      skillId,
+      displayName: asString(part.display_name ?? part.displayName, "Skill"),
+      truncated: Boolean(part.truncated),
+    };
+  }
   if (type === "step_ref") {
     const status = asString(part.status, "running");
     return {
@@ -245,12 +271,15 @@ export function normalizeGmScienceProject(payload: unknown): GmScienceProject | 
 
 function normalizeSessionPolicyValues(payload: unknown): GmScienceSessionPolicyValues {
   const policy = asRecord(payload) ?? {};
+  const reviewerModel = asString(policy.reviewer_model ?? policy.reviewerModel, "default");
   return {
     delegationEnabled: policy.delegation_enabled === true || policy.delegationEnabled === true,
     autoReviewEnabled: policy.auto_review_enabled === true || policy.autoReviewEnabled === true,
     memoryEnabled: policy.memory_enabled === true || policy.memoryEnabled === true,
     specialistId: asString(policy.specialist_id ?? policy.specialistId),
-    reviewerModel: "default",
+    reviewerModel: ["default", "main", "subagent"].includes(reviewerModel)
+      ? reviewerModel as GmScienceSessionPolicyValues["reviewerModel"]
+      : "default",
     computeTarget: "local",
   };
 }
@@ -261,7 +290,7 @@ export function normalizeGmScienceSessionPolicy(payload: unknown): GmScienceSess
       || !Array.isArray(policy.compute_targets ?? policy.computeTargets)) {
     return null;
   }
-  if ((policy.reviewer_model ?? policy.reviewerModel) !== "default"
+  if (!["default", "main", "subagent"].includes(asString(policy.reviewer_model ?? policy.reviewerModel))
       || (policy.compute_target ?? policy.computeTarget) !== "local") {
     return null;
   }
@@ -364,6 +393,8 @@ export function normalizeGmScienceSettings(payload: unknown): GmScienceSettings 
   const settings = asRecord(payload);
   const model = asRecord(settings?.model);
   const memory = asRecord(settings?.memory);
+  const general = asRecord(settings?.general);
+  const credentials = asRecord(settings?.credentials);
   const literature = asRecord(settings?.literature);
   const arxiv = asRecord(literature?.arxiv);
   const pubmed = asRecord(literature?.pubmed);
@@ -373,9 +404,9 @@ export function normalizeGmScienceSettings(payload: unknown): GmScienceSettings 
   const packageMirrors = asRecord(network?.package_mirrors ?? network?.packageMirrors);
   const compute = asRecord(settings?.compute);
   if (
-    !settings || !model || !memory || !literature || !arxiv || !pubmed || !openalex
+    !settings || !model || !memory || !general || !credentials || !literature || !arxiv || !pubmed || !openalex
     || !permissions || !network || !packageMirrors || !compute
-    || !Array.isArray(settings.providers) || !Array.isArray(permissions.items)
+    || !Array.isArray(settings.providers) || !Array.isArray(credentials.custom) || !Array.isArray(permissions.items)
     || !Array.isArray(network.categories) || !Array.isArray(compute.targets)
   ) {
     return null;
@@ -412,6 +443,20 @@ export function normalizeGmScienceSettings(payload: unknown): GmScienceSettings 
     };
   });
   if (providers.some((provider) => provider === null)) {
+    return null;
+  }
+  const customCredentials = credentials.custom.map((item) => {
+    const credential = asRecord(item);
+    if (!credential || !asString(credential.id) || !asString(credential.name)) {
+      return null;
+    }
+    return {
+      id: asString(credential.id),
+      name: asString(credential.name),
+      configured: credential.configured === true,
+    };
+  });
+  if (customCredentials.some((credential) => credential === null)) {
     return null;
   }
 
@@ -483,7 +528,20 @@ export function normalizeGmScienceSettings(payload: unknown): GmScienceSettings 
     memory: {
       enabled: memory.enabled === true,
     },
+    general: {
+      reasoningEffort: (["low", "medium", "high"].includes(asString(general.reasoning_effort ?? general.reasoningEffort))
+        ? asString(general.reasoning_effort ?? general.reasoningEffort)
+        : "medium") as GmScienceSettings["general"]["reasoningEffort"],
+      reasoningEffortSupported: general.reasoning_effort_supported === true || general.reasoningEffortSupported === true,
+      subagentModel: asString(general.subagent_model ?? general.subagentModel),
+      licenseUseIntent: (asString(general.license_use_intent ?? general.licenseUseIntent) === "non_commercial"
+        ? "non_commercial"
+        : "commercial"),
+    },
     providers: providers as GmScienceSettings["providers"],
+    credentials: {
+      custom: customCredentials as GmScienceSettings["credentials"]["custom"],
+    },
     permissions: { items: permissionItems as GmScienceSettings["permissions"]["items"] },
     network: {
       enabled: network.enabled === true,
@@ -827,6 +885,29 @@ export function normalizeGmScienceResource(payload: unknown): GmScienceResource 
   };
 }
 
+export function normalizeGmScienceProjectSource(payload: unknown): GmScienceProjectSource | null {
+  const source = asRecord(payload);
+  const kind = asString(source?.kind);
+  if (!source || (kind !== "file" && kind !== "folder")) {
+    return null;
+  }
+  const id = asString(source.id);
+  const relativeRoot = asString(source.relative_root ?? source.relativeRoot);
+  if (!id || !relativeRoot) {
+    return null;
+  }
+  return {
+    id,
+    kind,
+    label: asString(source.label, "Imported source"),
+    relativeRoot,
+    fileCount: Math.max(0, asNumber(source.file_count ?? source.fileCount)),
+    sizeBytes: Math.max(0, asNumber(source.size_bytes ?? source.sizeBytes)),
+    importedAt: asString(source.imported_at ?? source.importedAt),
+    available: source.available === true,
+  };
+}
+
 export function normalizeGmScienceResourceDetail(payload: unknown): GmScienceResourceDetail | null {
   const detail = asRecord(payload);
   const preview = asRecord(detail?.preview);
@@ -862,6 +943,20 @@ export function normalizeGmScienceResourceDetail(payload: unknown): GmScienceRes
   if (relations.some((relation) => relation === null)) {
     return null;
   }
+  const rawDisplayMode = asString(preview.display_mode ?? preview.displayMode, "text");
+  const displayMode = (["text", "markdown", "json", "table"].includes(rawDisplayMode)
+    ? rawDisplayMode
+    : "text") as GmScienceResourcePreview["displayMode"];
+  const tablePayload = asRecord(preview.table);
+  const table = tablePayload && Array.isArray(tablePayload.columns) && Array.isArray(tablePayload.rows)
+    ? {
+        columns: tablePayload.columns.map((value) => asString(value)),
+        rows: tablePayload.rows
+          .filter((row): row is unknown[] => Array.isArray(row))
+          .map((row) => row.map((value) => asString(value))),
+        truncated: tablePayload.truncated === true,
+      }
+    : null;
   return {
     resource,
     preview: {
@@ -870,6 +965,8 @@ export function normalizeGmScienceResourceDetail(payload: unknown): GmScienceRes
       contentIncluded: preview.content_included === true || preview.contentIncluded === true,
       contentChars: asNumber(preview.content_chars ?? preview.contentChars),
       truncated: preview.truncated === true,
+      displayMode,
+      table,
     },
     artifact: artifact
       ? {

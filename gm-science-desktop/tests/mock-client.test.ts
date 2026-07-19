@@ -25,6 +25,10 @@ import {
   updateGmScienceSessionPolicy,
   updateGmScienceSettings,
   createGmScienceMemoryNote,
+  deleteGmScienceSkillDraft,
+  listGmScienceSkillDrafts,
+  publishGmScienceSkillDraft,
+  saveGmScienceSkillDraft,
   updateGmScienceMemoryNote,
   deleteGmScienceMemoryNote,
   clearGmScienceMemory,
@@ -34,6 +38,34 @@ import {
 } from "../app/src/lib/mock-client";
 
 describe("mock client adapter", () => {
+  it("persists, publishes, and deletes Skill drafts", async () => {
+    const saved = await saveGmScienceSkillDraft({
+      id: "draft-evidence",
+      name: "Draft Evidence",
+      description: "",
+      content: "",
+    });
+    expect(await listGmScienceSkillDrafts()).toContainEqual(saved);
+
+    await saveGmScienceSkillDraft({
+      ...saved,
+      description: "Review evidence.",
+      content: "# Workflow",
+    });
+    const published = await publishGmScienceSkillDraft(saved.id);
+    expect(published).toMatchObject({ id: saved.id, kind: "skill" });
+    expect(await listGmScienceSkillDrafts()).not.toContainEqual(expect.objectContaining({ id: saved.id }));
+
+    const disposable = await saveGmScienceSkillDraft({
+      id: "draft-disposable",
+      name: "Disposable",
+      description: "",
+      content: "",
+    });
+    await deleteGmScienceSkillDraft(disposable.id);
+    expect(await listGmScienceSkillDrafts()).not.toContainEqual(expect.objectContaining({ id: disposable.id }));
+  });
+
   it("returns local Storage and selectable Usage snapshots", async () => {
     const storage = await getGmScienceStorage();
     const usage = await getGmScienceUsage("30d");

@@ -215,9 +215,9 @@ class GmScienceStore:
             conn.execute(
                 """
                 INSERT INTO gm_science_project_sessions (
-                    session_id, project_id, agent_id, session_policy, created_at, updated_at
+                    session_id, project_id, agent_id, display_title, session_policy, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_id) DO UPDATE SET
                     agent_id = excluded.agent_id,
                     session_policy = excluded.session_policy,
@@ -227,6 +227,7 @@ class GmScienceStore:
                     normalized_session_id,
                     project_id,
                     normalized_agent_id,
+                    existing.display_title if existing is not None else "",
                     _json_dumps(resolved_policy),
                     created_at,
                     timestamp,
@@ -270,6 +271,45 @@ class GmScienceStore:
         if updated is None:
             raise RuntimeError(f"Session '{existing.session_id}' disappeared during policy update.")
         return updated
+
+    def update_project_session_title(self, session_id: str, title: str) -> ProjectSessionRecord:
+        """Set a user-visible Session title without changing ADK message history."""
+
+        existing = self.get_project_session(session_id)
+        if existing is None:
+            raise ValueError(f"Session '{session_id}' is not attached to a Project.")
+        normalized = str(title or "").strip()
+        if not normalized:
+            raise ValueError("Session title is required.")
+        if len(normalized) > 200 or "\x00" in normalized or "\n" in normalized or "\r" in normalized:
+            raise ValueError("Session title must be a single-line value of at most 200 characters.")
+        timestamp = _utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE gm_science_project_sessions SET display_title = ?, updated_at = ? WHERE session_id = ?",
+                (normalized, timestamp, existing.session_id),
+            )
+            conn.execute(
+                "UPDATE gm_science_projects SET updated_at = ? WHERE id = ?",
+                (timestamp, existing.project_id),
+            )
+        updated = self.get_project_session(existing.session_id)
+        if updated is None:
+            raise RuntimeError(f"Session '{existing.session_id}' disappeared during title update.")
+        return updated
+
+    def delete_project_session(self, session_id: str) -> bool:
+        """Remove one Project association while retaining its produced Artifacts."""
+
+        normalized = str(session_id or "").strip()
+        if not normalized:
+            return False
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM gm_science_project_sessions WHERE session_id = ?",
+                (normalized,),
+            )
+        return cursor.rowcount > 0
 
     def update_project_session_policy_defaults(
         self,
@@ -668,6 +708,54 @@ class GmScienceStore:
             raise RuntimeError(f"Artifact '{artifact_id}' disappeared during update.")
         return updated
 
+    def update_artifact(
+        self,
+        artifact_id: str,
+        *,
+        title: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> ArtifactRecord:
+        """Update mutable Artifact fields while preserving its identity and provenance."""
+
+        artifact = self.get_artifact(artifact_id)
+        if artifact is None:
+            raise ValueError(f"Artifact '{artifact_id}' was not found.")
+        resolved_title = artifact.title if title is None else str(title).strip()
+        if not resolved_title:
+            raise ValueError("Artifact title is required.")
+        if len(resolved_title) > 240:
+            raise ValueError("Artifact title exceeds 240 characters.")
+        resolved_metadata = artifact.metadata if metadata is None else dict(metadata)
+        timestamp = _utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE gm_science_artifacts SET title = ?, metadata = ?, updated_at = ? WHERE id = ?",
+                (resolved_title, _json_dumps(resolved_metadata), timestamp, artifact_id),
+            )
+            conn.execute(
+                "UPDATE gm_science_projects SET updated_at = ? WHERE id = ?",
+                (timestamp, artifact.project_id),
+            )
+        updated = self.get_artifact(artifact_id)
+        if updated is None:
+            raise RuntimeError(f"Artifact '{artifact_id}' disappeared during update.")
+        return updated
+
+    def delete_artifact(self, artifact_id: str) -> ArtifactRecord:
+        """Delete one Artifact record and return the removed durable metadata."""
+
+        artifact = self.get_artifact(artifact_id)
+        if artifact is None:
+            raise ValueError(f"Artifact '{artifact_id}' was not found.")
+        timestamp = _utc_now()
+        with self._connect() as conn:
+            conn.execute("DELETE FROM gm_science_artifacts WHERE id = ?", (artifact_id,))
+            conn.execute(
+                "UPDATE gm_science_projects SET updated_at = ? WHERE id = ?",
+                (timestamp, artifact.project_id),
+            )
+        return artifact
+
     def find_paper_artifact(self, project_id: str, canonical_id: str) -> ArtifactRecord | None:
         """Find a canonical paper artifact within one project."""
 
@@ -748,6 +836,7 @@ class GmScienceStore:
                     session_id TEXT PRIMARY KEY,
                     project_id TEXT NOT NULL,
                     agent_id TEXT NOT NULL,
+                    display_title TEXT NOT NULL,
                     session_policy TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -801,6 +890,12 @@ class GmScienceStore:
                 table="gm_science_projects",
                 column="session_policy_defaults",
                 declaration="TEXT NOT NULL DEFAULT '{}'",
+            )
+            self._ensure_column(
+                conn,
+                table="gm_science_project_sessions",
+                column="display_title",
+                declaration="TEXT NOT NULL DEFAULT ''",
             )
             self._ensure_column(
                 conn,
@@ -869,6 +964,7 @@ def _project_session_from_row(row: sqlite3.Row) -> ProjectSessionRecord:
         project_id=str(row["project_id"]),
         session_id=str(row["session_id"]),
         agent_id=str(row["agent_id"]),
+        display_title=str(row["display_title"]),
         policy=normalize_session_policy(_json_loads_dict(row["session_policy"])),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),

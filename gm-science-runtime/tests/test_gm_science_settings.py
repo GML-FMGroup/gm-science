@@ -122,6 +122,48 @@ def test_omitted_secrets_are_preserved_and_remove_is_explicit(tmp_path: Path) ->
     assert removed["science"]["literature"]["pubmed"]["apiKey"] == ""
 
 
+def test_custom_credentials_are_write_only_and_cannot_be_removed_while_referenced(
+    tmp_path: Path,
+) -> None:
+    path = _config_path(tmp_path)
+    service = GmScienceSettingsService(config_path=path)
+
+    payload = service.update_settings(
+        {
+            "custom_credential": {
+                "operation": "upsert",
+                "id": "lab-token",
+                "name": "Lab token",
+                "value": "top-secret",
+            }
+        }
+    )
+
+    assert payload["credentials"]["custom"] == [
+        {"id": "lab-token", "name": "Lab token", "configured": True}
+    ]
+    assert "top-secret" not in json.dumps(payload)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["tools"]["mcpServers"]["lab"] = {
+        "managedBy": "gm-science",
+        "command": "lab-mcp",
+        "credentialBindings": {"env": {"LAB_TOKEN": "lab-token"}},
+    }
+    save_config(raw, config_path=path)
+
+    with pytest.raises(ValueError, match="still used by Connector 'mcp:lab'"):
+        service.update_settings(
+            {"custom_credential": {"operation": "remove", "id": "lab-token"}}
+        )
+
+    raw["tools"]["mcpServers"] = {}
+    save_config(raw, config_path=path)
+    removed = service.update_settings(
+        {"custom_credential": {"operation": "remove", "id": "lab-token"}}
+    )
+    assert removed["credentials"]["custom"] == []
+
+
 @pytest.mark.parametrize(
     ("update", "message"),
     [

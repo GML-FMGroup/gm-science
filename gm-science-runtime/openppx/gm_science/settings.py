@@ -41,6 +41,8 @@ _MAX_MODEL_CHARS = 300
 _MAX_SECRET_CHARS = 32768
 _MAX_EMAIL_CHARS = 320
 _EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_CREDENTIAL_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+_MAX_CREDENTIAL_NAME_CHARS = 120
 
 
 class GmScienceSettingsService:
@@ -76,6 +78,8 @@ class GmScienceSettingsService:
             raise ValueError("Settings update must be a JSON object.")
         allowed_fields = {
             "compute_target",
+            "custom_credential",
+            "general",
             "model",
             "memory_enabled",
             "network",
@@ -130,6 +134,12 @@ class GmScienceSettingsService:
                 runtime_env = _mutable_mapping(runtime_config.get("env"))
                 runtime_env["OPENPPX_MEMORY_ENABLED"] = memory_enabled
 
+            if "general" in update:
+                _apply_general_update(config, runtime_config, update["general"])
+
+            if "custom_credential" in update:
+                _apply_custom_credential_update(config, update["custom_credential"])
+
             infrastructure_update = {
                 key: update[key]
                 for key in ("permission_grants", "network", "compute_target")
@@ -182,6 +192,9 @@ def _public_settings(
     ]
 
     literature_config = parse_literature_config(config)
+    science = _mapping(config.get("science"))
+    general = _mapping(science.get("general"))
+    specialists = _mapping(science.get("specialists"))
     pubmed = literature_config.sources["pubmed"]
     openalex = literature_config.sources["openalex"]
     pubmed_status, pubmed_detail = pubmed.status()
@@ -194,7 +207,16 @@ def _public_settings(
         "memory": {
             "enabled": _runtime_memory_enabled(runtime_config),
         },
+        "general": {
+            "reasoning_effort": _reasoning_effort(general.get("reasoningEffort")),
+            "reasoning_effort_supported": active_provider in {"openai_codex", "openai", "custom", "vllm"},
+            "subagent_model": str(specialists.get("model") or "").strip(),
+            "license_use_intent": _license_use_intent(general.get("licenseUseIntent")),
+        },
         "providers": provider_items,
+        "credentials": {
+            "custom": _public_custom_credentials(config),
+        },
         "literature": {
             "arxiv": {
                 "status": "ready" if literature_config.sources["arxiv"].enabled else "disabled",
@@ -216,6 +238,97 @@ def _public_settings(
     }
 
 
+def _public_custom_credentials(config: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Return stable custom credential metadata without secret values."""
+
+    credentials = _mapping(_mapping(_mapping(config.get("science")).get("credentials")).get("custom"))
+    items: list[dict[str, Any]] = []
+    for raw_id in sorted(credentials, key=lambda value: str(value).casefold()):
+        credential_id = str(raw_id)
+        raw = _mapping(credentials[raw_id])
+        items.append(
+            {
+                "id": credential_id,
+                "name": str(raw.get("name") or credential_id),
+                "configured": bool(str(raw.get("value") or "")),
+            }
+        )
+    return items
+
+
+def _apply_custom_credential_update(config: dict[str, Any], raw: Any) -> None:
+    """Create, replace, rename, or remove one write-only local credential."""
+
+    if not isinstance(raw, Mapping):
+        raise ValueError("Field 'custom_credential' must be a JSON object.")
+    operation = str(raw.get("operation") or "").strip().lower()
+    if operation not in {"upsert", "remove"}:
+        raise ValueError("Field 'custom_credential.operation' must be upsert or remove.")
+    credential_id = str(raw.get("id") or "").strip()
+    if not _CREDENTIAL_ID_PATTERN.fullmatch(credential_id):
+        raise ValueError("Custom credential ID has an invalid format.")
+
+    science = _mutable_mapping(config.get("science"))
+    credentials = science.setdefault("credentials", {})
+    if not isinstance(credentials, dict):
+        raise ValueError("gm-science credentials configuration must be an object.")
+    custom = credentials.setdefault("custom", {})
+    if not isinstance(custom, dict):
+        raise ValueError("gm-science custom credentials configuration must be an object.")
+    if operation == "remove":
+        if credential_id not in custom:
+            raise ValueError(f"Custom credential '{credential_id}' was not found.")
+        usages = _custom_credential_usages(config, credential_id)
+        if usages:
+            raise ValueError(
+                f"Custom credential '{credential_id}' is still used by {', '.join(usages)}."
+            )
+        del custom[credential_id]
+        return
+
+    name = str(raw.get("name") or "").strip()
+    if (
+        not name
+        or len(name) > _MAX_CREDENTIAL_NAME_CHARS
+        or "\n" in name
+        or "\r" in name
+        or not all(char.isprintable() for char in name)
+    ):
+        raise ValueError(
+            f"Custom credential name must be printable text of at most {_MAX_CREDENTIAL_NAME_CHARS} characters."
+        )
+    existing = _mapping(custom.get(credential_id))
+    value = str(raw.get("value") or "")
+    if not value:
+        value = str(existing.get("value") or "")
+    if not value:
+        raise ValueError("A new custom credential requires a non-empty secret value.")
+    if len(value) > _MAX_SECRET_CHARS or "\x00" in value:
+        raise ValueError("Custom credential contains an invalid secret value.")
+    custom[credential_id] = {
+        "name": name,
+        "value": value,
+        "managedBy": "gm-science",
+    }
+
+
+def _custom_credential_usages(config: Mapping[str, Any], credential_id: str) -> list[str]:
+    """Return managed Connectors that still reference one custom credential."""
+
+    servers = _mapping(_mapping(config.get("tools")).get("mcpServers"))
+    usages: list[str] = []
+    for raw_server_id, raw_server in servers.items():
+        bindings = _mapping(_mapping(raw_server).get("credentialBindings"))
+        referenced = {
+            str(value)
+            for group in ("headers", "env")
+            for value in _mapping(bindings.get(group)).values()
+        }
+        if credential_id in referenced:
+            usages.append(f"Connector 'mcp:{raw_server_id}'")
+    return usages
+
+
 def _runtime_memory_enabled(runtime_config: Mapping[str, Any]) -> bool:
     """Read the normalized global Memory switch from runtime configuration."""
 
@@ -223,6 +336,52 @@ def _runtime_memory_enabled(runtime_config: Mapping[str, Any]) -> bool:
     if isinstance(raw, bool):
         return raw
     return str(raw or "").strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+def _apply_general_update(
+    config: dict[str, Any],
+    runtime_config: dict[str, Any],
+    raw: Any,
+) -> None:
+    """Persist model-policy controls and their runtime projection."""
+
+    if not isinstance(raw, Mapping):
+        raise ValueError("Field 'general' must be a JSON object.")
+    unknown = sorted(set(raw).difference({"reasoning_effort", "subagent_model", "license_use_intent"}))
+    if unknown:
+        raise ValueError(f"Unsupported general settings fields: {', '.join(unknown)}")
+    science = _mutable_mapping(config.get("science"))
+    general = _mutable_mapping(science.get("general"))
+    specialists = _mutable_mapping(science.get("specialists"))
+    if "reasoning_effort" in raw:
+        effort = _reasoning_effort(raw.get("reasoning_effort"), strict=True)
+        general["reasoningEffort"] = effort
+        _mutable_mapping(runtime_config.get("env"))["OPENPPX_REASONING_EFFORT"] = effort
+    if "subagent_model" in raw:
+        model = str(raw.get("subagent_model") or "").strip()
+        if len(model) > _MAX_MODEL_CHARS or any(ord(char) < 32 for char in model):
+            raise ValueError(f"Subagent model must be at most {_MAX_MODEL_CHARS} printable characters.")
+        specialists["model"] = model
+    if "license_use_intent" in raw:
+        general["licenseUseIntent"] = _license_use_intent(raw.get("license_use_intent"), strict=True)
+
+
+def _reasoning_effort(value: Any, *, strict: bool = False) -> str:
+    normalized = str(value or "medium").strip().lower()
+    if normalized in {"low", "medium", "high"}:
+        return normalized
+    if strict:
+        raise ValueError("Reasoning effort must be low, medium, or high.")
+    return "medium"
+
+
+def _license_use_intent(value: Any, *, strict: bool = False) -> str:
+    normalized = str(value or "commercial").strip().lower()
+    if normalized in {"commercial", "non_commercial"}:
+        return normalized
+    if strict:
+        raise ValueError("License use intent must be commercial or non_commercial.")
+    return "commercial"
 
 
 def _provider_payload(*, spec: ProviderSpec, config: Mapping[str, Any], active: bool) -> dict[str, Any]:

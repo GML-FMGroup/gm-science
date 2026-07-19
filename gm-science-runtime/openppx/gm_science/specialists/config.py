@@ -59,6 +59,7 @@ class CustomSpecialistConfig:
     instructions: str
     skills: tuple[str, ...]
     connectors: tuple[str, ...]
+    connector_tools: dict[str, tuple[str, ...]]
     configuration_error: str = ""
 
 
@@ -206,6 +207,7 @@ def _parse_custom_specialists(value: Any) -> tuple[CustomSpecialistConfig, ...]:
                 instructions=str(item.get("instructions") or "").strip(),
                 skills=_normalize_capability_ids(item.get("skills")),
                 connectors=_normalize_capability_ids(item.get("connectors")),
+                connector_tools=_normalize_connector_tools(item.get("connectorTools")),
                 configuration_error=" ".join(errors),
             )
         )
@@ -227,6 +229,30 @@ def _normalize_capability_ids(value: Any) -> tuple[str, ...]:
         seen.add(key)
         normalized.append(capability_id)
     return tuple(normalized)
+
+
+def _normalize_connector_tools(value: Any) -> dict[str, tuple[str, ...]]:
+    """Normalize per-Connector tool allowlists without widening invalid entries."""
+
+    if not isinstance(value, Mapping):
+        return {}
+    normalized: dict[str, tuple[str, ...]] = {}
+    for raw_connector_id, raw_tools in value.items():
+        connector_id = str(raw_connector_id or "").strip()
+        if not connector_id or not isinstance(raw_tools, list):
+            continue
+        tools: list[str] = []
+        seen: set[str] = set()
+        for raw_tool in raw_tools:
+            tool = str(raw_tool or "").strip()
+            key = tool.casefold()
+            if not tool or key in seen:
+                continue
+            seen.add(key)
+            tools.append(tool)
+        if tools:
+            normalized[connector_id] = tuple(tools)
+    return normalized
 
 
 def _display_name(value: str) -> str:

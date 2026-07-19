@@ -19,6 +19,7 @@ interface StorageSettingsPanelProps {
   loading: boolean;
   error: string | null;
   onRefresh: () => Promise<void>;
+  onChangeLocation: () => Promise<void>;
 }
 
 interface UsageSettingsPanelProps {
@@ -88,6 +89,7 @@ export function StorageSettingsPanel({
   loading,
   error,
   onRefresh,
+  onChangeLocation,
 }: StorageSettingsPanelProps) {
   return (
     <div className="settings-page science-settings-page observability-settings-page">
@@ -104,7 +106,15 @@ export function StorageSettingsPanel({
             <small>{snapshot.writable ? "Writable" : "Read only"} · {snapshot.totalFiles.toLocaleString()} files</small>
           ) : null}
         </div>
-        <HardDrive size={21} />
+        <button
+          className="secondary"
+          type="button"
+          disabled={loading || !snapshot?.writable}
+          onClick={() => void onChangeLocation().catch(() => undefined)}
+        >
+          <HardDrive size={16} />
+          Change location
+        </button>
       </section>
       <section className="settings-section-block">
         <div className="observability-section-heading">

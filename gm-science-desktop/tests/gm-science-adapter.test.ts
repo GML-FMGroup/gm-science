@@ -92,11 +92,15 @@ describe("gm-science local adapter helpers", () => {
         projectId: "proj_123",
         text: "Compare",
         resourceRefs: [{ id: "project_file:abc", versionOrHash: "1:20" }],
+        sessionRefs: [{ id: "session-2" }],
+        skillRefs: [{ id: "literature-review" }],
       }),
     ).toEqual({
       text: "Compare",
       agent_id: "science-research",
       resource_refs: [{ id: "project_file:abc", version_or_hash: "1:20" }],
+      session_refs: [{ id: "session-2" }],
+      skill_refs: [{ id: "literature-review" }],
     });
   });
 
@@ -108,7 +112,7 @@ describe("gm-science local adapter helpers", () => {
         text: "Compare",
         resourceRefs: [{ id: "project_file:abc", versionOrHash: "1:20" }],
       }),
-    ).toThrow("Project resource references require a Project-scoped run");
+    ).toThrow("Structured references require a Project-scoped run");
   });
 
   it("omits unspecified project capabilities so the runtime can apply config defaults", () => {

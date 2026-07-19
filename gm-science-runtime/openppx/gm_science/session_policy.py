@@ -18,6 +18,7 @@ _DEFAULT_POLICY: dict[str, Any] = {
     "compute_target": "local",
 }
 _MUTABLE_FIELDS = frozenset(_DEFAULT_POLICY)
+SUPPORTED_REVIEWER_MODELS = ("default", "main", "subagent")
 
 
 def default_session_policy() -> dict[str, Any]:
@@ -41,8 +42,8 @@ def normalize_session_policy(value: Mapping[str, Any] | None) -> dict[str, Any]:
     specialist_id = str(policy["specialist_id"] or "").strip()
     reviewer_model = str(policy["reviewer_model"] or "").strip().lower()
     compute_target = str(policy["compute_target"] or "").strip().lower()
-    if reviewer_model != "default":
-        raise ValueError("Session reviewer_model currently supports only 'default'.")
+    if reviewer_model not in SUPPORTED_REVIEWER_MODELS:
+        raise ValueError("Session reviewer_model must be default, main, or subagent.")
     if compute_target != "local":
         raise ValueError("Session compute_target currently supports only 'local'.")
     policy["specialist_id"] = specialist_id

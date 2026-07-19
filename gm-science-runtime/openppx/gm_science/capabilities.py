@@ -139,10 +139,23 @@ def build_capability_catalog(
             description = describe_mcp_server_config(server_name, raw_server)
             metadata = dict(description["metadata"])
             metadata["catalog_group"] = "custom"
+            metadata["manageable"] = (
+                isinstance(raw_server, dict)
+                and str(raw_server.get("managedBy") or "") == "gm-science"
+            )
             transport = str(metadata.get("transport") or "")
             available = bool(description["available"])
             status = str(description["status"])
             status_detail = str(description["status_detail"])
+            credential_issues, credential_metadata = _connector_credential_state(
+                config,
+                raw_server,
+            )
+            metadata.update(credential_metadata)
+            if credential_issues:
+                available = False
+                status = "needs_configuration"
+                status_detail = " ".join(credential_issues)
             server_url = str(raw_server.get("url") or "").strip() if isinstance(raw_server, dict) else ""
             configured_name = _public_configured_text(raw_server, "name", maximum=120)
             configured_description = _public_configured_text(
@@ -230,6 +243,7 @@ def build_capability_catalog(
             "assigned_skills": list(spec.skills),
             "assigned_connectors": list(spec.connectors),
             "execution_mode": "agent_tool",
+            "manageable": spec.source == "local",
         }
         if spec.source == "local":
             metadata["additional_instructions"] = spec.instructions
@@ -249,6 +263,37 @@ def build_capability_catalog(
             )
         )
     return items
+
+
+def _connector_credential_state(
+    config: dict[str, Any],
+    raw_server: Any,
+) -> tuple[list[str], dict[str, Any]]:
+    """Project credential binding names and report missing write-only references."""
+
+    if not isinstance(raw_server, dict):
+        return [], {}
+    bindings = raw_server.get("credentialBindings")
+    if not isinstance(bindings, dict):
+        return [], {}
+    science = config.get("science") if isinstance(config.get("science"), dict) else {}
+    credential_root = science.get("credentials") if isinstance(science.get("credentials"), dict) else {}
+    credentials = credential_root.get("custom") if isinstance(credential_root.get("custom"), dict) else {}
+    issues: list[str] = []
+    metadata: dict[str, Any] = {}
+    for group, metadata_key in (
+        ("headers", "credential_header_names"),
+        ("env", "credential_environment_names"),
+    ):
+        values = bindings.get(group)
+        if not isinstance(values, dict):
+            continue
+        metadata[metadata_key] = sorted((str(name) for name in values), key=str.casefold)
+        for credential_id in values.values():
+            credential = credentials.get(str(credential_id))
+            if not isinstance(credential, dict) or not str(credential.get("value") or ""):
+                issues.append(f"Credential '{credential_id}' is unavailable.")
+    return list(dict.fromkeys(issues)), metadata
 
 
 def _public_configured_text(value: Any, key: str, *, maximum: int) -> str:
@@ -291,6 +336,7 @@ def _skill_capability_payload(
         "registry_source": skill.source,
         "catalog_group": definition.group if definition is not None else "personal",
         "implementation_status": "installed",
+        "manageable": skill.source == "workspace",
         "file_count": file_count,
         "files_truncated": file_count > len(files),
     }

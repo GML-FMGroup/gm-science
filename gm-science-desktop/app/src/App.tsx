@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
+  AtSign,
   BookOpen,
   Box,
   Brain,
@@ -10,11 +11,16 @@ import {
   Columns2,
   Cpu,
   FileText,
+  FilePlus2,
   Folder,
+  FolderPlus,
+  Hash,
   KeyRound,
   LayoutGrid,
   Library,
+  List,
   Menu,
+  MoreHorizontal,
   Network,
   PanelLeftClose,
   PanelRightClose,
@@ -54,16 +60,20 @@ import type {
   CreateGmScienceSkillInput,
   CreateGmScienceSpecialistInput,
   GmScienceCapability,
+  GmScienceCapabilityDefinition,
   GmScienceCapabilityKind,
   GmScienceProject,
+  GmScienceProjectSource,
   GmScienceResource,
   GmScienceResourceDetail,
   GmScienceRun,
   GmScienceSessionPolicy,
+  GmScienceSkillDraft,
   GmScienceSettings,
   GmScienceStorageSnapshot,
   GmScienceUsageSnapshot,
   GmScienceUsageWindow,
+  ImportGmScienceSkillInput,
   RuntimeStatus,
   SessionSummary,
   UpdateGmScienceSessionPolicyInput,
@@ -76,12 +86,26 @@ type SettingsSection =
   | "memory"
   | "compute"
   | "network"
+  | "project"
   | "permissions"
   | "credentials"
   | "storage"
   | "usage"
   | "general";
 type WorkspacePanel = "files" | "data" | "runs";
+
+type ComposerChoice =
+  | { kind: "resource"; id: string; label: string; detail: string; resource: GmScienceResource }
+  | { kind: "session"; id: string; label: string; detail: string; session: SessionSummary }
+  | { kind: "skill"; id: string; label: string; detail: string; skill: GmScienceCapability }
+  | { kind: "action"; id: "customize"; label: string; detail: string };
+
+interface ComposerTrigger {
+  symbol: "@" | "#" | "/";
+  query: string;
+  start: number;
+  end: number;
+}
 
 const SETTINGS_SECTION_TITLES: Record<SettingsSection, string> = {
   skill: "Skills",
@@ -90,6 +114,7 @@ const SETTINGS_SECTION_TITLES: Record<SettingsSection, string> = {
   memory: "Memory",
   compute: "Compute",
   network: "Network",
+  project: "Project",
   permissions: "Permissions",
   credentials: "Credentials",
   storage: "Storage",
@@ -114,6 +139,45 @@ const EMPTY_PROJECT_FORM: ProjectFormState = {
   description: "",
   agentContext: "",
 };
+
+function ComposerChoiceIcon({ kind }: { kind: ComposerChoice["kind"] }) {
+  if (kind === "resource") {
+    return <AtSign size={16} />;
+  }
+  if (kind === "session") {
+    return <Hash size={16} />;
+  }
+  return <BookOpen size={16} />;
+}
+
+function ComposerChoiceList({
+  items,
+  activeIndex,
+  onSelect,
+}: {
+  items: ComposerChoice[];
+  activeIndex: number;
+  onSelect: (choice: ComposerChoice) => void;
+}) {
+  return (
+    <div className="composer-choice-list" role="listbox" aria-label="Composer references">
+      {items.length ? items.map((choice, index) => (
+        <button
+          type="button"
+          role="option"
+          aria-selected={index === activeIndex}
+          className={index === activeIndex ? "active" : ""}
+          key={`${choice.kind}:${choice.id}`}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => onSelect(choice)}
+        >
+          <ComposerChoiceIcon kind={choice.kind} />
+          <span><strong>{choice.label}</strong><small>{choice.detail}</small></span>
+        </button>
+      )) : <div className="composer-choice-empty">No matching references</div>}
+    </div>
+  );
+}
 
 const DEFAULT_PYTHON_SOURCE = `import json
 import os
@@ -267,6 +331,16 @@ function resourceSearchText(resource: GmScienceResource): string {
     .toLowerCase();
 }
 
+function downloadTextFile(fileName: string, content: string, mimeType: string): void {
+  const safeName = fileName.replace(/[\\/:*?"<>|]+/g, "-").trim() || "gm-science-export.txt";
+  const url = URL.createObjectURL(new Blob([content], { type: mimeType || "text/plain;charset=utf-8" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = safeName;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 function isActiveRun(run: GmScienceRun): boolean {
   return ACTIVE_RUN_STATUSES.has(run.status);
 }
@@ -414,7 +488,14 @@ export function App() {
   const [agents, setAgents] = useState<AgentProfile[]>([]);
   const [projects, setProjects] = useState<GmScienceProject[]>([]);
   const [resources, setResources] = useState<GmScienceResource[]>([]);
+  const [projectSources, setProjectSources] = useState<GmScienceProjectSource[]>([]);
+  const [selectedResourceSource, setSelectedResourceSource] = useState("all");
+  const [resourceSourceMenuOpen, setResourceSourceMenuOpen] = useState(false);
+  const [resourceView, setResourceView] = useState<"list" | "grid">("list");
+  const [sourceImporting, setSourceImporting] = useState(false);
   const [selectedResources, setSelectedResources] = useState<GmScienceResource[]>([]);
+  const [selectedSessions, setSelectedSessions] = useState<SessionSummary[]>([]);
+  const [selectedSkills, setSelectedSkills] = useState<GmScienceCapability[]>([]);
   const [openResourceIds, setOpenResourceIds] = useState<string[]>([]);
   const [activeResourceId, setActiveResourceId] = useState("");
   const [resourceDetails, setResourceDetails] = useState<Record<string, GmScienceResourceDetail>>({});
@@ -426,11 +507,17 @@ export function App() {
   const [resourceSearch, setResourceSearch] = useState("");
   const [workspacePanel, setWorkspacePanel] = useState<WorkspacePanel>("files");
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [sessionSearch, setSessionSearch] = useState("");
+  const [sessionMenuId, setSessionMenuId] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState("");
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [composer, setComposer] = useState("");
+  const [composerTrigger, setComposerTrigger] = useState<ComposerTrigger | null>(null);
+  const [composerChoiceIndex, setComposerChoiceIndex] = useState(0);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [commandQuery, setCommandQuery] = useState("");
   const [sendError, setSendError] = useState<string | null>(null);
   const [projectError, setProjectError] = useState<string | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
@@ -443,6 +530,9 @@ export function App() {
   const [capabilitiesSaving, setCapabilitiesSaving] = useState(false);
   const [capabilitiesError, setCapabilitiesError] = useState<string | null>(null);
   const [capabilityCreateKind, setCapabilityCreateKind] = useState<GmScienceCapabilityKind | null>(null);
+  const [capabilityEditDefinition, setCapabilityEditDefinition] = useState<GmScienceCapabilityDefinition | null>(null);
+  const [selectedSkillDraft, setSelectedSkillDraft] = useState<GmScienceSkillDraft | null>(null);
+  const [skillDrafts, setSkillDrafts] = useState<GmScienceSkillDraft[]>([]);
   const [capabilityCreating, setCapabilityCreating] = useState(false);
   const [scienceSettings, setScienceSettings] = useState<GmScienceSettings | null>(null);
   const [scienceSettingsLoading, setScienceSettingsLoading] = useState(false);
@@ -458,6 +548,10 @@ export function App() {
   const [sessionPolicySaving, setSessionPolicySaving] = useState(false);
   const [sessionPolicyError, setSessionPolicyError] = useState<string | null>(null);
   const [sessionOptionsOpen, setSessionOptionsOpen] = useState(false);
+  const [projectPolicy, setProjectPolicy] = useState<GmScienceSessionPolicy | null>(null);
+  const [projectPolicyLoading, setProjectPolicyLoading] = useState(false);
+  const [projectPolicySaving, setProjectPolicySaving] = useState(false);
+  const [projectPolicyError, setProjectPolicyError] = useState<string | null>(null);
   const [sendingSessionIds, setSendingSessionIds] = useState<string[]>([]);
   const [connectionForm, setConnectionForm] = useState<ConnectionSettings>(buildConnectionSettings(null));
   const [savingConnection, setSavingConnection] = useState(false);
@@ -492,6 +586,12 @@ export function App() {
     () => sessions.filter((session) => session.projectId === selectedProjectId),
     [sessions, selectedProjectId],
   );
+  const visibleProjectSessions = useMemo(() => {
+    const query = sessionSearch.trim().toLowerCase();
+    return query
+      ? projectSessions.filter((session) => session.title.toLowerCase().includes(query))
+      : projectSessions;
+  }, [projectSessions, sessionSearch]);
   const recentSessions = useMemo(
     () => sessions.filter((session) => session.projectId && projects.some((project) => project.id === session.projectId)),
     [projects, sessions],
@@ -509,8 +609,34 @@ export function App() {
   );
   const visibleResources = useMemo(() => {
     const query = resourceSearch.trim().toLowerCase();
-    return query ? resources.filter((resource) => resourceSearchText(resource).includes(query)) : resources;
-  }, [resourceSearch, resources]);
+    return resources.filter((resource) => {
+      if (query && !resourceSearchText(resource).includes(query)) {
+        return false;
+      }
+      if (selectedResourceSource === "all") {
+        return true;
+      }
+      if (selectedResourceSource.startsWith("kind:")) {
+        return resource.kind === selectedResourceSource.slice(5);
+      }
+      const source = projectSources.find((item) => item.id === selectedResourceSource);
+      return Boolean(source && resource.relativePath.startsWith(`${source.relativeRoot}/`));
+    });
+  }, [projectSources, resourceSearch, resources, selectedResourceSource]);
+  const selectedResourceSourceLabel = useMemo(() => {
+    if (selectedResourceSource === "all") {
+      return "All artifacts";
+    }
+    const kindLabels: Record<string, string> = {
+      "kind:artifact": "Artifacts",
+      "kind:dataset": "Datasets",
+      "kind:run_output": "Run outputs",
+      "kind:project_file": "Project files",
+    };
+    return kindLabels[selectedResourceSource]
+      ?? projectSources.find((source) => source.id === selectedResourceSource)?.label
+      ?? "All artifacts";
+  }, [projectSources, selectedResourceSource]);
   const selectedResourceIds = useMemo(
     () => new Set(selectedResources.map((resource) => resource.id)),
     [selectedResources],
@@ -526,6 +652,60 @@ export function App() {
     [activeResourceId, resources],
   );
   const activeResourceDetail = activeResourceId ? resourceDetails[activeResourceId] ?? null : null;
+  const composerChoices = useMemo<ComposerChoice[]>(() => [
+    ...resources.map((resource) => ({
+      kind: "resource" as const,
+      id: resource.id,
+      label: resource.displayName,
+      detail: resource.kind.replaceAll("_", " "),
+      resource,
+    })),
+    ...projectSessions
+      .filter((session) => session.id !== selectedSessionId)
+      .map((session) => ({
+        kind: "session" as const,
+        id: session.id,
+        label: session.title,
+        detail: "Project session",
+        session,
+      })),
+    ...capabilities
+      .filter((capability) => capability.kind === "skill" && capability.available && capability.projectEnabled)
+      .map((skill) => ({
+        kind: "skill" as const,
+        id: skill.id,
+        label: skill.name,
+        detail: skill.description || "Attached Skill",
+        skill,
+      })),
+    {
+      kind: "action" as const,
+      id: "customize" as const,
+      label: "Customize",
+      detail: "Ask gm-science to help configure this Project",
+    },
+  ], [capabilities, projectSessions, resources, selectedSessionId]);
+  const inlineComposerChoices = useMemo(() => {
+    if (!composerTrigger) {
+      return [];
+    }
+    const kind = composerTrigger.symbol === "@"
+      ? "resource"
+      : composerTrigger.symbol === "#"
+        ? "session"
+        : null;
+    const query = composerTrigger.query.trim().toLowerCase();
+    return composerChoices
+      .filter((choice) => (kind ? choice.kind === kind : choice.kind === "skill" || choice.kind === "action"))
+      .filter((choice) => !query || `${choice.label} ${choice.detail}`.toLowerCase().includes(query))
+      .slice(0, 10);
+  }, [composerChoices, composerTrigger]);
+  const commandChoices = useMemo(() => {
+    const query = commandQuery.trim().toLowerCase();
+    return composerChoices
+      .filter((choice) => !query || `${choice.label} ${choice.detail} ${choice.kind}`.toLowerCase().includes(query))
+      .slice(0, 24);
+  }, [commandQuery, composerChoices]);
   const canSend = Boolean(composer.trim()) && Boolean(selectedAgentId) && Boolean(selectedProjectId) && !selectedAgentBusy;
   const sessionPolicyActive = Boolean(
     sessionPolicy?.delegationEnabled
@@ -533,6 +713,22 @@ export function App() {
       || sessionPolicy?.memoryEnabled
       || sessionPolicy?.specialistId,
   );
+
+  useEffect(() => {
+    setComposerChoiceIndex(0);
+  }, [composerTrigger?.symbol, composerTrigger?.query, commandQuery, commandPaletteOpen]);
+
+  useEffect(() => {
+    const handleGlobalShortcut = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setCommandQuery("");
+        setCommandPaletteOpen(true);
+      }
+    };
+    window.addEventListener("keydown", handleGlobalShortcut);
+    return () => window.removeEventListener("keydown", handleGlobalShortcut);
+  }, []);
 
   useEffect(() => {
     if (!window.ppxClient) {
@@ -660,11 +856,13 @@ export function App() {
     if (!settingsOpen) {
       return;
     }
-    void Promise.all([refreshCapabilities(), refreshScienceSettings()]);
+    void Promise.all([refreshCapabilities(), refreshScienceSettings(), refreshSkillDrafts()]);
   }, [settingsOpen, selectedProjectId]);
 
   useEffect(() => {
     setCapabilityCreateKind(null);
+    setCapabilityEditDefinition(null);
+    setSelectedSkillDraft(null);
     setCapabilitiesError(null);
   }, [settingsOpen, settingsSection]);
 
@@ -674,6 +872,13 @@ export function App() {
     }
     void refreshStorage();
   }, [settingsOpen, settingsSection]);
+
+  useEffect(() => {
+    if (!settingsOpen || settingsSection !== "project" || !selectedProjectId) {
+      return;
+    }
+    void refreshProjectPolicy(selectedProjectId);
+  }, [settingsOpen, settingsSection, selectedProjectId]);
 
   useEffect(() => {
     if (!settingsOpen || settingsSection !== "usage") {
@@ -715,11 +920,11 @@ export function App() {
     setProjects(listed.projects);
   }
 
-  async function refreshCapabilities(): Promise<void> {
+  async function refreshCapabilities(projectId = selectedProjectId || undefined): Promise<void> {
     setCapabilitiesLoading(true);
     setCapabilitiesError(null);
     try {
-      const catalog = await window.ppxClient.listGmScienceCapabilities(selectedProjectId || undefined);
+      const catalog = await window.ppxClient.listGmScienceCapabilities(projectId);
       setCapabilities(catalog.items);
     } catch (error) {
       setCapabilitiesError(error instanceof Error ? error.message : String(error));
@@ -740,6 +945,14 @@ export function App() {
     }
   }
 
+  async function refreshSkillDrafts(): Promise<void> {
+    try {
+      setSkillDrafts(await window.ppxClient.listGmScienceSkillDrafts());
+    } catch (error) {
+      setCapabilitiesError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   async function createCapability(
     kind: GmScienceCapabilityKind,
     input: CreateGmScienceSkillInput | CreateGmScienceConnectorInput | CreateGmScienceSpecialistInput,
@@ -757,6 +970,8 @@ export function App() {
         { ...created, projectEnabled: selectedProjectIdRef.current ? false : null },
       ]);
       setCapabilityCreateKind(null);
+      setCapabilityEditDefinition(null);
+      setSelectedSkillDraft(null);
       void refreshCapabilities();
     } catch (error) {
       setCapabilitiesError(error instanceof Error ? error.message : String(error));
@@ -766,11 +981,160 @@ export function App() {
     }
   }
 
+  async function saveCapability(
+    kind: GmScienceCapabilityKind,
+    input: CreateGmScienceSkillInput | CreateGmScienceConnectorInput | CreateGmScienceSpecialistInput,
+  ): Promise<void> {
+    if (!capabilityEditDefinition) {
+      await createCapability(kind, input);
+      return;
+    }
+    setCapabilityCreating(true);
+    setCapabilitiesError(null);
+    try {
+      const updated = await window.ppxClient.updateGmScienceCapability(kind, capabilityEditDefinition.id, input);
+      setCapabilities((current) => current.map((item) =>
+        item.kind === updated.kind && item.id === updated.id
+          ? { ...updated, projectEnabled: item.projectEnabled }
+          : item,
+      ));
+      setCapabilityCreateKind(null);
+      setCapabilityEditDefinition(null);
+      setSelectedSkillDraft(null);
+      void refreshCapabilities();
+    } catch (error) {
+      setCapabilitiesError(error instanceof Error ? error.message : String(error));
+      throw error;
+    } finally {
+      setCapabilityCreating(false);
+    }
+  }
+
+  async function importSkill(input: ImportGmScienceSkillInput): Promise<void> {
+    setCapabilityCreating(true);
+    setCapabilitiesError(null);
+    try {
+      const created = await window.ppxClient.importGmScienceSkill(input);
+      setCapabilities((current) => [...current, { ...created, projectEnabled: selectedProjectIdRef.current ? false : null }]);
+      setCapabilityCreateKind(null);
+      setSelectedSkillDraft(null);
+      void refreshCapabilities();
+    } catch (error) {
+      setCapabilitiesError(error instanceof Error ? error.message : String(error));
+      throw error;
+    } finally {
+      setCapabilityCreating(false);
+    }
+  }
+
+  async function saveSkillDraft(input: CreateGmScienceSkillInput): Promise<void> {
+    setCapabilityCreating(true);
+    setCapabilitiesError(null);
+    try {
+      const draft = await window.ppxClient.saveGmScienceSkillDraft(input);
+      setSkillDrafts((current) => [draft, ...current.filter((item) => item.id !== draft.id)]);
+      setSelectedSkillDraft(draft);
+    } catch (error) {
+      setCapabilitiesError(error instanceof Error ? error.message : String(error));
+      throw error;
+    } finally {
+      setCapabilityCreating(false);
+    }
+  }
+
+  async function publishSkillDraft(draftId: string): Promise<void> {
+    setCapabilityCreating(true);
+    setCapabilitiesError(null);
+    try {
+      const created = await window.ppxClient.publishGmScienceSkillDraft(draftId);
+      setSkillDrafts((current) => current.filter((item) => item.id !== draftId));
+      setCapabilities((current) => [
+        ...current.filter((item) => !(item.kind === created.kind && item.id === created.id)),
+        { ...created, projectEnabled: selectedProjectIdRef.current ? false : null },
+      ]);
+      setSelectedSkillDraft(null);
+      setCapabilityCreateKind(null);
+      void refreshCapabilities();
+    } catch (error) {
+      setCapabilitiesError(error instanceof Error ? error.message : String(error));
+      throw error;
+    } finally {
+      setCapabilityCreating(false);
+    }
+  }
+
+  async function deleteSkillDraft(draft: GmScienceSkillDraft): Promise<void> {
+    if (!window.confirm(`Delete draft ${draft.name}?`)) {
+      return;
+    }
+    setCapabilitiesSaving(true);
+    setCapabilitiesError(null);
+    try {
+      await window.ppxClient.deleteGmScienceSkillDraft(draft.id);
+      setSkillDrafts((current) => current.filter((item) => item.id !== draft.id));
+      if (selectedSkillDraft?.id === draft.id) {
+        setSelectedSkillDraft(null);
+        setCapabilityCreateKind(null);
+      }
+    } catch (error) {
+      setCapabilitiesError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCapabilitiesSaving(false);
+    }
+  }
+
+  async function editCapability(item: GmScienceCapability): Promise<void> {
+    setCapabilityCreating(true);
+    setCapabilitiesError(null);
+    try {
+      const definition = await window.ppxClient.getGmScienceCapabilityDefinition(item.kind, item.id);
+      setCapabilityEditDefinition(definition);
+      setSelectedSkillDraft(null);
+      setCapabilityCreateKind(item.kind);
+    } catch (error) {
+      setCapabilitiesError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCapabilityCreating(false);
+    }
+  }
+
+  async function deleteCapability(item: GmScienceCapability): Promise<void> {
+    if (!window.confirm(`Delete ${item.name}? This removes the local definition and cannot be undone.`)) {
+      return;
+    }
+    setCapabilitiesSaving(true);
+    setCapabilitiesError(null);
+    try {
+      await window.ppxClient.deleteGmScienceCapability(item.kind, item.id);
+      setCapabilities((current) => current.filter((candidate) => !(candidate.kind === item.kind && candidate.id === item.id)));
+      void refreshCapabilities();
+    } catch (error) {
+      setCapabilitiesError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCapabilitiesSaving(false);
+    }
+  }
+
   async function refreshStorage(): Promise<void> {
     setStorageLoading(true);
     setObservabilityError(null);
     try {
       setStorageSnapshot(await window.ppxClient.getGmScienceStorage());
+    } catch (error) {
+      setObservabilityError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setStorageLoading(false);
+    }
+  }
+
+  async function changeStorageLocation(): Promise<void> {
+    setStorageLoading(true);
+    setObservabilityError(null);
+    try {
+      const result = await window.ppxClient.changeGmScienceDataLocation();
+      if (result.migrated) {
+        window.location.reload();
+      }
     } catch (error) {
       setObservabilityError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -832,6 +1196,51 @@ export function App() {
       if (requestId === sessionPolicyRequestIdRef.current) {
         setSessionPolicySaving(false);
       }
+    }
+  }
+
+  async function refreshProjectPolicy(projectId: string): Promise<void> {
+    setProjectPolicyLoading(true);
+    setProjectPolicyError(null);
+    try {
+      setProjectPolicy(await window.ppxClient.getGmScienceProjectSessionPolicyDefaults(projectId));
+    } catch (error) {
+      setProjectPolicy(null);
+      setProjectPolicyError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setProjectPolicyLoading(false);
+    }
+  }
+
+  async function updateProjectPolicy(input: UpdateGmScienceSessionPolicyInput): Promise<void> {
+    if (!selectedProjectId || projectPolicySaving) {
+      return;
+    }
+    setProjectPolicySaving(true);
+    setProjectPolicyError(null);
+    try {
+      const policy = await window.ppxClient.updateGmScienceProjectSessionPolicyDefaults(
+        selectedProjectId,
+        input,
+      );
+      setProjectPolicy(policy);
+      setProjects((current) => current.map((project) => project.id === selectedProjectId
+        ? {
+            ...project,
+            sessionPolicyDefaults: {
+              delegationEnabled: policy.delegationEnabled,
+              autoReviewEnabled: policy.autoReviewEnabled,
+              memoryEnabled: policy.memoryEnabled,
+              specialistId: policy.specialistId,
+              reviewerModel: policy.reviewerModel,
+              computeTarget: policy.computeTarget,
+            },
+          }
+        : project));
+    } catch (error) {
+      setProjectPolicyError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setProjectPolicySaving(false);
     }
   }
 
@@ -930,6 +1339,72 @@ export function App() {
     }
   }
 
+  async function refreshProjectSources(projectId: string): Promise<void> {
+    if (!projectId) {
+      return;
+    }
+    try {
+      const sources = await window.ppxClient.listGmScienceProjectSources(projectId);
+      if (selectedProjectIdRef.current === projectId) {
+        setProjectSources(sources);
+        if (
+          selectedResourceSource !== "all"
+          && !selectedResourceSource.startsWith("kind:")
+          && !sources.some((source) => source.id === selectedResourceSource)
+        ) {
+          setSelectedResourceSource("all");
+        }
+      }
+    } catch (error) {
+      setResourceActionError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function importProjectSource(kind: "file" | "folder"): Promise<void> {
+    if (!selectedProjectId || sourceImporting) {
+      return;
+    }
+    setSourceImporting(true);
+    setResourceActionError(null);
+    setResourceSourceMenuOpen(false);
+    try {
+      const selection = await window.ppxClient.selectGmScienceProjectSource(kind);
+      if (selection.canceled || !selection.sourcePath) {
+        return;
+      }
+      const source = await window.ppxClient.importGmScienceProjectSource(selectedProjectId, {
+        sourcePath: selection.sourcePath,
+        kind,
+      });
+      setSelectedResourceSource(source.id);
+      await Promise.all([
+        refreshProjectSources(selectedProjectId),
+        refreshResources(selectedProjectId),
+      ]);
+    } catch (error) {
+      setResourceActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSourceImporting(false);
+    }
+  }
+
+  async function deleteProjectSource(source: GmScienceProjectSource): Promise<void> {
+    if (!selectedProjectId || !window.confirm(`Remove ${source.label} and its copied Project files?`)) {
+      return;
+    }
+    setResourceActionError(null);
+    try {
+      await window.ppxClient.deleteGmScienceProjectSource(selectedProjectId, source.id);
+      setSelectedResourceSource("all");
+      await Promise.all([
+        refreshProjectSources(selectedProjectId),
+        refreshResources(selectedProjectId),
+      ]);
+    } catch (error) {
+      setResourceActionError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   async function openResource(resource: GmScienceResource, forceRefresh = false): Promise<void> {
     if (!selectedProjectId) {
       return;
@@ -1024,6 +1499,97 @@ export function App() {
     void openResource(related);
   }
 
+  async function updateActiveArtifact(input: { title?: string; starred?: boolean; hidden?: boolean }): Promise<void> {
+    const artifactId = activeResourceDetail?.artifact?.id;
+    if (!selectedProjectId || !artifactId) {
+      setResourceActionError("This Project file is not a mutable Artifact.");
+      return;
+    }
+    setResourceActionError(null);
+    try {
+      await window.ppxClient.updateGmScienceArtifact(selectedProjectId, artifactId, input);
+      if (input.hidden) {
+        closeResourceTab(activeResourceId);
+      }
+      await refreshResources(selectedProjectId);
+      if (!input.hidden && activeResource) {
+        await openResource(
+          input.title ? { ...activeResource, displayName: input.title } : activeResource,
+          true,
+        );
+      }
+      void refreshProjects();
+    } catch (error) {
+      setResourceActionError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function deleteActiveArtifact(): Promise<void> {
+    const artifactId = activeResourceDetail?.artifact?.id;
+    if (!selectedProjectId || !artifactId || !activeResource) {
+      return;
+    }
+    if (!window.confirm(`Delete ${activeResource.displayName}? This cannot be undone.`)) {
+      return;
+    }
+    setResourceActionError(null);
+    try {
+      await window.ppxClient.deleteGmScienceArtifact(selectedProjectId, artifactId);
+      setSelectedResources((current) => current.filter((item) => item.id !== activeResource.id));
+      closeResourceTab(activeResource.id);
+      await refreshResources(selectedProjectId);
+      void refreshProjects();
+    } catch (error) {
+      setResourceActionError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function copyActiveResourceLink(): Promise<void> {
+    if (!activeResource) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(
+        `gm-science://projects/${encodeURIComponent(activeResource.projectId)}/resources/${encodeURIComponent(activeResource.id)}`,
+      );
+      setResourceActionError(null);
+    } catch (error) {
+      setResourceActionError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function downloadActiveResource(exportMetadata: boolean): Promise<void> {
+    if (!activeResourceDetail || !selectedProjectId) {
+      return;
+    }
+    if (exportMetadata) {
+      downloadTextFile(
+        `${activeResourceDetail.resource.displayName}.json`,
+        JSON.stringify(activeResourceDetail, null, 2),
+        "application/json;charset=utf-8",
+      );
+      return;
+    }
+    setResourceActionError(null);
+    try {
+      await window.ppxClient.downloadGmScienceResource(selectedProjectId, activeResourceDetail.resource.id);
+    } catch (error) {
+      setResourceActionError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function revealActiveResource(): Promise<void> {
+    if (!activeResourceDetail || !selectedProjectId) {
+      return;
+    }
+    setResourceActionError(null);
+    try {
+      await window.ppxClient.revealGmScienceResource(selectedProjectId, activeResourceDetail.resource.id);
+    } catch (error) {
+      setResourceActionError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   async function refreshRuns(projectId: string, clearOnError = false): Promise<void> {
     if (!projectId) {
       return;
@@ -1060,7 +1626,15 @@ export function App() {
     selectedProjectIdRef.current = project.id;
     setSelectedProjectId(project.id);
     setResourceSearch("");
+    setProjectSources([]);
+    setSelectedResourceSource("all");
+    setResourceSourceMenuOpen(false);
+    setResourceView("list");
     setSelectedResources([]);
+    setSelectedSessions([]);
+    setSelectedSkills([]);
+    setComposerTrigger(null);
+    setCommandPaletteOpen(false);
     resourceDetailRequestIdRef.current += 1;
     setOpenResourceIds([]);
     setActiveResourceId("");
@@ -1096,7 +1670,12 @@ export function App() {
         setMessages(loaded.messages);
       }
     }
-    await Promise.all([refreshResources(project.id, true), refreshRuns(project.id, true)]);
+    await Promise.all([
+      refreshResources(project.id, true),
+      refreshRuns(project.id, true),
+      refreshCapabilities(project.id),
+      refreshProjectSources(project.id),
+    ]);
   }
 
   function openPythonRunDialog(): void {
@@ -1233,6 +1812,52 @@ export function App() {
     void refreshProjects();
   }
 
+  async function renameSession(session: SessionSummary): Promise<void> {
+    const title = window.prompt("Rename session", session.title)?.trim();
+    if (!title || title === session.title) {
+      setSessionMenuId("");
+      return;
+    }
+    try {
+      const updated = await window.ppxClient.updateGmScienceSession(session.id, { title });
+      setSessions((current) => current.map((item) => item.id === updated.id ? { ...item, ...updated } : item));
+      setSendError(null);
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSessionMenuId("");
+    }
+  }
+
+  async function deleteSession(session: SessionSummary): Promise<void> {
+    if (!window.confirm(`Delete session "${session.title}"? Artifacts will be kept.`)) {
+      setSessionMenuId("");
+      return;
+    }
+    try {
+      await window.ppxClient.deleteGmScienceSession(session.id);
+      const remaining = projectSessions.filter((item) => item.id !== session.id);
+      setSessions((current) => current.filter((item) => item.id !== session.id));
+      if (selectedSessionId === session.id) {
+        const next = remaining[0];
+        setSelectedSessionId(next?.id ?? "");
+        if (next) {
+          const loaded = await window.ppxClient.loadSession(next.id);
+          nextScrollBehaviorRef.current = "auto";
+          setMessages(loaded.messages);
+        } else {
+          setMessages([]);
+        }
+      }
+      void refreshProjects();
+      setSendError(null);
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSessionMenuId("");
+    }
+  }
+
   async function ensureActiveSession(
     agentId: string,
     projectId: string,
@@ -1279,6 +1904,67 @@ export function App() {
     );
   }
 
+  function updateComposer(value: string, cursorPosition: number): void {
+    setComposer(value);
+    const prefix = value.slice(0, cursorPosition);
+    const match = /(^|\s)([@#/])([^\s@#/]*)$/.exec(prefix);
+    if (!match) {
+      setComposerTrigger(null);
+      return;
+    }
+    const leadingLength = match[1].length;
+    const start = (match.index ?? 0) + leadingLength;
+    setComposerTrigger({
+      symbol: match[2] as ComposerTrigger["symbol"],
+      query: match[3],
+      start,
+      end: cursorPosition,
+    });
+  }
+
+  function chooseComposerReference(choice: ComposerChoice, fromPalette = false): void {
+    let nextComposer: string | null = null;
+    if (choice.kind === "resource") {
+      setSelectedResources((current) => current.some((item) => item.id === choice.id) ? current : [...current, choice.resource]);
+    } else if (choice.kind === "session") {
+      setSelectedSessions((current) => current.some((item) => item.id === choice.id) ? current : [...current, choice.session]);
+    } else if (choice.kind === "skill") {
+      setSelectedSkills((current) => current.some((item) => item.id === choice.id) ? current : [...current, choice.skill]);
+    } else {
+      nextComposer = "Help me customize this Project's Skills, Connectors, Specialists, and default Session behavior for my research workflow.";
+    }
+    if (nextComposer !== null) {
+      setComposer(nextComposer);
+    } else if (!fromPalette && composerTrigger) {
+      setComposer(`${composer.slice(0, composerTrigger.start)}${composer.slice(composerTrigger.end)}`);
+    }
+    setComposerTrigger(null);
+    setCommandPaletteOpen(false);
+    setCommandQuery("");
+    window.requestAnimationFrame(() => composerRef.current?.focus());
+  }
+
+  function handleCommandPaletteKeyDown(event: React.KeyboardEvent<HTMLInputElement>): void {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setCommandPaletteOpen(false);
+      return;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const direction = event.key === "ArrowDown" ? 1 : -1;
+      setComposerChoiceIndex((current) => {
+        const count = commandChoices.length;
+        return count ? (current + direction + count) % count : 0;
+      });
+      return;
+    }
+    if (event.key === "Enter" && commandChoices[composerChoiceIndex]) {
+      event.preventDefault();
+      chooseComposerReference(commandChoices[composerChoiceIndex], true);
+    }
+  }
+
   async function handleSend(): Promise<void> {
     const text = composer.trim();
     const agentId = selectedAgentId || selectedAgent?.id || "";
@@ -1295,10 +1981,15 @@ export function App() {
     }
     const sessionId = session.id;
     const resourceSnapshot = selectedResources;
+    const sessionSnapshot = selectedSessions;
+    const skillSnapshot = selectedSkills;
     setSelectedAgentId(agentId);
     setSendingSessionIds((current) => (current.includes(sessionId) ? current : [...current, sessionId]));
     setComposer("");
     setSelectedResources([]);
+    setSelectedSessions([]);
+    setSelectedSkills([]);
+    setComposerTrigger(null);
     const optimisticParts: ChatMessage["parts"] = [
       { type: "markdown", text },
       ...resourceSnapshot.map((resource) => ({
@@ -1311,6 +2002,18 @@ export function App() {
         relativePath: resource.relativePath,
         url: resource.url,
         contentStatus: "selected",
+        truncated: false,
+      })),
+      ...sessionSnapshot.map((referencedSession) => ({
+        type: "session_ref" as const,
+        sessionId: referencedSession.id,
+        displayName: referencedSession.title,
+        truncated: false,
+      })),
+      ...skillSnapshot.map((skill) => ({
+        type: "skill_ref" as const,
+        skillId: skill.id,
+        displayName: skill.name,
         truncated: false,
       })),
     ];
@@ -1338,6 +2041,12 @@ export function App() {
               })),
             }
           : {}),
+        ...(sessionSnapshot.length
+          ? { sessionRefs: sessionSnapshot.map((referencedSession) => ({ id: referencedSession.id })) }
+          : {}),
+        ...(skillSnapshot.length
+          ? { skillRefs: skillSnapshot.map((skill) => ({ id: skill.id })) }
+          : {}),
       });
     } catch (error) {
       console.error("Failed to send message", error);
@@ -1350,6 +2059,20 @@ export function App() {
           }
           return [...restored.values()];
         });
+        setSelectedSessions((current) => {
+          const restored = new Map(current.map((session) => [session.id, session]));
+          for (const referencedSession of sessionSnapshot) {
+            restored.set(referencedSession.id, referencedSession);
+          }
+          return [...restored.values()];
+        });
+        setSelectedSkills((current) => {
+          const restored = new Map(current.map((skill) => [skill.id, skill]));
+          for (const skill of skillSnapshot) {
+            restored.set(skill.id, skill);
+          }
+          return [...restored.values()];
+        });
       }
       await refreshResources(selectedProjectId);
     } finally {
@@ -1358,6 +2081,26 @@ export function App() {
   }
 
   function handleComposerKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>): void {
+    if (composerTrigger && inlineComposerChoices.length) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const direction = event.key === "ArrowDown" ? 1 : -1;
+        setComposerChoiceIndex((current) => (
+          (current + direction + inlineComposerChoices.length) % inlineComposerChoices.length
+        ));
+        return;
+      }
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        chooseComposerReference(inlineComposerChoices[composerChoiceIndex] ?? inlineComposerChoices[0]);
+        return;
+      }
+    }
+    if (event.key === "Escape" && composerTrigger) {
+      event.preventDefault();
+      setComposerTrigger(null);
+      return;
+    }
     if (event.key !== "Enter" || event.shiftKey) {
       return;
     }
@@ -1533,19 +2276,34 @@ export function App() {
 
                 <div className="sidebar-divider" />
                 <div className="session-groups">
-                  <span className="session-group-label">Recent</span>
+                  <div className="session-group-heading">
+                    <span className="session-group-label">Recent</span>
+                    <Search size={14} />
+                  </div>
+                  <label className="session-search-field">
+                    <Search size={14} />
+                    <input aria-label="Search sessions" value={sessionSearch} onChange={(event) => setSessionSearch(event.target.value)} />
+                  </label>
                   <div className="session-list">
-                    {projectSessions.map((session) => (
-                      <button
-                        key={session.id}
-                        className={session.id === selectedSessionId ? "session-row active" : "session-row"}
-                        onClick={() => void switchSession(session)}
-                      >
-                        <strong>{session.title}</strong>
-                        <time>{formatRelativeTime(session.updatedAt)}</time>
-                      </button>
+                    {visibleProjectSessions.map((session) => (
+                      <div key={session.id} className={session.id === selectedSessionId ? "session-row-shell active" : "session-row-shell"}>
+                        <button className="session-row" onClick={() => void switchSession(session)}>
+                          <strong>{session.title}</strong>
+                          <time>{formatRelativeTime(session.updatedAt)}</time>
+                        </button>
+                        <button className="icon-control session-more" aria-label="Session actions" title="Session actions" onClick={() => setSessionMenuId((current) => current === session.id ? "" : session.id)}>
+                          <MoreHorizontal size={16} />
+                        </button>
+                        {sessionMenuId === session.id ? (
+                          <div className="session-row-menu" role="menu">
+                            <button role="menuitem" onClick={() => void renameSession(session)}>Rename</button>
+                            <button role="menuitem" className="danger" onClick={() => void deleteSession(session)}>Delete</button>
+                          </div>
+                        ) : null}
+                      </div>
                     ))}
                     {projectSessions.length === 0 ? <span className="session-empty">No sessions yet</span> : null}
+                    {projectSessions.length > 0 && visibleProjectSessions.length === 0 ? <span className="session-empty">No matching sessions</span> : null}
                   </div>
                 </div>
                 <button className="sidebar-settings" onClick={() => openSettings("general")}>
@@ -1602,12 +2360,13 @@ export function App() {
               </section>
 
               <div className="science-composer">
-                {selectedResources.length ? (
-                  <div className="composer-resources" aria-label="Selected Project files">
-                    <span>{selectedResources.length === 1 ? "1 file selected" : `${selectedResources.length} files selected`}</span>
+                {selectedResources.length || selectedSessions.length || selectedSkills.length ? (
+                  <div className="composer-resources" aria-label="Selected references">
+                    <span>{selectedResources.length + selectedSessions.length + selectedSkills.length} selected</span>
                     <div>
                       {selectedResources.map((resource) => (
                         <span className="composer-resource" key={resource.id}>
+                          <AtSign size={13} />
                           <span>{resource.displayName}</span>
                           <button
                             type="button"
@@ -1619,15 +2378,52 @@ export function App() {
                           </button>
                         </span>
                       ))}
+                      {selectedSessions.map((session) => (
+                        <span className="composer-resource" key={session.id}>
+                          <Hash size={13} />
+                          <span>{session.title}</span>
+                          <button
+                            type="button"
+                            aria-label={`Remove ${session.title}`}
+                            title={`Remove ${session.title}`}
+                            onClick={() => setSelectedSessions((current) => current.filter((item) => item.id !== session.id))}
+                          >
+                            <X size={13} />
+                          </button>
+                        </span>
+                      ))}
+                      {selectedSkills.map((skill) => (
+                        <span className="composer-resource" key={skill.id}>
+                          <BookOpen size={13} />
+                          <span>{skill.name}</span>
+                          <button
+                            type="button"
+                            aria-label={`Remove ${skill.name}`}
+                            title={`Remove ${skill.name}`}
+                            onClick={() => setSelectedSkills((current) => current.filter((item) => item.id !== skill.id))}
+                          >
+                            <X size={13} />
+                          </button>
+                        </span>
+                      ))}
                     </div>
+                  </div>
+                ) : null}
+                {composerTrigger ? (
+                  <div className="composer-inline-choices">
+                    <ComposerChoiceList
+                      items={inlineComposerChoices}
+                      activeIndex={composerChoiceIndex}
+                      onSelect={(choice) => chooseComposerReference(choice)}
+                    />
                   </div>
                 ) : null}
                 <textarea
                   ref={composerRef}
                   value={composer}
-                  placeholder="Ask anything..."
+                  placeholder="Ask anything — @ for artifacts, # for sessions, / for skills, ⌘K to search..."
                   aria-label="Message"
-                  onChange={(event) => setComposer(event.target.value)}
+                  onChange={(event) => updateComposer(event.target.value, event.target.selectionStart)}
                   onKeyDown={handleComposerKeyDown}
                 />
                 <div className="science-composer-actions">
@@ -1720,19 +2516,81 @@ export function App() {
                     }}
                     onCloseProvenance={() => setProvenanceOpen(false)}
                     onOpenRelation={openRelatedResource}
+                    onRename={() => {
+                      const title = window.prompt("Artifact name", activeResourceDetail?.resource.displayName ?? "");
+                      if (title?.trim()) {
+                        void updateActiveArtifact({ title: title.trim() });
+                      }
+                    }}
+                    onToggleStar={() => void updateActiveArtifact({
+                      starred: activeResourceDetail?.resource.metadata.starred !== true,
+                    })}
+                    onHide={() => void updateActiveArtifact({ hidden: true })}
+                    onDelete={() => void deleteActiveArtifact()}
+                    onCopyLink={() => void copyActiveResourceLink()}
+                    onDownload={() => void downloadActiveResource(false)}
+                    onReveal={() => void revealActiveResource()}
+                    onExport={() => void downloadActiveResource(true)}
                   />
                 ) : (
                   <>
                     <div className="files-source-row">
-                      <button className="source-button"><Library size={17} />All artifacts<ChevronDown size={14} /></button>
-                      <span>{resources.length} {resources.length === 1 ? "artifact" : "artifacts"}</span>
-                      <button className="icon-control" aria-label="Grid view" title="Grid view"><LayoutGrid size={17} /></button>
+                      <div className="files-source-menu-anchor">
+                        <button
+                          className="source-button"
+                          aria-haspopup="menu"
+                          aria-expanded={resourceSourceMenuOpen}
+                          onClick={() => setResourceSourceMenuOpen((current) => !current)}
+                        >
+                          <Library size={17} />
+                          <span>{selectedResourceSourceLabel}</span>
+                          <ChevronDown size={14} />
+                        </button>
+                        {resourceSourceMenuOpen ? (
+                          <div className="files-source-menu" role="menu">
+                            <button role="menuitem" className={selectedResourceSource === "all" ? "active" : ""} onClick={() => { setSelectedResourceSource("all"); setResourceSourceMenuOpen(false); }}>
+                              <Library size={16} /><span>All artifacts</span><small>{resources.length}</small>
+                            </button>
+                            <span className="files-source-menu-label">Types</span>
+                            {([
+                              ["kind:artifact", "Artifacts"],
+                              ["kind:dataset", "Datasets"],
+                              ["kind:run_output", "Run outputs"],
+                              ["kind:project_file", "Project files"],
+                            ] as const).map(([id, label]) => (
+                              <button role="menuitem" className={selectedResourceSource === id ? "active" : ""} key={id} onClick={() => { setSelectedResourceSource(id); setResourceSourceMenuOpen(false); }}>
+                                <FileText size={16} /><span>{label}</span><small>{resources.filter((resource) => `kind:${resource.kind}` === id).length}</small>
+                              </button>
+                            ))}
+                            <span className="files-source-menu-label">This computer</span>
+                            {projectSources.map((source) => (
+                              <div className="files-source-entry" key={source.id}>
+                                <button role="menuitem" className={selectedResourceSource === source.id ? "active" : ""} onClick={() => { setSelectedResourceSource(source.id); setResourceSourceMenuOpen(false); }}>
+                                  {source.kind === "folder" ? <Folder size={16} /> : <FileText size={16} />}
+                                  <span>{source.label}</span><small>{source.fileCount}</small>
+                                </button>
+                                <button className="icon-control" aria-label={`Remove source ${source.label}`} title={`Remove ${source.label}`} onClick={() => void deleteProjectSource(source)}><X size={14} /></button>
+                              </div>
+                            ))}
+                            <div className="files-source-add-actions">
+                              <button role="menuitem" disabled={sourceImporting} onClick={() => void importProjectSource("file")}><FilePlus2 size={16} /><span>Add file...</span></button>
+                              <button role="menuitem" disabled={sourceImporting} onClick={() => void importProjectSource("folder")}><FolderPlus size={16} /><span>Add folder...</span></button>
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                      <span>{visibleResources.length} {visibleResources.length === 1 ? "artifact" : "artifacts"}</span>
+                      <div className="files-view-toggle" role="group" aria-label="File view">
+                        <button className={resourceView === "grid" ? "icon-control active" : "icon-control"} aria-label="Grid view" title="Grid view" onClick={() => setResourceView("grid")}><LayoutGrid size={17} /></button>
+                        <button className={resourceView === "list" ? "icon-control active" : "icon-control"} aria-label="List view" title="List view" onClick={() => setResourceView("list")}><List size={17} /></button>
+                      </div>
                     </div>
                     <label className="files-search">
                       <Search size={17} />
                       <input value={resourceSearch} placeholder="Search artifacts..." aria-label="Search files" onChange={(event) => setResourceSearch(event.target.value)} />
                     </label>
-                    <div className="artifact-list">
+                    <div className={resourceView === "grid" ? "artifact-list grid" : "artifact-list list"}>
+                      {resourceActionError ? <p className="files-action-error">{resourceActionError}</p> : null}
                       {visibleResources.map((resource) => (
                         <ResourceItem
                           key={resource.id}
@@ -1789,6 +2647,7 @@ export function App() {
               <button className={settingsSection === "compute" ? "active" : ""} onClick={() => setSettingsSection("compute")}><Cpu size={18} />Compute</button>
               <button className={settingsSection === "network" ? "active" : ""} onClick={() => setSettingsSection("network")}><Network size={18} />Network</button>
               <span className="settings-nav-label workspace-label">Workspace</span>
+              <button className={settingsSection === "project" ? "active" : ""} onClick={() => setSettingsSection("project")}><SlidersHorizontal size={18} />Project</button>
               <button className={settingsSection === "permissions" ? "active" : ""} onClick={() => setSettingsSection("permissions")}><ShieldCheck size={18} />Permissions</button>
               <button className={settingsSection === "credentials" ? "active" : ""} onClick={() => setSettingsSection("credentials")}><KeyRound size={18} />Credentials</button>
               <button className={settingsSection === "storage" ? "active" : ""} onClick={() => setSettingsSection("storage")}><Cloud size={18} />Storage</button>
@@ -1809,15 +2668,27 @@ export function App() {
                       key={settingsSection}
                       kind={settingsSection}
                       capabilities={capabilities}
+                      credentials={scienceSettings?.credentials.custom ?? []}
                       saving={capabilityCreating}
                       error={capabilitiesError}
+                      definition={capabilityEditDefinition}
+                      draft={selectedSkillDraft}
                       onCancel={() => {
                         setCapabilityCreateKind(null);
+                        setCapabilityEditDefinition(null);
+                        setSelectedSkillDraft(null);
                         setCapabilitiesError(null);
                       }}
-                      onCreateSkill={(input) => createCapability("skill", input)}
-                      onCreateConnector={(input) => createCapability("connector", input)}
-                      onCreateSpecialist={(input) => createCapability("specialist", input)}
+                      onCreateSkill={(input) => saveCapability("skill", input)}
+                      onCreateConnector={(input) => saveCapability("connector", input)}
+                      onCreateSpecialist={(input) => saveCapability("specialist", input)}
+                      onImportSkill={importSkill}
+                      onSaveSkillDraft={saveSkillDraft}
+                      onPublishSkillDraft={publishSkillDraft}
+                      onSelectSkillSource={async (mode) => {
+                        const selection = await window.ppxClient.selectGmScienceSkillSource(mode);
+                        return selection.canceled ? null : selection.sourcePath;
+                      }}
                     />
                   ) : (
                     <CapabilitiesPanel
@@ -1826,12 +2697,24 @@ export function App() {
                       loading={capabilitiesLoading}
                       saving={capabilitiesSaving}
                       error={capabilitiesError}
+                      drafts={settingsSection === "skill" ? skillDrafts : []}
                       onToggle={(capabilityId) => void toggleCapability(capabilityId)}
                       onRefresh={() => void refreshCapabilities()}
                       onAdd={() => {
                         setCapabilitiesError(null);
+                        setCapabilityEditDefinition(null);
+                        setSelectedSkillDraft(null);
                         setCapabilityCreateKind(settingsSection);
                       }}
+                      onEdit={(item) => void editCapability(item)}
+                      onDelete={(item) => void deleteCapability(item)}
+                      onEditDraft={(draft) => {
+                        setCapabilitiesError(null);
+                        setCapabilityEditDefinition(null);
+                        setSelectedSkillDraft(draft);
+                        setCapabilityCreateKind("skill");
+                      }}
+                      onDeleteDraft={(draft) => void deleteSkillDraft(draft)}
                     />
                   )
                 ) : null}
@@ -1846,6 +2729,25 @@ export function App() {
                     settingsError={settingsError}
                     onSetGlobalEnabled={(enabled) => updateScienceSettings({ memoryEnabled: enabled })}
                   />
+                ) : null}
+
+                {settingsSection === "project" ? (
+                  <section className="settings-form project-policy-settings">
+                    <div className="settings-section-heading">
+                      <div>
+                        <h3>Session defaults</h3>
+                        <p>{selectedProject?.name ?? "Project"}</p>
+                      </div>
+                    </div>
+                    <SessionOptionsMenu
+                      variant="panel"
+                      policy={projectPolicy}
+                      loading={projectPolicyLoading}
+                      saving={projectPolicySaving}
+                      error={projectPolicyError}
+                      onChange={(input) => void updateProjectPolicy(input)}
+                    />
+                  </section>
                 ) : null}
 
                 {settingsSection === "compute" ? (
@@ -1895,6 +2797,7 @@ export function App() {
                     loading={storageLoading}
                     error={observabilityError}
                     onRefresh={refreshStorage}
+                    onChangeLocation={changeStorageLocation}
                   />
                 ) : null}
 
@@ -1920,12 +2823,43 @@ export function App() {
                     connectionForm={connectionForm}
                     savingConnection={savingConnection}
                     onUpdateModel={(model) => updateScienceSettings({ model })}
+                    onUpdateGeneral={(general) => updateScienceSettings({ general })}
                     onConnectionFormChange={setConnectionForm}
                     onSaveConnection={handleConnectionSave}
                   />
                 ) : null}
               </div>
             </div>
+          </section>
+        </div>
+      ) : null}
+
+      {commandPaletteOpen ? (
+        <div className="command-palette-backdrop" role="presentation" onMouseDown={() => setCommandPaletteOpen(false)}>
+          <section
+            className="command-palette"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Search Project references"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <label>
+              <Search size={18} />
+              <input
+                autoFocus
+                value={commandQuery}
+                placeholder="Search artifacts, sessions, skills, and actions..."
+                aria-label="Search Project references"
+                onChange={(event) => setCommandQuery(event.target.value)}
+                onKeyDown={handleCommandPaletteKeyDown}
+              />
+              <kbd>Esc</kbd>
+            </label>
+            <ComposerChoiceList
+              items={commandChoices}
+              activeIndex={composerChoiceIndex}
+              onSelect={(choice) => chooseComposerReference(choice, true)}
+            />
           </section>
         </div>
       ) : null}

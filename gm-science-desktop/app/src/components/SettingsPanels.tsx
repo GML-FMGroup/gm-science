@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { KeyRound } from "lucide-react";
+import { KeyRound, Plus, Trash2 } from "lucide-react";
 import type {
   ClientDiagnostics,
   ConnectionSettings,
@@ -19,6 +19,7 @@ interface GeneralSettingsPanelProps {
   connectionForm: ConnectionSettings;
   savingConnection: boolean;
   onUpdateModel: (model: { provider: string; model: string }) => Promise<void>;
+  onUpdateGeneral: (general: NonNullable<UpdateGmScienceSettingsInput["general"]>) => Promise<void>;
   onConnectionFormChange: (settings: ConnectionSettings) => void;
   onSaveConnection: () => Promise<void>;
 }
@@ -51,11 +52,15 @@ export function GeneralSettingsPanel({
   connectionForm,
   savingConnection,
   onUpdateModel,
+  onUpdateGeneral,
   onConnectionFormChange,
   onSaveConnection,
 }: GeneralSettingsPanelProps) {
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
+  const [reasoningEffort, setReasoningEffort] = useState<"low" | "medium" | "high">("medium");
+  const [subagentModel, setSubagentModel] = useState("");
+  const [licenseUseIntent, setLicenseUseIntent] = useState<"commercial" | "non_commercial">("commercial");
 
   useEffect(() => {
     if (!settings) {
@@ -63,12 +68,20 @@ export function GeneralSettingsPanel({
     }
     setProvider(settings.model.provider);
     setModel(settings.model.model);
+    setReasoningEffort(settings.general.reasoningEffort);
+    setSubagentModel(settings.general.subagentModel);
+    setLicenseUseIntent(settings.general.licenseUseIntent);
   }, [settings]);
 
   const selectedProvider = settings?.providers.find((item) => item.id === provider);
   const modelChanged = Boolean(
     settings && (provider !== settings.model.provider || model.trim() !== settings.model.model),
   );
+  const policyChanged = Boolean(settings && (
+    reasoningEffort !== settings.general.reasoningEffort
+    || subagentModel.trim() !== settings.general.subagentModel
+    || licenseUseIntent !== settings.general.licenseUseIntent
+  ));
 
   return (
     <div className="settings-page science-settings-page">
@@ -127,6 +140,33 @@ export function GeneralSettingsPanel({
         )}
       </section>
       <section className="settings-section-block">
+        <h4>Agent policy</h4>
+        <div className="connection-fields model-settings-fields">
+          <label className="settings-field">
+            <span>Reasoning effort</span>
+            <select aria-label="Reasoning effort" value={reasoningEffort} disabled={!settings?.general.reasoningEffortSupported || saving} onChange={(event) => setReasoningEffort(event.target.value as "low" | "medium" | "high")}>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </label>
+          <label className="settings-field">
+            <span>Subagent model</span>
+            <input aria-label="Subagent model" value={subagentModel} placeholder="Same as main model" disabled={!settings || saving} onChange={(event) => setSubagentModel(event.target.value)} />
+          </label>
+        </div>
+        {!settings?.general.reasoningEffortSupported ? <p className="settings-footnote">The active provider does not expose a supported reasoning-effort control.</p> : null}
+        <fieldset className="license-intent-field">
+          <legend>Skill license use intent</legend>
+          <label><input type="radio" name="license-intent" checked={licenseUseIntent === "commercial"} onChange={() => setLicenseUseIntent("commercial")} />Commercial use</label>
+          <label><input type="radio" name="license-intent" checked={licenseUseIntent === "non_commercial"} onChange={() => setLicenseUseIntent("non_commercial")} />Non-commercial use</label>
+        </fieldset>
+        <div className="settings-inline-status">
+          <span />
+          <button className="primary" disabled={!policyChanged || saving} onClick={() => void onUpdateGeneral({ reasoningEffort, subagentModel: subagentModel.trim(), licenseUseIntent }).catch(() => undefined)}>{saving ? "Saving..." : "Save agent policy"}</button>
+        </div>
+      </section>
+      <section className="settings-section-block">
         <h4>Connection</h4>
         <div className="connection-fields">
           <label className="settings-field">
@@ -181,6 +221,9 @@ export function CredentialsSettingsPanel({
   const [pubmedEmail, setPubmedEmail] = useState("");
   const [pubmedApiKey, setPubmedApiKey] = useState("");
   const [openalexApiKey, setOpenalexApiKey] = useState("");
+  const [customCredentialName, setCustomCredentialName] = useState("");
+  const [customCredentialId, setCustomCredentialId] = useState("");
+  const [customCredentialValue, setCustomCredentialValue] = useState("");
 
   useEffect(() => {
     setPubmedEmail(settings?.literature.pubmed.email ?? "");
@@ -224,6 +267,27 @@ export function CredentialsSettingsPanel({
     try {
       await onUpdate({ openalexApiKey: { operation: "replace", value: openalexApiKey.trim() } });
       setOpenalexApiKey("");
+    } catch {
+      // The parent owns the rendered error state.
+    }
+  }
+
+  async function saveCustomCredential(): Promise<void> {
+    if (!customCredentialId.trim() || !customCredentialName.trim() || !customCredentialValue) {
+      return;
+    }
+    try {
+      await onUpdate({
+        customCredential: {
+          operation: "upsert",
+          id: customCredentialId.trim(),
+          name: customCredentialName.trim(),
+          value: customCredentialValue,
+        },
+      });
+      setCustomCredentialId("");
+      setCustomCredentialName("");
+      setCustomCredentialValue("");
     } catch {
       // The parent owns the rendered error state.
     }
@@ -285,6 +349,42 @@ export function CredentialsSettingsPanel({
               <label className="settings-field"><span>API key</span><input type="password" autoComplete="off" value={openalexApiKey} placeholder="Leave blank to keep existing" onChange={(event) => setOpenalexApiKey(event.target.value)} /></label>
               <button className="primary" disabled={!openalexApiKey.trim() || saving} onClick={() => void saveOpenAlex()}>{saving ? "Saving..." : "Save"}</button>
               {settings.literature.openalex.apiKeyConfigured ? <button className="secondary danger" disabled={saving} onClick={() => void onUpdate({ openalexApiKey: { operation: "remove" } }).catch(() => undefined)}>Remove</button> : null}
+            </div>
+          </section>
+          <section className="settings-section-block credential-editor">
+            <div className="credential-heading">
+              <div><h4>Custom</h4><p>Write-only secrets for authenticated MCP Connectors.</p></div>
+            </div>
+            <div className="service-list credential-provider-list">
+              {settings.credentials.custom.map((credential) => (
+                <div className="service-row" key={credential.id}>
+                  <span><KeyRound size={17} /><strong>{credential.name}</strong><small>{credential.id}</small></span>
+                  <span className="credential-row-actions">
+                    <span className={`status-chip ${credential.configured ? "ready" : "needs_configuration"}`}>
+                      {credential.configured ? "Configured" : "Not configured"}
+                    </span>
+                    <button
+                      className="icon-control danger"
+                      aria-label={`Remove ${credential.name}`}
+                      title="Remove"
+                      disabled={saving}
+                      onClick={() => {
+                        if (window.confirm(`Remove ${credential.name}? Connectors using it must be detached first.`)) {
+                          void onUpdate({ customCredential: { operation: "remove", id: credential.id } }).catch(() => undefined);
+                        }
+                      }}
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="credential-control-row custom-credential-editor">
+              <label className="settings-field"><span>Name</span><input value={customCredentialName} onChange={(event) => setCustomCredentialName(event.target.value)} /></label>
+              <label className="settings-field"><span>Credential ID</span><input spellCheck={false} value={customCredentialId} onChange={(event) => setCustomCredentialId(event.target.value)} /></label>
+              <label className="settings-field"><span>Secret value</span><input type="password" autoComplete="off" value={customCredentialValue} onChange={(event) => setCustomCredentialValue(event.target.value)} /></label>
+              <button className="primary" disabled={!customCredentialId.trim() || !customCredentialName.trim() || !customCredentialValue || saving} onClick={() => void saveCustomCredential()}><Plus size={16} />Add</button>
             </div>
           </section>
           <p className="settings-footnote">Secret values are write-only: existing values are never returned to or rendered by this interface.</p>

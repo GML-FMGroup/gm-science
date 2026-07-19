@@ -21,7 +21,7 @@
 | OpenAlex | 注册免费账号、复制 API Key | 使用 OpenAlex Connector 时必需 | `Settings > Credentials` |
 | PubMed / NCBI | 提供联系邮箱；My NCBI API Key 可选 | 联系邮箱必需，API Key 可选 | `Settings > Credentials` |
 | arXiv | 无 | 不需要注册 | 无 |
-| 自定义 MCP Connector | 匿名本地命令或匿名 HTTP(S) 服务无需注册；鉴权要求由服务提供方决定 | 仅使用该 Connector 时 | `Settings > Connectors`；当前创建表单不接受凭据 |
+| 自定义 MCP Connector | 匿名服务无需注册；鉴权要求由服务提供方决定 | 仅使用该 Connector 时 | 先在 `Settings > Credentials > Custom` 保存秘密，再到 `Settings > Connectors` 绑定引用 |
 | Custom OpenAI-compatible | 准备兼容端点及其可选凭据 | 仅选择该 provider 时 | 本机配置与 `Settings > Credentials` |
 | vLLM/Local | 自行启动本地 vLLM 服务 | 仅选择该 provider 时 | 本机配置；API Key 通常可选 |
 | 私有 package mirror | 准备 mirror URL 和可选 CA bundle | 仅使用组织内 pip/conda mirror 时 | `Settings > Network`；URL 凭据当前不支持 |
@@ -115,14 +115,16 @@ NCBI 还说明，持续开发或在发生违规封禁后的恢复场景中，软
 
 ### 自定义 MCP Connector
 
-gm-science 可以从 `Settings > Connectors` 创建匿名 Remote URL 或本地 stdio command Connector：
+gm-science 可以从 `Settings > Connectors` 创建 Remote URL 或本地 stdio command Connector：
 
 - Remote URL 必须是没有用户名、密码、query 或 fragment 的 HTTP(S) 地址；
 - Local command 会解析为 argv 并直接启动，不通过 shell；只应配置用户信任的本机程序；
+- 需要 header 或环境变量鉴权时，先在 `Settings > Credentials > Custom` 创建 write-only Credential，再在 Connector 表单中把 header/环境变量名绑定到 Credential ID；
+- Connector registry 只保存 Credential 引用，秘密值只在后端组装 MCP runtime 配置时解析，不回传到 renderer；
 - 创建只写入 openppx 已有的 MCP registry，不会自动附加到任何 Project；
 - catalog 中的 `Ready` 表示配置可由 runtime 构建，实际连接在工具加载时验证。
 
-如果远程服务要求 OAuth、API Key、header 或环境变量，用户需要按服务提供方要求注册和申请凭据。当前创建表单有意不接受这些秘密值；在 MCP assembly 支持 write-only credential reference 之前，不要把 token 放进 URL、命令参数、项目文档或对话。
+如果服务要求 API Key、header token 或环境变量，用户需要按服务提供方要求注册和申请凭据，再使用上述 Custom Credential 引用。当前不提供通用第三方 OAuth 回调管理；需要交互式 OAuth 的 MCP 服务必须由其自身客户端完成登录，或等待未来专用 OAuth adapter。不要把 token 放进 URL、命令参数、项目文档或对话。
 
 ### Custom OpenAI-compatible
 

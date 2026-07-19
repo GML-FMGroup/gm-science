@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import csv
+import io
+import json
 from collections.abc import Iterable, Mapping
+from pathlib import PurePosixPath
 from typing import Any
 
 from ..models import ArtifactRecord
@@ -13,7 +17,9 @@ from .models import (
     ArtifactRelationDirection,
     ResourceDetail,
     ResourcePreview,
+    ResourcePreviewMode,
     ResourceSelection,
+    ResourceTablePreview,
 )
 from .service import ResourceCatalogService
 
@@ -22,6 +28,9 @@ _MAX_SAFE_STRING_CHARS = 8_000
 _MAX_SAFE_LIST_ITEMS = 100
 _MAX_SAFE_MAPPING_ITEMS = 50
 _MAX_SAFE_DEPTH = 4
+_MAX_TABLE_COLUMNS = 50
+_MAX_TABLE_ROWS = 100
+_MAX_RENDERED_JSON_CHARS = 100_000
 
 _SAFE_METADATA_KEYS = frozenset(
     {
@@ -145,11 +154,19 @@ class ResourceDetailService:
             project_id,
             [ResourceSelection(id=resource.id, version_or_hash=resource.version_or_hash)],
         )[0]
+        content, display_mode, table, structure_truncated = _structured_preview(
+            resource.mime_type,
+            resource.relative_path or resource.display_name,
+            resolved.content,
+            content_included=resolved.content_included,
+        )
         preview = ResourcePreview(
-            content=resolved.content,
+            content=content,
             content_status=resolved.content_status,
             content_included=resolved.content_included,
-            truncated=resolved.truncated,
+            truncated=resolved.truncated or structure_truncated,
+            display_mode=display_mode,
+            table=table,
         )
         artifact = None
         relations: tuple[ArtifactRelation, ...] = ()
@@ -165,6 +182,57 @@ class ResourceDetailService:
             artifact=artifact,
             relations=relations,
         )
+
+
+def _structured_preview(
+    mime_type: str,
+    path_or_name: str,
+    content: str,
+    *,
+    content_included: bool,
+) -> tuple[str, ResourcePreviewMode, ResourceTablePreview | None, bool]:
+    """Parse bounded JSON and delimited-text previews without reading beyond context limits."""
+
+    if not content_included:
+        return content, "text", None, False
+    normalized_mime = str(mime_type or "").split(";", 1)[0].strip().lower()
+    suffix = PurePosixPath(path_or_name).suffix.lower()
+    if normalized_mime == "text/markdown" or suffix in {".md", ".markdown"}:
+        return content, "markdown", None, False
+    if normalized_mime in {"application/json", "application/ld+json"} or suffix == ".json":
+        try:
+            rendered = json.dumps(json.loads(content), ensure_ascii=False, indent=2)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return content, "text", None, False
+        truncated = len(rendered) > _MAX_RENDERED_JSON_CHARS
+        return rendered[:_MAX_RENDERED_JSON_CHARS], "json", None, truncated
+    delimiter = None
+    if normalized_mime in {"text/csv", "application/csv"} or suffix == ".csv":
+        delimiter = ","
+    elif normalized_mime in {"text/tab-separated-values", "text/tsv"} or suffix in {".tsv", ".tab"}:
+        delimiter = "\t"
+    if delimiter is None:
+        return content, "text", None, False
+    try:
+        reader = csv.reader(io.StringIO(content), delimiter=delimiter)
+        parsed: list[tuple[str, ...]] = []
+        truncated = False
+        for index, raw_row in enumerate(reader):
+            if index > _MAX_TABLE_ROWS:
+                truncated = True
+                break
+            if len(raw_row) > _MAX_TABLE_COLUMNS:
+                truncated = True
+            parsed.append(tuple(str(value) for value in raw_row[:_MAX_TABLE_COLUMNS]))
+    except csv.Error:
+        return content, "text", None, False
+    if not parsed:
+        return content, "table", ResourceTablePreview(columns=(), rows=(), truncated=False), False
+    columns = tuple(value or f"Column {index + 1}" for index, value in enumerate(parsed[0]))
+    width = len(columns)
+    rows = tuple((row + ("",) * max(0, width - len(row)))[:width] for row in parsed[1:])
+    table = ResourceTablePreview(columns=columns, rows=rows, truncated=truncated)
+    return content, "table", table, truncated
 
 
 def _artifact_detail(artifact: ArtifactRecord) -> ArtifactDetail:

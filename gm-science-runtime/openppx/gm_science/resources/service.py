@@ -49,9 +49,10 @@ class ResourceCatalogService:
         represented_paths: set[Path] = set()
         for artifact in artifacts:
             resource, represented_path = self._artifact_resource(artifact, workspace)
-            resources.append(resource)
             if represented_path is not None:
                 represented_paths.add(represented_path)
+            if artifact.metadata.get("gm_science_hidden") is not True:
+                resources.append(resource)
         resources.extend(self._workspace_resources(project.id, workspace, represented_paths))
 
         if normalized_query:
@@ -210,6 +211,8 @@ def _safe_artifact_metadata(artifact: ArtifactRecord) -> dict[str, Any]:
         metadata["science_run_role"] = role
     if task_id:
         metadata["task_id"] = task_id
+    if artifact.metadata.get("gm_science_starred") is True:
+        metadata["starred"] = True
     return metadata
 
 

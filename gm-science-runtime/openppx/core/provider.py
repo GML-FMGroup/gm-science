@@ -151,6 +151,9 @@ def build_adk_model_from_env(model_override: str | None = None) -> Any:
         from google.adk.models.lite_llm import LiteLlm
 
         kwargs: dict[str, Any] = {"drop_params": True}
+        reasoning_effort = os.getenv("OPENPPX_REASONING_EFFORT", "").strip().lower()
+        if reasoning_effort in {"low", "medium", "high"}:
+            kwargs["reasoning_effort"] = reasoning_effort
         if provider == "deepseek" and strict_tool_calls:
             from .deepseek_litellm import DeepSeekStrictToolLiteLLMClient
 
@@ -185,7 +188,11 @@ def build_adk_model_from_env(model_override: str | None = None) -> Any:
         from .openai_codex_llm import OpenAICodexLlm
 
         codex_url = os.getenv("OPENPPX_PROVIDER_API_BASE", "").strip() or provider_default_api_base(provider)
-        return OpenAICodexLlm(model=model_name, codex_url=codex_url)
+        return OpenAICodexLlm(
+            model=model_name,
+            codex_url=codex_url,
+            reasoning_effort=os.getenv("OPENPPX_REASONING_EFFORT", "").strip().lower(),
+        )
 
     raise RuntimeError(f"Unsupported provider '{provider}'.")
 

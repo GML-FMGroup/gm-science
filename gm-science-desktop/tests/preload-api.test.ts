@@ -64,6 +64,22 @@ describe("preload API", () => {
       channel: "ppx-client:create-gm-science-skill",
       args: [{ id: "assay-quality" }],
     });
+    expect(api.listGmScienceSkillDrafts()).toEqual({
+      channel: "ppx-client:list-gm-science-skill-drafts",
+      args: [],
+    });
+    expect(api.saveGmScienceSkillDraft({ id: "assay-draft" })).toEqual({
+      channel: "ppx-client:save-gm-science-skill-draft",
+      args: [{ id: "assay-draft" }],
+    });
+    expect(api.publishGmScienceSkillDraft("assay-draft")).toEqual({
+      channel: "ppx-client:publish-gm-science-skill-draft",
+      args: ["assay-draft"],
+    });
+    expect(api.deleteGmScienceSkillDraft("assay-draft")).toEqual({
+      channel: "ppx-client:delete-gm-science-skill-draft",
+      args: ["assay-draft"],
+    });
     expect(api.createGmScienceConnector({ id: "local-files" })).toEqual({
       channel: "ppx-client:create-gm-science-connector",
       args: [{ id: "local-files" }],
@@ -99,6 +115,10 @@ describe("preload API", () => {
     });
     expect(api.getGmScienceStorage()).toEqual({
       channel: "ppx-client:get-gm-science-storage",
+      args: [],
+    });
+    expect(api.changeGmScienceDataLocation()).toEqual({
+      channel: "ppx-client:change-gm-science-data-location",
       args: [],
     });
     expect(api.getGmScienceUsage("30d")).toEqual({
@@ -212,6 +232,6 @@ describe("preload API", () => {
       channel: "ppx-client:run-gm-science-analysis",
       args: ["proj-1", "analysis-1"],
     });
-    expect(invoke).toHaveBeenCalledTimes(39);
+    expect(invoke).toHaveBeenCalledTimes(44);
   });
 });

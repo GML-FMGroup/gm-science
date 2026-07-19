@@ -5,12 +5,19 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNTIME_DIR="$ROOT_DIR/gm-science-runtime"
 DESKTOP_DIR="$ROOT_DIR/gm-science-desktop"
 VENV_DIR="${GM_SCIENCE_VENV_DIR:-$RUNTIME_DIR/.venv}"
-DATA_DIR="${GM_SCIENCE_DATA_DIR:-$HOME/.gm-science}"
+if [ -n "${GM_SCIENCE_DATA_DIR+x}" ]; then
+  DATA_DIR="$GM_SCIENCE_DATA_DIR"
+  DATA_DIR_SOURCE="explicit"
+else
+  DATA_DIR="$HOME/.gm-science"
+  DATA_DIR_SOURCE="launcher-default"
+fi
 CLIENT_API_PORT="${OPENPPX_CLIENT_API_PORT:-8876}"
 PYTHON_BIN="$VENV_DIR/bin/python"
 PYPROJECT_FILE="$RUNTIME_DIR/pyproject.toml"
 BACKEND_STAMP="$VENV_DIR/.gm-science-runtime-installed"
 FRONTEND_STAMP="$DESKTOP_DIR/node_modules/.modules.yaml"
+FRONTEND_DEV_BIN="$DESKTOP_DIR/node_modules/.bin/vite"
 DRY_RUN=0
 DESKTOP_JOB_PID=""
 
@@ -182,6 +189,10 @@ prepare_frontend() {
   else
     log "桌面端依赖已就绪。"
   fi
+
+  if [ ! -x "$FRONTEND_DEV_BIN" ]; then
+    fail "桌面端依赖安装不完整：缺少 $FRONTEND_DEV_BIN"
+  fi
 }
 
 start_desktop() {
@@ -190,6 +201,7 @@ start_desktop() {
   export OPENPPX_ROOT="$RUNTIME_DIR"
   export GM_SCIENCE_MODE=1
   export GM_SCIENCE_DATA_DIR="$DATA_DIR"
+  export GM_SCIENCE_DATA_DIR_SOURCE="$DATA_DIR_SOURCE"
   export OPENPPX_DATA_DIR="$DATA_DIR"
   export OPENPPX_CLIENT_API_PORT="$CLIENT_API_PORT"
   export OPENPPX_CLIENT_API_BASE_URL="http://127.0.0.1:$CLIENT_API_PORT"
@@ -201,7 +213,7 @@ start_desktop() {
   # Give the desktop process and every managed child one process group so a
   # launcher interrupt cannot orphan Electron or its local client-api.
   set -m
-  (cd "$DESKTOP_DIR" && run_pnpm dev) &
+  (cd "$DESKTOP_DIR" && "$FRONTEND_DEV_BIN") &
   DESKTOP_JOB_PID=$!
   trap handle_desktop_interrupt INT
   trap handle_desktop_termination TERM

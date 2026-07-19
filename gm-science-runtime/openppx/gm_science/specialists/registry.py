@@ -47,6 +47,7 @@ class SpecialistSpec:
     instructions: str = ""
     skills: tuple[str, ...] = ()
     connectors: tuple[str, ...] = ()
+    connector_tools: dict[str, tuple[str, ...]] | None = None
     configuration_error: str = ""
 
 
@@ -101,6 +102,7 @@ def list_specialist_specs(config: SpecialistConfig | None = None) -> tuple[Speci
             instructions=item.instructions,
             skills=item.skills,
             connectors=item.connectors,
+            connector_tools=item.connector_tools,
             configuration_error=item.configuration_error,
         )
         for item in resolved.custom
