@@ -6,6 +6,9 @@ import type {
   CreateGmSciencePythonRunInput,
   CreateGmScienceProjectInput,
   CreateGmScienceMemoryNoteInput,
+  CreateGmScienceConnectorInput,
+  CreateGmScienceSkillInput,
+  CreateGmScienceSpecialistInput,
   ImportGmScienceDatasetInput,
   PpxClientApi,
   RunEvent,
@@ -35,6 +38,12 @@ const api: PpxClientApi = {
   getGmScienceProject: (projectId: string) => ipcRenderer.invoke("ppx-client:get-gm-science-project", projectId),
   listGmScienceCapabilities: (projectId?: string) =>
     ipcRenderer.invoke("ppx-client:list-gm-science-capabilities", projectId),
+  createGmScienceSkill: (input: CreateGmScienceSkillInput) =>
+    ipcRenderer.invoke("ppx-client:create-gm-science-skill", input),
+  createGmScienceConnector: (input: CreateGmScienceConnectorInput) =>
+    ipcRenderer.invoke("ppx-client:create-gm-science-connector", input),
+  createGmScienceSpecialist: (input: CreateGmScienceSpecialistInput) =>
+    ipcRenderer.invoke("ppx-client:create-gm-science-specialist", input),
   updateGmScienceProjectCapabilities: (projectId: string, input: UpdateGmScienceCapabilitiesInput) =>
     ipcRenderer.invoke("ppx-client:update-gm-science-project-capabilities", projectId, input),
   getGmScienceSettings: () => ipcRenderer.invoke("ppx-client:get-gm-science-settings"),

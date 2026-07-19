@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any, Iterable, Literal
@@ -143,6 +144,12 @@ def build_capability_catalog(
             status = str(description["status"])
             status_detail = str(description["status_detail"])
             server_url = str(raw_server.get("url") or "").strip() if isinstance(raw_server, dict) else ""
+            configured_name = _public_configured_text(raw_server, "name", maximum=120)
+            configured_description = _public_configured_text(
+                raw_server,
+                "description",
+                maximum=2_000,
+            )
             if available and server_url:
                 network_decision = network_policy.evaluate_url(
                     server_url,
@@ -157,8 +164,8 @@ def build_capability_catalog(
                 _capability_payload(
                     capability_id=f"mcp:{server_name}",
                     kind="connector",
-                    name=_display_skill_name(server_name) or "MCP Server",
-                    description=(
+                    name=configured_name or _display_skill_name(server_name) or "MCP Server",
+                    description=configured_description or (
                         f"Configured MCP server over {transport}."
                         if transport
                         else "MCP server configuration requires attention."
@@ -244,6 +251,19 @@ def build_capability_catalog(
     return items
 
 
+def _public_configured_text(value: Any, key: str, *, maximum: int) -> str:
+    """Return one bounded single-line display field from local configuration."""
+
+    if not isinstance(value, dict):
+        return ""
+    text = str(value.get(key) or "").strip()
+    if not text or len(text) > maximum or "\n" in text or "\r" in text:
+        return ""
+    if not all(character.isprintable() for character in text):
+        return ""
+    return text
+
+
 def _skill_registry_for_config(config_path: Path) -> SkillRegistry:
     """Build the Skill registry used by the configured gm-science agent."""
 
@@ -280,7 +300,11 @@ def _skill_capability_payload(
     return _capability_payload(
         capability_id=skill.name,
         kind="skill",
-        name=definition.name if definition is not None else _display_skill_name(skill.name),
+        name=(
+            definition.name
+            if definition is not None
+            else frontmatter.get("title") or _display_skill_name(skill.name)
+        ),
         description=skill.description,
         source=source,
         version=frontmatter.get("version", ""),
@@ -345,10 +369,24 @@ def _read_public_skill_frontmatter(skill_path: Path) -> dict[str, str]:
             break
         key, separator, value = line.partition(":")
         normalized_key = key.strip().lower()
-        if not separator or normalized_key not in {"version", "license"}:
+        if not separator or normalized_key not in {"title", "version", "license"}:
             continue
-        selected[normalized_key] = value.strip().strip("\"'")
+        selected[normalized_key] = _frontmatter_scalar(value)
     return selected
+
+
+def _frontmatter_scalar(value: str) -> str:
+    """Decode the JSON-compatible scalars emitted by local Skill authoring."""
+
+    stripped = value.strip()
+    if stripped.startswith('"') and stripped.endswith('"'):
+        try:
+            decoded = json.loads(stripped)
+        except (TypeError, ValueError):
+            pass
+        else:
+            return str(decoded)
+    return stripped.strip("\"'")
 
 
 def _public_skill_files(skill_dir: Path) -> tuple[list[str], int]:

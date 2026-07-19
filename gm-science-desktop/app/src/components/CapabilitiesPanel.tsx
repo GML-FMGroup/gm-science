@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { Plus, RefreshCw } from "lucide-react";
 import type { GmScienceCapability, GmScienceCapabilityKind } from "../types";
 
 interface CapabilitiesPanelProps {
@@ -10,6 +10,7 @@ interface CapabilitiesPanelProps {
   error: string | null;
   onToggle: (capabilityId: string) => void;
   onRefresh: () => void;
+  onAdd: () => void;
 }
 
 const headings: Record<GmScienceCapabilityKind, string> = {
@@ -254,6 +255,7 @@ export function CapabilitiesPanel({
   error,
   onToggle,
   onRefresh,
+  onAdd,
 }: CapabilitiesPanelProps) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -329,6 +331,9 @@ export function CapabilitiesPanel({
             disabled={loading || saving}
           >
             <RefreshCw size={16} />
+          </button>
+          <button className="secondary small capability-add-button" type="button" onClick={onAdd} disabled={saving}>
+            <Plus size={15} />Add {kind}
           </button>
         </div>
       ) : null}

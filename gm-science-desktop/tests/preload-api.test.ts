@@ -60,6 +60,18 @@ describe("preload API", () => {
       channel: "ppx-client:list-gm-science-capabilities",
       args: ["proj-1"],
     });
+    expect(api.createGmScienceSkill({ id: "assay-quality" })).toEqual({
+      channel: "ppx-client:create-gm-science-skill",
+      args: [{ id: "assay-quality" }],
+    });
+    expect(api.createGmScienceConnector({ id: "local-files" })).toEqual({
+      channel: "ppx-client:create-gm-science-connector",
+      args: [{ id: "local-files" }],
+    });
+    expect(api.createGmScienceSpecialist({ id: "assay_reviewer" })).toEqual({
+      channel: "ppx-client:create-gm-science-specialist",
+      args: [{ id: "assay_reviewer" }],
+    });
     expect(
       api.updateGmScienceProjectCapabilities("proj-1", {
         enabledSkills: [],
@@ -200,6 +212,6 @@ describe("preload API", () => {
       channel: "ppx-client:run-gm-science-analysis",
       args: ["proj-1", "analysis-1"],
     });
-    expect(invoke).toHaveBeenCalledTimes(36);
+    expect(invoke).toHaveBeenCalledTimes(39);
   });
 });

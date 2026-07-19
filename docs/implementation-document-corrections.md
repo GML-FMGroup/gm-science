@@ -288,3 +288,41 @@ Phase 14 Usage 只汇总本地记录的 24 小时、7 天和 30 天窗口：请�
 - token 事实继续来自 openppx token store，运行事实继续来自 TaskRun，不建立 gm-science 第二套 usage 数据库；
 - 数据目录迁移、云存储、费用核算和 plan 限额仍是明确未实现能力，界面不提供伪操作；
 - General 只展示 runtime 能实际执行的 provider/model 与诊断设置，不复制无法落地的 Claude Science 候选项。
+
+## 10. Phase 15A 新增修正记录
+
+### DOC-CORRECTION-013：Capability 创建必须写入既有 registry，且不等于 Project attachment
+
+**原有判断**
+
+早期路线把“安装、创建、发现和附加 Capability”统称为动态能力管理，容易让创建动作同时修改全局 registry 和当前 Project，或者引入一套 renderer-owned 能力数据库。
+
+**新证据**
+
+openppx 已经分别拥有 Agent-local Skill 目录、`tools.mcpServers` 和 `science.specialists.custom` 三个运行时事实源；Project 只保存稳定 Capability ID attachment。真实 Claude Science 表单也把全局能力创建和 Project 启用作为不同操作。
+
+**修正结论**
+
+手动创建 Skill、MCP Connector 和 Specialist 直接写入 openppx 既有 registry，并在刷新后进入统一 catalog。创建成功不自动附加到当前或其他 Project；attachment 继续通过现有 Project mutation 和权限检查显式完成。不得建立第二套 Capability 持久化或把 renderer 状态当作事实源。
+
+### DOC-CORRECTION-014：自定义 MCP 创建表单不是秘密值传输通道
+
+**原有判断**
+
+因为 openppx MCP 配置能够表达 environment 和 headers，创建表单似乎也可以直接接受这些字段。
+
+**新证据**
+
+当前 Credentials 服务尚未提供由 MCP assembly 消费的 write-only credential reference。直接从 renderer 接收 environment、header、URL query 或命令参数中的 token，会让秘密进入请求状态、日志、配置投影或截图。
+
+**修正结论**
+
+Phase 15A 只创建匿名 Remote URL 和无 shell 的本地 argv Connector，并拒绝 URL credentials、query、fragment 和 inline secret。需要鉴权的 MCP 必须等待独立的 write-only credential reference 契约，不能用隐藏输入框或文档约定代替后端秘密边界。
+
+## 11. Phase 15A 后的有效实施基线
+
+- Skill 创建写入 Agent-local `skills/<id>/SKILL.md`，MCP Connector 和 Specialist 分别写入现有配置 registry；
+- `publish_skill` 和 `create_agent` 在后端 authoring boundary 强制，冲突、权限和无效输入使用稳定 HTTP 语义；
+- 新建 Capability 默认不附加 Project，Specialist 只保存用户明确选择的 Skill 和 Connector；
+- 一键启动器使用受管进程组，Electron 在退出和终止信号下幂等释放 adapter，`Ctrl+C` 不再遗留 client-api；
+- ToolUniverse 不属于当前 Claude Science 复现路线，只有收到用户明确指令后才允许重新评估。

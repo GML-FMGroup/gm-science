@@ -72,6 +72,99 @@ def test_handler_rejects_invalid_json_without_dispatching() -> None:
     ]
 
 
+def test_handler_routes_create_local_capabilities_with_stable_statuses(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    handler, sent = _fake_handler(coordinator)
+
+    handler._parse = lambda: (
+        "/api/v1/gm-science/capabilities/skills",
+        ["api", "v1", "gm-science", "capabilities", "skills"],
+        {},
+    )
+    handler._read_json_body = lambda: {
+        "id": "assay-quality",
+        "name": "Assay Quality",
+        "description": "Review assay quality.",
+        "content": "# Assay Quality",
+    }
+    _ClientApiHandler.do_POST(handler)
+    assert sent[-1][0] == 200
+    assert sent[-1][1]["data"]["capability"]["id"] == "assay-quality"
+
+    _ClientApiHandler.do_POST(handler)
+    assert sent[-1][0] == 409
+    assert sent[-1][1]["error"]["code"] == "CAPABILITY_CONFLICT"
+
+    handler._parse = lambda: (
+        "/api/v1/gm-science/capabilities/connectors",
+        ["api", "v1", "gm-science", "capabilities", "connectors"],
+        {},
+    )
+    handler._read_json_body = lambda: {
+        "id": "local-files",
+        "name": "Local Files",
+        "description": "Read local files.",
+        "connection_type": "local",
+        "command_line": "mcp-server-filesystem /tmp/research",
+    }
+    _ClientApiHandler.do_POST(handler)
+    assert sent[-1][0] == 200
+    assert sent[-1][1]["data"]["capability"]["id"] == "mcp:local-files"
+
+    handler._parse = lambda: (
+        "/api/v1/gm-science/capabilities/specialists",
+        ["api", "v1", "gm-science", "capabilities", "specialists"],
+        {},
+    )
+    handler._read_json_body = lambda: {
+        "id": "assay_reviewer",
+        "name": "Assay Reviewer",
+        "description": "Review assay quality.",
+        "instructions": "Check controls and limitations.",
+        "skills": ["assay-quality"],
+        "connectors": ["mcp:local-files"],
+    }
+    _ClientApiHandler.do_POST(handler)
+    assert sent[-1][0] == 200
+    specialist = sent[-1][1]["data"]["capability"]
+    assert specialist["id"] == "assay_reviewer"
+    assert specialist["metadata"]["assigned_skills"] == ["assay-quality"]
+
+
+def test_handler_maps_capability_authoring_permission_denials_to_403(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    coordinator.update_gm_science_settings(
+        {"permission_grants": {"publish_skill": False}}
+    )
+    handler, sent = _fake_handler(coordinator)
+    handler._parse = lambda: (
+        "/api/v1/gm-science/capabilities/skills",
+        ["api", "v1", "gm-science", "capabilities", "skills"],
+        {},
+    )
+    handler._read_json_body = lambda: {
+        "id": "blocked-skill",
+        "name": "Blocked Skill",
+        "description": "Must not be created.",
+        "content": "# Blocked",
+    }
+
+    _ClientApiHandler.do_POST(handler)
+
+    assert sent[-1][0] == 403
+    assert sent[-1][1]["error"]["code"] == "PERMISSION_DENIED"
+
+
 def test_handler_routes_expose_gm_science_project_and_artifact_api(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path / "gm-science"))
     coordinator = ClientApiCoordinator(data_dir=tmp_path)

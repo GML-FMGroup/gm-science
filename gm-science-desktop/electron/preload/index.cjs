@@ -14,6 +14,9 @@ const api = {
   getGmScienceProject: (projectId) => ipcRenderer.invoke("ppx-client:get-gm-science-project", projectId),
   listGmScienceCapabilities: (projectId) =>
     ipcRenderer.invoke("ppx-client:list-gm-science-capabilities", projectId),
+  createGmScienceSkill: (input) => ipcRenderer.invoke("ppx-client:create-gm-science-skill", input),
+  createGmScienceConnector: (input) => ipcRenderer.invoke("ppx-client:create-gm-science-connector", input),
+  createGmScienceSpecialist: (input) => ipcRenderer.invoke("ppx-client:create-gm-science-specialist", input),
   updateGmScienceProjectCapabilities: (projectId, input) =>
     ipcRenderer.invoke("ppx-client:update-gm-science-project-capabilities", projectId, input),
   getGmScienceSettings: () => ipcRenderer.invoke("ppx-client:get-gm-science-settings"),

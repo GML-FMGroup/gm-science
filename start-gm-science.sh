@@ -12,6 +12,7 @@ PYPROJECT_FILE="$RUNTIME_DIR/pyproject.toml"
 BACKEND_STAMP="$VENV_DIR/.gm-science-runtime-installed"
 FRONTEND_STAMP="$DESKTOP_DIR/node_modules/.modules.yaml"
 DRY_RUN=0
+DESKTOP_JOB_PID=""
 
 log() {
   printf "\033[1;34m[gm-science]\033[0m %s\n" "$*"
@@ -105,6 +106,29 @@ run_pnpm() {
   fail "检测到 Node.js，但没有找到 pnpm/corepack/npx。请安装 Node.js LTS 后重新运行。"
 }
 
+stop_desktop_process_group() {
+  local pid="${DESKTOP_JOB_PID:-}"
+  if [ -z "$pid" ]; then
+    return
+  fi
+
+  if kill -0 "$pid" >/dev/null 2>&1; then
+    kill -TERM -- "-$pid" >/dev/null 2>&1 || kill -TERM "$pid" >/dev/null 2>&1 || true
+  fi
+  wait "$pid" >/dev/null 2>&1 || true
+  DESKTOP_JOB_PID=""
+}
+
+handle_desktop_interrupt() {
+  stop_desktop_process_group
+  exit 130
+}
+
+handle_desktop_termination() {
+  stop_desktop_process_group
+  exit 143
+}
+
 backend_runtime_ready() {
   "$PYTHON_BIN" - <<'PY' >/dev/null 2>&1
 import openppx
@@ -173,7 +197,22 @@ start_desktop() {
   log "数据目录：$DATA_DIR"
   log "本地 client-api：http://127.0.0.1:$CLIENT_API_PORT"
   log "正在启动 gm-science 桌面端。关闭应用或在此窗口按 Ctrl+C 可以停止。"
-  (cd "$DESKTOP_DIR" && run_pnpm dev)
+
+  # Give the desktop process and every managed child one process group so a
+  # launcher interrupt cannot orphan Electron or its local client-api.
+  set -m
+  (cd "$DESKTOP_DIR" && run_pnpm dev) &
+  DESKTOP_JOB_PID=$!
+  trap handle_desktop_interrupt INT
+  trap handle_desktop_termination TERM
+  trap stop_desktop_process_group EXIT
+
+  local status=0
+  wait "$DESKTOP_JOB_PID" || status=$?
+  DESKTOP_JOB_PID=""
+  trap - INT TERM EXIT
+  set +m
+  return "$status"
 }
 
 require_dir "$RUNTIME_DIR" "gm-science runtime 目录"

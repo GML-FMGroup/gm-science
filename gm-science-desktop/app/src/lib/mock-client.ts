@@ -9,6 +9,9 @@ import type {
   CreateGmSciencePythonRunInput,
   CreateGmScienceProjectInput,
   CreateGmScienceMemoryNoteInput,
+  CreateGmScienceConnectorInput,
+  CreateGmScienceSkillInput,
+  CreateGmScienceSpecialistInput,
   GmScienceArtifact,
   GmScienceAnalysis,
   GmScienceCapability,
@@ -833,6 +836,87 @@ export async function listGmScienceCapabilities(projectId?: string): Promise<GmS
       projectEnabled: project ? projectCapabilityIds(project, item.kind).includes(item.id) : null,
     })),
   };
+}
+
+function createMockCapability(
+  definition: Omit<GmScienceCapability, "projectEnabled">,
+): GmScienceCapability {
+  if (capabilityDefinitions.some((item) => item.id.toLowerCase() === definition.id.toLowerCase())) {
+    throw new Error(`Capability ${definition.id} already exists.`);
+  }
+  capabilityDefinitions.push(definition);
+  return { ...definition, metadata: { ...definition.metadata }, projectEnabled: null };
+}
+
+export async function createGmScienceSkill(input: CreateGmScienceSkillInput): Promise<GmScienceCapability> {
+  return createMockCapability({
+    id: input.id,
+    kind: "skill",
+    name: input.name,
+    description: input.description,
+    source: "local",
+    version: "",
+    license: "",
+    files: ["SKILL.md"],
+    available: true,
+    defaultEnabled: false,
+    status: "ready",
+    statusDetail: "",
+    metadata: { catalog_group: "personal", registry_source: "workspace" },
+  });
+}
+
+export async function createGmScienceConnector(
+  input: CreateGmScienceConnectorInput,
+): Promise<GmScienceCapability> {
+  return createMockCapability({
+    id: `mcp:${input.id}`,
+    kind: "connector",
+    name: input.name,
+    description: input.description,
+    source: "local",
+    version: "",
+    license: "",
+    files: [],
+    available: true,
+    defaultEnabled: false,
+    status: "ready",
+    statusDetail: "",
+    metadata: {
+      catalog_group: "custom",
+      connector_type: "mcp",
+      server_name: input.id,
+      transport: input.connectionType === "remote" ? "http" : "stdio",
+    },
+  });
+}
+
+export async function createGmScienceSpecialist(
+  input: CreateGmScienceSpecialistInput,
+): Promise<GmScienceCapability> {
+  return createMockCapability({
+    id: input.id,
+    kind: "specialist",
+    name: input.name,
+    description: input.description,
+    source: "local",
+    version: "",
+    license: "",
+    files: [],
+    available: true,
+    defaultEnabled: false,
+    status: "ready",
+    statusDetail: "",
+    metadata: {
+      catalog_group: "custom",
+      registry_source: "custom",
+      assigned_skills: [...input.skills],
+      assigned_connectors: [...input.connectors],
+      additional_instructions: input.instructions,
+      model: "inherit",
+      execution_mode: "agent_tool",
+    },
+  });
 }
 
 function cloneSettings(): GmScienceSettings {

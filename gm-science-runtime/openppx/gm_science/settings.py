@@ -50,9 +50,9 @@ class GmScienceSettingsService:
     secret only by sending an explicit ``replace`` or ``remove`` mutation.
     """
 
-    def __init__(self, *, config_path: Path) -> None:
+    def __init__(self, *, config_path: Path, lock: Any | None = None) -> None:
         self.config_path = config_path
-        self._lock = threading.RLock()
+        self._lock = lock or threading.RLock()
 
     def get_settings(self) -> dict[str, Any]:
         """Return model, provider, and literature settings without secrets."""

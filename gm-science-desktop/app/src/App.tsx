@@ -31,6 +31,7 @@ import {
   X,
 } from "lucide-react";
 import { CapabilitiesPanel } from "./components/CapabilitiesPanel";
+import { CapabilityCreatePanel } from "./components/CapabilityCreatePanel";
 import { ArtifactInspector } from "./components/ArtifactInspector";
 import { DataPanel } from "./components/DataPanel";
 import { MessageBubble } from "./components/MessageBubble";
@@ -49,6 +50,9 @@ import type {
   ChatMessage,
   ClientDiagnostics,
   ConnectionSettings,
+  CreateGmScienceConnectorInput,
+  CreateGmScienceSkillInput,
+  CreateGmScienceSpecialistInput,
   GmScienceCapability,
   GmScienceCapabilityKind,
   GmScienceProject,
@@ -438,6 +442,8 @@ export function App() {
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
   const [capabilitiesSaving, setCapabilitiesSaving] = useState(false);
   const [capabilitiesError, setCapabilitiesError] = useState<string | null>(null);
+  const [capabilityCreateKind, setCapabilityCreateKind] = useState<GmScienceCapabilityKind | null>(null);
+  const [capabilityCreating, setCapabilityCreating] = useState(false);
   const [scienceSettings, setScienceSettings] = useState<GmScienceSettings | null>(null);
   const [scienceSettingsLoading, setScienceSettingsLoading] = useState(false);
   const [scienceSettingsSaving, setScienceSettingsSaving] = useState(false);
@@ -658,6 +664,11 @@ export function App() {
   }, [settingsOpen, selectedProjectId]);
 
   useEffect(() => {
+    setCapabilityCreateKind(null);
+    setCapabilitiesError(null);
+  }, [settingsOpen, settingsSection]);
+
+  useEffect(() => {
     if (!settingsOpen || settingsSection !== "storage") {
       return;
     }
@@ -726,6 +737,32 @@ export function App() {
       setSettingsError(error instanceof Error ? error.message : String(error));
     } finally {
       setScienceSettingsLoading(false);
+    }
+  }
+
+  async function createCapability(
+    kind: GmScienceCapabilityKind,
+    input: CreateGmScienceSkillInput | CreateGmScienceConnectorInput | CreateGmScienceSpecialistInput,
+  ): Promise<void> {
+    setCapabilityCreating(true);
+    setCapabilitiesError(null);
+    try {
+      const created = kind === "skill"
+        ? await window.ppxClient.createGmScienceSkill(input as CreateGmScienceSkillInput)
+        : kind === "connector"
+          ? await window.ppxClient.createGmScienceConnector(input as CreateGmScienceConnectorInput)
+          : await window.ppxClient.createGmScienceSpecialist(input as CreateGmScienceSpecialistInput);
+      setCapabilities((current) => [
+        ...current.filter((item) => !(item.kind === created.kind && item.id === created.id)),
+        { ...created, projectEnabled: selectedProjectIdRef.current ? false : null },
+      ]);
+      setCapabilityCreateKind(null);
+      void refreshCapabilities();
+    } catch (error) {
+      setCapabilitiesError(error instanceof Error ? error.message : String(error));
+      throw error;
+    } finally {
+      setCapabilityCreating(false);
     }
   }
 
@@ -1767,15 +1804,36 @@ export function App() {
 
               <div className="settings-dialog-content">
                 {isCapabilitySection(settingsSection) ? (
-                  <CapabilitiesPanel
-                    kind={settingsSection}
-                    items={capabilities}
-                    loading={capabilitiesLoading}
-                    saving={capabilitiesSaving}
-                    error={capabilitiesError}
-                    onToggle={(capabilityId) => void toggleCapability(capabilityId)}
-                    onRefresh={() => void refreshCapabilities()}
-                  />
+                  capabilityCreateKind === settingsSection ? (
+                    <CapabilityCreatePanel
+                      key={settingsSection}
+                      kind={settingsSection}
+                      capabilities={capabilities}
+                      saving={capabilityCreating}
+                      error={capabilitiesError}
+                      onCancel={() => {
+                        setCapabilityCreateKind(null);
+                        setCapabilitiesError(null);
+                      }}
+                      onCreateSkill={(input) => createCapability("skill", input)}
+                      onCreateConnector={(input) => createCapability("connector", input)}
+                      onCreateSpecialist={(input) => createCapability("specialist", input)}
+                    />
+                  ) : (
+                    <CapabilitiesPanel
+                      kind={settingsSection}
+                      items={capabilities}
+                      loading={capabilitiesLoading}
+                      saving={capabilitiesSaving}
+                      error={capabilitiesError}
+                      onToggle={(capabilityId) => void toggleCapability(capabilityId)}
+                      onRefresh={() => void refreshCapabilities()}
+                      onAdd={() => {
+                        setCapabilitiesError(null);
+                        setCapabilityCreateKind(settingsSection);
+                      }}
+                    />
+                  )
                 ) : null}
 
                 {settingsSection === "memory" ? (

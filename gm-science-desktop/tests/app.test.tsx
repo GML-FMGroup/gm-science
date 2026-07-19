@@ -235,6 +235,21 @@ function installClient(overrides: Partial<PpxClientApi> = {}): { client: PpxClie
       },
     }),
     listGmScienceCapabilities: async (projectId) => ({ projectId: projectId ?? "", items: [] }),
+    createGmScienceSkill: async (input) => ({
+      id: input.id, kind: "skill", name: input.name, description: input.description,
+      source: "local", version: "", license: "", files: ["SKILL.md"], available: true,
+      defaultEnabled: false, projectEnabled: null, status: "ready", statusDetail: "", metadata: {},
+    }),
+    createGmScienceConnector: async (input) => ({
+      id: `mcp:${input.id}`, kind: "connector", name: input.name, description: input.description,
+      source: "local", version: "", license: "", files: [], available: true,
+      defaultEnabled: false, projectEnabled: null, status: "ready", statusDetail: "", metadata: {},
+    }),
+    createGmScienceSpecialist: async (input) => ({
+      id: input.id, kind: "specialist", name: input.name, description: input.description,
+      source: "local", version: "", license: "", files: [], available: true,
+      defaultEnabled: false, projectEnabled: null, status: "ready", statusDetail: "", metadata: {},
+    }),
     updateGmScienceProjectCapabilities: async (projectId, input) => ({
       project: buildProject({
         id: projectId,

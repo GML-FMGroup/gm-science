@@ -176,6 +176,31 @@ export interface GmScienceCapabilityCatalog {
   items: GmScienceCapability[];
 }
 
+export interface CreateGmScienceSkillInput {
+  id: string;
+  name: string;
+  description: string;
+  content: string;
+}
+
+export interface CreateGmScienceConnectorInput {
+  id: string;
+  name: string;
+  description: string;
+  connectionType: "remote" | "local";
+  url?: string;
+  commandLine?: string;
+}
+
+export interface CreateGmScienceSpecialistInput {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  skills: string[];
+  connectors: string[];
+}
+
 export interface UpdateGmScienceCapabilitiesInput {
   enabledSkills: string[];
   enabledConnectors: string[];
@@ -791,6 +816,9 @@ export interface PpxClientApi {
   createGmScienceProject(input: CreateGmScienceProjectInput): Promise<{ project: GmScienceProject }>;
   getGmScienceProject(projectId: string): Promise<{ project: GmScienceProject }>;
   listGmScienceCapabilities(projectId?: string): Promise<GmScienceCapabilityCatalog>;
+  createGmScienceSkill(input: CreateGmScienceSkillInput): Promise<GmScienceCapability>;
+  createGmScienceConnector(input: CreateGmScienceConnectorInput): Promise<GmScienceCapability>;
+  createGmScienceSpecialist(input: CreateGmScienceSpecialistInput): Promise<GmScienceCapability>;
   updateGmScienceProjectCapabilities(
     projectId: string,
     input: UpdateGmScienceCapabilitiesInput,

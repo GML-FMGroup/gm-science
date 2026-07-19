@@ -1300,9 +1300,161 @@
 
 .settings-dialog-content .capability-toolbar {
   display: grid;
-  grid-template-columns: minmax(150px, 220px) minmax(220px, 1fr) 36px;
+  grid-template-columns: minmax(150px, 220px) minmax(220px, 1fr) 36px auto;
   gap: 12px;
   padding: 0 0 12px;
+}
+
+.settings-dialog-content .capability-add-button {
+  height: 36px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.capability-create-page {
+  min-height: 100%;
+  padding: 24px 34px 34px;
+  background: #fff;
+}
+
+.capability-create-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.capability-create-heading h3 {
+  margin: 0;
+  font-size: 1rem;
+  letter-spacing: 0;
+}
+
+.capability-create-mode {
+  margin-bottom: 20px;
+}
+
+.capability-create-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.capability-create-fields > label,
+.capability-assignment-field {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+  margin: 0;
+}
+
+.capability-create-fields > label > span,
+.capability-assignment-field legend {
+  color: var(--science-text);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.capability-create-fields input,
+.capability-create-fields textarea {
+  width: 100%;
+  border: 1px solid var(--science-border-strong);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--science-text);
+  font: inherit;
+  font-size: 0.8rem;
+  letter-spacing: 0;
+}
+
+.capability-create-fields input {
+  height: 38px;
+  padding: 0 10px;
+}
+
+.capability-create-fields textarea {
+  min-height: 76px;
+  padding: 10px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.capability-create-fields input:focus,
+.capability-create-fields textarea:focus {
+  border-color: #397c62;
+  outline: 2px solid rgb(57 124 98 / 14%);
+  outline-offset: 1px;
+}
+
+.capability-create-fields .full {
+  grid-column: 1 / -1;
+}
+
+.capability-editor-field textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.capability-assignment-field {
+  padding: 0;
+  border: 0;
+}
+
+.capability-assignment-field legend {
+  margin-bottom: 7px;
+}
+
+.capability-assignment-list {
+  overflow: auto;
+  max-height: 220px;
+  border-top: 1px solid var(--science-border);
+}
+
+.capability-assignment-list > label {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 12px 2px;
+  border-bottom: 1px solid var(--science-border);
+}
+
+.capability-assignment-list input {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+}
+
+.capability-assignment-list span {
+  display: grid;
+  gap: 3px;
+}
+
+.capability-assignment-list strong {
+  font-size: 0.78rem;
+}
+
+.capability-assignment-list small,
+.capability-assignment-empty {
+  color: var(--science-muted);
+  font-size: 0.72rem;
+}
+
+.capability-assignment-empty {
+  display: block;
+  padding: 14px 2px;
+}
+
+.capability-create-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 24px;
+  padding-top: 18px;
+  border-top: 1px solid var(--science-border);
+}
+
+.capability-create-error {
+  margin: 0 0 18px;
 }
 
 .settings-dialog-content .capability-toolbar select,
@@ -2353,7 +2505,19 @@
   }
 
   .settings-dialog-content .capability-toolbar {
-    grid-template-columns: 1fr 36px;
+    grid-template-columns: 1fr 36px auto;
+  }
+
+  .capability-create-page {
+    padding: 22px 18px 32px;
+  }
+
+  .capability-create-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .capability-create-fields .full {
+    grid-column: auto;
   }
 
   .settings-dialog-content .capability-toolbar select {

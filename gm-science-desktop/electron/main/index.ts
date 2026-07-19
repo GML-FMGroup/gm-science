@@ -9,6 +9,9 @@ import type {
   CreateGmSciencePythonRunInput,
   CreateGmScienceProjectInput,
   CreateGmScienceMemoryNoteInput,
+  CreateGmScienceConnectorInput,
+  CreateGmScienceSkillInput,
+  CreateGmScienceSpecialistInput,
   ImportGmScienceDatasetInput,
   RuntimeCommand,
   SendMessageInput,
@@ -47,6 +50,18 @@ function writeConnectionSettings(settings: ConnectionSettings): void {
   const filePath = connectionSettingsPath();
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(settings, null, 2), "utf-8");
+}
+
+function disposeDesktopRuntime(): void {
+  unsubscribeRunEvents?.();
+  unsubscribeRunEvents = null;
+  adapter?.dispose();
+  adapter = null;
+}
+
+function quitFromSignal(): void {
+  disposeDesktopRuntime();
+  app.quit();
 }
 
 function createWindow(): void {
@@ -110,6 +125,17 @@ app.whenReady().then(() => {
   );
   ipcMain.handle("ppx-client:list-gm-science-capabilities", async (_event, projectId?: string) =>
     adapter!.listGmScienceCapabilities(projectId),
+  );
+  ipcMain.handle("ppx-client:create-gm-science-skill", async (_event, input: CreateGmScienceSkillInput) =>
+    adapter!.createGmScienceSkill(input),
+  );
+  ipcMain.handle(
+    "ppx-client:create-gm-science-connector",
+    async (_event, input: CreateGmScienceConnectorInput) => adapter!.createGmScienceConnector(input),
+  );
+  ipcMain.handle(
+    "ppx-client:create-gm-science-specialist",
+    async (_event, input: CreateGmScienceSpecialistInput) => adapter!.createGmScienceSpecialist(input),
   );
   ipcMain.handle(
     "ppx-client:update-gm-science-project-capabilities",
@@ -253,11 +279,12 @@ app.whenReady().then(() => {
 });
 
 app.on("window-all-closed", () => {
-  unsubscribeRunEvents?.();
-  unsubscribeRunEvents = null;
-  adapter?.dispose();
-  adapter = null;
+  disposeDesktopRuntime();
   if (process.platform !== "darwin") {
     app.quit();
   }
 });
+
+app.on("before-quit", disposeDesktopRuntime);
+process.once("SIGINT", quitFromSignal);
+process.once("SIGTERM", quitFromSignal);

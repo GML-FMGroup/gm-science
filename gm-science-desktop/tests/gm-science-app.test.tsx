@@ -375,6 +375,21 @@ function installClient(overrides: Partial<PpxClientApi> = {}): {
     createGmScienceProject: async (input) => ({ project: project({ id: "proj_new", name: input.name }) }),
     getGmScienceProject: async (projectId) => ({ project: project({ id: projectId }) }),
     listGmScienceCapabilities: async (projectId) => ({ projectId: projectId ?? "", items: capabilities() }),
+    createGmScienceSkill: async (input) => ({
+      id: input.id, kind: "skill", name: input.name, description: input.description,
+      source: "local", version: "", license: "", files: ["SKILL.md"], available: true,
+      defaultEnabled: false, projectEnabled: null, status: "ready", statusDetail: "", metadata: {},
+    }),
+    createGmScienceConnector: async (input) => ({
+      id: `mcp:${input.id}`, kind: "connector", name: input.name, description: input.description,
+      source: "local", version: "", license: "", files: [], available: true,
+      defaultEnabled: false, projectEnabled: null, status: "ready", statusDetail: "", metadata: {},
+    }),
+    createGmScienceSpecialist: async (input) => ({
+      id: input.id, kind: "specialist", name: input.name, description: input.description,
+      source: "local", version: "", license: "", files: [], available: true,
+      defaultEnabled: false, projectEnabled: null, status: "ready", statusDetail: "", metadata: {},
+    }),
     updateGmScienceProjectCapabilities: async (projectId, input) => {
       const updated = project({
         id: projectId,
@@ -861,6 +876,56 @@ describe("gm-science App", () => {
         enabledSpecialists: ["paper_reader", "research_reviewer"],
       });
     });
+  });
+
+  it("creates a Skill without silently attaching it to the selected Project", async () => {
+    let items = capabilities();
+    const created: GmScienceCapability = {
+      id: "assay-quality",
+      kind: "skill",
+      name: "Assay Quality",
+      description: "Review assay quality.",
+      source: "local",
+      version: "",
+      license: "",
+      files: ["SKILL.md"],
+      available: true,
+      defaultEnabled: false,
+      projectEnabled: null,
+      status: "ready",
+      statusDetail: "",
+      metadata: { catalog_group: "personal" },
+    };
+    const createGmScienceSkill = vi.fn(async () => {
+      items = [...items, { ...created, projectEnabled: false }];
+      return created;
+    });
+    const updateGmScienceProjectCapabilities = vi.fn();
+    installClient({
+      createGmScienceSkill,
+      updateGmScienceProjectCapabilities,
+      listGmScienceCapabilities: async (projectId) => ({ projectId: projectId ?? "", items }),
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Customize" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add skill" }));
+    const form = await screen.findByRole("form", { name: "Add skill" });
+    fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Assay Quality" } });
+    fireEvent.change(within(form).getByLabelText("Description"), { target: { value: "Review assay quality." } });
+    fireEvent.change(within(form).getByLabelText("Markdown content"), { target: { value: "# Workflow" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(createGmScienceSkill).toHaveBeenCalledWith({
+      id: "assay-quality",
+      name: "Assay Quality",
+      description: "Review assay quality.",
+      content: "# Workflow",
+    }));
+    expect(updateGmScienceProjectCapabilities).not.toHaveBeenCalled();
+    const createdSwitch = await screen.findByRole("switch", { name: "Enable Assay Quality" });
+    expect(createdSwitch).toHaveAttribute("aria-checked", "false");
   });
 
   it("rolls back an optimistic capability toggle when persistence fails", async () => {

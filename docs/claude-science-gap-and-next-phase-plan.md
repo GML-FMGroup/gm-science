@@ -22,7 +22,7 @@
 - 复用 openppx 和 ppx-client，不能在 gm-science 内建立第二套 Session、TaskRun、Skill、MCP 或 Memory 运行时。
 - 当前没有正式用户，不承担旧数据兼容成本；必要时可以调整 schema 或清理开发数据。
 - 当前阶段不以完整安全沙箱为重点，但不得把尚未实现的安全边界描述成已经生效。
-- ToolUniverse、TxAgent 和大规模专业工具接入放在整体框架稳定之后。
+- ToolUniverse 不进入当前路线，只有收到用户明确指令后才评估；TxAgent 和大规模专业工具接入也必须晚于 Claude Science 复现基线。
 - 非敏感配置继续集中在 `~/.gm-science` 的配置文件中；密钥等敏感信息后续使用加密凭据存储，配置文件只保存凭据引用。
 
 ## 2. 对比结论
@@ -102,7 +102,7 @@ gm-science 当前设计和实现已经正确吸收了以下产品结构：
 
 | 优先级 | 差距 | 当前状态 | 目标 |
 | --- | --- | --- | --- |
-| P0 | 动态能力注册 | gm-science catalog 硬编码少量能力 | 从 openppx 动态发现并投影 Skill、MCP Connector 和 Specialist |
+| P0 | 动态能力注册 | 动态发现、Project attachment 和手动创建第一版完成 | 补齐编辑、删除、上传和导入，同时保持 openppx registry 为唯一事实源 |
 | P0 | 统一 Files 与引用 | Artifacts、Data、Runs 分离，Composer 只有纯文本 | 统一资源浏览，并使用结构化引用进入消息上下文 |
 | P0 | 会话级调度 | 主要依赖 Project 默认值和主控自动判断 | Session 可选择 Delegation、Specialist、Memory、Compute 和 Review Policy |
 | P1 | Memory 产品层 | 第一版完成：User/Project scope、人工 note、候选审批、召回审计 | 后续补充分类治理、批量导入导出和更强检索，不建立第二套 Memory |
@@ -110,7 +110,7 @@ gm-science 当前设计和实现已经正确吸收了以下产品结构：
 | P1 | Compute Target | Local executor、统一 registry、远程配置和健康检查第一版完成 | 后续为 SSH、Modal、NIM 增加复用 TaskRun 的 executor adapter |
 | P2 | Network 管理 | 镜像、CA、分类域名和受管 HTTP/MCP 强制第一版完成 | 后续随沙箱增加进程级网络强制，不夸大当前边界 |
 | P2 | Storage、Usage、General | Storage/Usage 本地可观测性和 General provider/model 第一版完成 | 后续仅在具备真实后端契约时增加迁移、计费或模型策略控制 |
-| P3 | 专业科研生态 | 三个文献源和少量专家 | 框架冻结后接入 ToolUniverse 和领域工具 |
+| P3 | 专业科研生态 | 三个文献源和少量专家 | Claude Science 复现基线冻结后扩展领域工具；ToolUniverse 只在用户明确指令后评估 |
 
 ## 5. 目标架构
 
@@ -561,7 +561,7 @@ General：
 1. Crossref、Europe PMC、Semantic Scholar 等文献和引用连接器。
 2. GitHub、DOI、开放数据集和本地目录连接器。
 3. 生物医学、化学、基因组和蛋白质数据源。
-4. 评估 ToolUniverse 作为 MCP 或受管工具集合接入。
+4. ToolUniverse 保持冻结，只有收到用户明确指令后才评估 MCP 或受管工具集合接入。
 5. 吸收 TxAgent 的动态工具检索和治疗研究 Specialist 设计。
 6. 领域 Specialist 和高级统计模板。
 
@@ -622,6 +622,21 @@ Phase 8A.3 于 2026-07-18 实施：
 - 内置 `paper_reader` 和 `research_reviewer` 的现有输入、证据边界和 Artifact 类型保持不变。
 
 本迭代没有实现 UI 内创建/编辑 Specialist，也没有实现会话级 Specialist 选择、Delegation、Auto-review 或 Reviewer 检查点。配置文件仍是 registry write 入口；修改后需要重启运行时。上述会话策略属于 Phase 8C，不应与 SpecialistDefinition 混为同一状态。
+
+### 7.3A Phase 15A 手动创建实施状态
+
+Phase 15A 于 2026-07-19 完成第一版手动 authoring：
+
+- Skills 页面可以创建经过 ID、大小和内容校验的 Agent-local `SKILL.md`；
+- Connectors 页面可以创建匿名 Remote URL 或本地 stdio command MCP，命令解析为 argv 且不经过 shell；
+- Specialists 页面可以创建继承统一模型策略的 ADK Specialist，并从当前真实 catalog 精确选择 Skills 和 Connectors；
+- authoring service 直接写入 openppx 已有 registry，不建立第二套数据库；新建能力默认不附加任何 Project；
+- `publish_skill` 与 `create_agent` 在后端 mutation boundary 强制，重复 ID 返回 conflict，秘密值和不安全 URL 被拒绝；
+- client-api、Electron IPC/preload、typed adapter、mock 和 React 表单使用同一合同。
+
+自动化验证通过后，使用隔离数据目录在真实 Electron 中创建 Skill、Local MCP 和 Specialist，并验证三者在 client-api 重启后恢复、保持 `project_enabled=false`，Specialist 只保留所选依赖。创建表单和列表在默认最小高度内无重叠；启动器 `Ctrl+C` 路径同时清理 Electron 与 client-api。
+
+当前没有实现编辑、删除、草稿、上传、GitHub 导入、OAuth、MCP inline secret 或对话式 Customize。这些是下一轮 Claude Science 复现项，不得与已完成的手动创建混记。
 
 实机补充验证还表明，Claude Science 支持对 Specialist 已分配 Connector 的内部工具继续做启用/禁用。Phase 8A.3 当前只实现 Connector 级白名单；工具级白名单需要先扩展 openppx MCP registry 的稳定工具描述和过滤契约，再进入 Specialist 编辑 UI，不能由前端维护第二份工具名清单。
 
@@ -693,7 +708,7 @@ Phase 8D 的可审阅 Memory 核心于 2026-07-19 完成第一版：
 - 任意本地进程的强制网络隔离。
 - SSH、集群、Modal 和远程 GPU 实际执行。
 - GitHub Skill marketplace 完整安装和升级。
-- ToolUniverse 全量安装。
+- ToolUniverse 相关安装、适配和评估；只有用户明确指令可以解除此暂缓。
 - Jupyter/Notebook 编辑器。
 - 云同步和多人协作。
 - 大量领域数据源和领域 Specialist。
@@ -734,13 +749,13 @@ Phase 8D 的可审阅 Memory 核心于 2026-07-19 完成第一版：
 | Project / Session / Artifact 基础 | 基本完成 |
 | 文献与科研垂直闭环 | 第一版完成 |
 | 本地执行与数据分析 | 第一版完成 |
-| 动态能力注册与组合 | Skill、MCP Connector 和配置驱动 Specialist 第一版完成；安装/编辑与治理待后续阶段 |
+| 动态能力注册与组合 | 动态发现、Project attachment 和 Skill/MCP/Specialist 手动创建第一版完成；编辑、删除、上传、导入和鉴权治理待后续阶段 |
 | 统一 Files 与上下文引用 | 统一目录、搜索、Files 选择和 ADK 原生结构化资源上下文完成；内容预览、Composer 命令和附加目录待后续迭代 |
 | 会话级调度控制 | Session Policy、继承、ADK Specialist 路由、Memory 读取门控和 Auto-review 第一版完成；Reviewer 模型候选与专用生命周期 UI 待完成 |
 | 可审阅 Memory | User/Project note、候选审批、全局/Session 开关、来源和召回审计第一版完成；批量导入导出与更强检索待后续阶段 |
 | Credentials / Permissions / Network | Credentials、全局 registry write 授权、镜像/CA/分类域名和受管 HTTP/MCP 强制第一版完成；作用域审批和进程级隔离待后续阶段 |
 | 多 Compute Target | Local executor、统一 registry、脱敏配置和健康检查第一版完成；SSH/Modal/NIM/HTTP endpoint executor 尚未实现 |
 | Storage / Usage / General | 本地数据目录和磁盘分类、token/TaskRun 用量窗口、provider/model 分布和 General provider/model 第一版完成；迁移、云存储、官方账单和更多模型策略待真实后端契约 |
-| 专业科研生态 | 等框架冻结后扩展 |
+| 专业科研生态 | Claude Science 复现基线冻结后扩展；ToolUniverse 仅由用户明确指令解锁 |
 
-近期目标是继续收口能力安装/编辑治理、Files 内容预览和 Artifact 生命周期操作，并执行覆盖新建 Project、对话、文献、Memory、数据分析和设置页的整体人工回归。远程 Compute adapter 必须继续复用 TaskRun；框架冻结后再扩展 ToolUniverse 和领域工具。
+近期目标是按 Claude Science 顺序继续收口能力编辑/删除/导入治理、Files 内容预览和 Artifact 生命周期操作，并执行覆盖新建 Project、对话、文献、Memory、数据分析和设置页的整体人工回归。远程 Compute adapter 必须继续复用 TaskRun。ToolUniverse 不进入当前路线，只有收到用户明确指令后才重新评估。

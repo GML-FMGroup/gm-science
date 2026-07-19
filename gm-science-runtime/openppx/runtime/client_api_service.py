@@ -20,6 +20,10 @@ from typing import Any
 from ..core.config import config_to_env, get_data_dir, load_config
 from ..core.logging_utils import debug_logging_enabled, emit_debug
 from ..gm_science.bootstrap import GM_SCIENCE_DEFAULT_AGENT_NAME, ensure_gm_science_initialized
+from ..gm_science.authoring import (
+    CapabilityConflictError,
+    GmScienceCapabilityAuthoringService,
+)
 from ..gm_science.capabilities import (
     build_capability_catalog,
     normalize_capability_selection,
@@ -932,6 +936,7 @@ class ClientApiCoordinator:
         self._session_owners: dict[str, str] = {}
         self._runs: dict[str, RunHandle] = {}
         self._lock = threading.Lock()
+        self._gm_science_config_lock = threading.RLock()
         self._sessions_cache: dict[tuple[str, str], _TimedCacheEntry] = {}
         self._messages_cache: dict[tuple[str, str], _TimedCacheEntry] = {}
         self._gm_science_store = GmScienceStore(self.data_dir)
@@ -946,6 +951,11 @@ class ClientApiCoordinator:
         )
         self._gm_science_settings = GmScienceSettingsService(
             config_path=agent_config_path(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir),
+            lock=self._gm_science_config_lock,
+        )
+        self._gm_science_authoring = GmScienceCapabilityAuthoringService(
+            config_path=agent_config_path(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir),
+            lock=self._gm_science_config_lock,
         )
         self._gm_science_observability = GmScienceObservabilityService(data_dir=self.data_dir)
         self._dataset_service = DatasetService(
@@ -1473,6 +1483,31 @@ class ClientApiCoordinator:
                 "items": build_capability_catalog(config_path=config_path, project=project),
             }
         )
+
+    def create_gm_science_capability(
+        self,
+        kind: str,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Create one local Skill, MCP Connector, or Specialist definition."""
+
+        creators = {
+            "skills": self._gm_science_authoring.create_skill,
+            "connectors": self._gm_science_authoring.create_connector,
+            "specialists": self._gm_science_authoring.create_specialist,
+        }
+        creator = creators.get(str(kind or "").strip().lower())
+        if creator is None:
+            return _error("INVALID_REQUEST", f"Unsupported capability kind '{kind}'.")
+        try:
+            capability = creator(body)
+        except RegistryPermissionError as exc:
+            return _error("PERMISSION_DENIED", str(exc))
+        except CapabilityConflictError as exc:
+            return _error("CAPABILITY_CONFLICT", str(exc))
+        except ValueError as exc:
+            return _error("INVALID_REQUEST", str(exc))
+        return _ok({"capability": capability})
 
     def get_gm_science_session_policy(self, session_id: str) -> dict[str, Any]:
         """Return one Project Session's effective policy and valid candidates."""
@@ -3734,6 +3769,21 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
         path, segments, _query = self._parse()
         body = self._read_json_body_or_error()
         if body is None:
+            return
+        if (
+            len(segments) == 5
+            and segments[:4] == ["api", "v1", "gm-science", "capabilities"]
+            and segments[4] in {"skills", "connectors", "specialists"}
+        ):
+            payload = self.coordinator.create_gm_science_capability(segments[4], body)
+            status = 200 if payload.get("ok") else 400
+            if not payload.get("ok"):
+                code = payload.get("error", {}).get("code")
+                if code == "PERMISSION_DENIED":
+                    status = 403
+                elif code == "CAPABILITY_CONFLICT":
+                    status = 409
+            self._send_json(status, payload)
             return
         if segments == ["api", "v1", "gm-science", "projects"]:
             payload = self.coordinator.create_gm_science_project(body)

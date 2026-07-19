@@ -10,6 +10,9 @@ import {
   createGmScienceArtifact as mockCreateGmScienceArtifact,
   createGmSciencePythonRun as mockCreateGmSciencePythonRun,
   createGmScienceProject as mockCreateGmScienceProject,
+  createGmScienceSkill as mockCreateGmScienceSkill,
+  createGmScienceConnector as mockCreateGmScienceConnector,
+  createGmScienceSpecialist as mockCreateGmScienceSpecialist,
   createGmScienceMemoryNote as mockCreateGmScienceMemoryNote,
   createSession as mockCreateSession,
   cancelGmScienceRun as mockCancelGmScienceRun,
@@ -94,6 +97,9 @@ import type {
   CreateGmSciencePythonRunInput,
   CreateGmScienceProjectInput,
   CreateGmScienceMemoryNoteInput,
+  CreateGmScienceConnectorInput,
+  CreateGmScienceSkillInput,
+  CreateGmScienceSpecialistInput,
   GmScienceArtifact,
   GmScienceAnalysis,
   GmScienceCapability,
@@ -752,6 +758,66 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
         .map((item) => normalizeGmScienceCapability(item))
         .filter((item): item is GmScienceCapability => item !== null),
     };
+  }
+
+  public async createGmScienceSkill(input: CreateGmScienceSkillInput): Promise<GmScienceCapability> {
+    if (this.shouldUseMock()) {
+      return mockCreateGmScienceSkill(input);
+    }
+    return this.createGmScienceCapability("skills", {
+      id: input.id,
+      name: input.name,
+      description: input.description,
+      content: input.content,
+    });
+  }
+
+  public async createGmScienceConnector(input: CreateGmScienceConnectorInput): Promise<GmScienceCapability> {
+    if (this.shouldUseMock()) {
+      return mockCreateGmScienceConnector(input);
+    }
+    return this.createGmScienceCapability("connectors", {
+      id: input.id,
+      name: input.name,
+      description: input.description,
+      connection_type: input.connectionType,
+      url: input.url ?? "",
+      command_line: input.commandLine ?? "",
+    });
+  }
+
+  public async createGmScienceSpecialist(input: CreateGmScienceSpecialistInput): Promise<GmScienceCapability> {
+    if (this.shouldUseMock()) {
+      return mockCreateGmScienceSpecialist(input);
+    }
+    return this.createGmScienceCapability("specialists", {
+      id: input.id,
+      name: input.name,
+      description: input.description,
+      instructions: input.instructions,
+      skills: input.skills,
+      connectors: input.connectors,
+    });
+  }
+
+  private async createGmScienceCapability(
+    kind: "skills" | "connectors" | "specialists",
+    body: Record<string, unknown>,
+  ): Promise<GmScienceCapability> {
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson(`/api/v1/gm-science/capabilities/${kind}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    const capability = normalizeGmScienceCapability(
+      (payload.data as Record<string, unknown> | undefined)?.capability,
+    );
+    if (!capability) {
+      throw new Error("Client API returned an invalid capability payload.");
+    }
+    return capability;
   }
 
   public async updateGmScienceProjectCapabilities(
