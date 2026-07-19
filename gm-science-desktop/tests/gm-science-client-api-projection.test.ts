@@ -11,9 +11,84 @@ import {
   normalizeGmScienceSettings,
   normalizeGmScienceComputeHealth,
   normalizeGmScienceMemoryWorkspace,
+  normalizeGmScienceStorage,
+  normalizeGmScienceUsage,
 } from "../app/src/lib/client-api-projection";
 
 describe("gm-science client-api projection", () => {
+  it("normalizes local Storage and Usage snapshots", () => {
+    expect(normalizeGmScienceStorage({
+      data_location: "/tmp/gm-science",
+      exists: true,
+      writable: true,
+      scanned_at: "2026-07-19T00:00:00Z",
+      scan_complete: false,
+      partial_reason: "Entry budget reached.",
+      entries_scanned: 100,
+      elapsed_ms: 20,
+      total_bytes: 4096,
+      total_files: 2,
+      categories: [
+        { id: "workspaces", name: "Workspaces", bytes: 4096, files: 2 },
+        { id: "databases", name: "Databases", bytes: 0, files: 0 },
+      ],
+      issues: ["One path was unreadable."],
+      cloud_storage: { supported: false, configured: false, detail: "Unavailable." },
+    })).toMatchObject({
+      dataLocation: "/tmp/gm-science",
+      scanComplete: false,
+      partialReason: "Entry budget reached.",
+      totalBytes: 4096,
+      categories: [{ id: "workspaces", bytes: 4096 }, { id: "databases", bytes: 0 }],
+      cloudStorage: { supported: false, configured: false, detail: "Unavailable." },
+    });
+
+    expect(normalizeGmScienceUsage({
+      window: "7d",
+      generated_at: "2026-07-19T00:00:00Z",
+      since: "2026-07-12T00:00:00Z",
+      until: "2026-07-19T00:00:00Z",
+      local_estimate: true,
+      cost: { available: false, reason: "No price ledger." },
+      tokens: {
+        recording_started: true,
+        requests: 2,
+        input_tokens: 100,
+        output_tokens: 20,
+        input_text_tokens: 100,
+        output_text_tokens: 20,
+        input_image_tokens: 0,
+        output_image_tokens: 0,
+        total_tokens: 120,
+        by_model: [{ provider: "openai_codex", model: "openai-codex/gpt-5.5", requests: 2, input_tokens: 100, output_tokens: 20, total_tokens: 120 }],
+      },
+      runs: {
+        recording_started: true,
+        runs: 1,
+        active_runs: 0,
+        terminal_runs: 1,
+        runtime_ms: 5000,
+        by_status: [{ status: "completed", runs: 1, runtime_ms: 5000 }],
+        by_kind: [{ kind: "data_analysis", runs: 1, runtime_ms: 5000 }],
+      },
+    })).toMatchObject({
+      window: "7d",
+      localEstimate: true,
+      tokens: {
+        inputTokens: 100,
+        outputTokens: 20,
+        totalTokens: 120,
+        byModel: [{ provider: "openai_codex", model: "openai-codex/gpt-5.5", totalTokens: 120 }],
+      },
+      runs: { runs: 1, terminalRuns: 1, runtimeMs: 5000 },
+    });
+  });
+
+  it("rejects malformed observability snapshots", () => {
+    expect(normalizeGmScienceStorage({ categories: [{ id: "unknown" }], issues: [] })).toBeNull();
+    expect(normalizeGmScienceUsage({ window: "90d" })).toBeNull();
+  });
+
   it("normalizes public settings without projecting secret fields", () => {
     expect(
       normalizeGmScienceSettings({

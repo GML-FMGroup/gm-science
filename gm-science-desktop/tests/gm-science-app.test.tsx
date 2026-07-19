@@ -13,6 +13,9 @@ import type {
   GmScienceRun,
   GmScienceSessionPolicy,
   GmScienceSettings,
+  GmScienceStorageSnapshot,
+  GmScienceUsageSnapshot,
+  GmScienceUsageWindow,
   PpxClientApi,
   RunEvent,
   RuntimeStatus,
@@ -48,6 +51,56 @@ function settings(): GmScienceSettings {
       arxiv: { status: "ready", statusDetail: "" },
       pubmed: { email: "", apiKeyConfigured: false, status: "needs_configuration", statusDetail: "Configuration required." },
       openalex: { apiKeyConfigured: false, status: "needs_configuration", statusDetail: "Configuration required." },
+    },
+  };
+}
+
+function storageSnapshot(): GmScienceStorageSnapshot {
+  return {
+    dataLocation: "/tmp/gm-science",
+    exists: true,
+    writable: true,
+    scannedAt: "2026-07-19T00:00:00Z",
+    scanComplete: true,
+    partialReason: "",
+    entriesScanned: 12,
+    elapsedMs: 3,
+    totalBytes: 4096,
+    totalFiles: 2,
+    categories: [{ id: "databases", name: "Databases", bytes: 4096, files: 2 }],
+    issues: [],
+    cloudStorage: { supported: false, configured: false, detail: "No cloud storage adapter is available in this build." },
+  };
+}
+
+function usageSnapshot(window: GmScienceUsageWindow = "7d"): GmScienceUsageSnapshot {
+  return {
+    window,
+    generatedAt: "2026-07-19T00:00:00Z",
+    since: "2026-07-12T00:00:00Z",
+    until: "2026-07-19T00:00:00Z",
+    localEstimate: true,
+    cost: { available: false, reason: "No provider price ledger." },
+    tokens: {
+      recordingStarted: true,
+      requests: 1,
+      inputTokens: 100,
+      outputTokens: 20,
+      inputTextTokens: 100,
+      outputTextTokens: 20,
+      inputImageTokens: 0,
+      outputImageTokens: 0,
+      totalTokens: 120,
+      byModel: [{ provider: "openai_codex", model: "openai-codex/gpt-5.5", requests: 1, inputTokens: 100, outputTokens: 20, totalTokens: 120 }],
+    },
+    runs: {
+      recordingStarted: true,
+      runs: 1,
+      activeRuns: 0,
+      terminalRuns: 1,
+      runtimeMs: 2000,
+      byStatus: [{ status: "completed", runs: 1, runtimeMs: 2000 }],
+      byKind: [{ kind: "data_analysis", runs: 1, runtimeMs: 2000 }],
     },
   };
 }
@@ -316,6 +369,8 @@ function installClient(overrides: Partial<PpxClientApi> = {}): {
     createSession: async () => ({ session: session() }),
     loadSession: async () => ({ messages: [] }),
     sendMessage: async () => ({ runId: "run-1" }),
+    getGmScienceStorage: async () => { throw new Error("Unused in this test."); },
+    getGmScienceUsage: async () => { throw new Error("Unused in this test."); },
     listGmScienceProjects: async () => ({ projects: [project()] }),
     createGmScienceProject: async (input) => ({ project: project({ id: "proj_new", name: input.name }) }),
     getGmScienceProject: async (projectId) => ({ project: project({ id: projectId }) }),
@@ -572,6 +627,28 @@ describe("gm-science App", () => {
       expect(within(dialog).getByRole("button", { name: section })).toBeInTheDocument();
     }
     expect(screen.getByRole("button", { name: "Back to dashboard" })).toBeInTheDocument();
+  });
+
+  it("loads Storage and Usage from the backend when their settings sections open", async () => {
+    const getGmScienceStorage = vi.fn(async () => storageSnapshot());
+    const getGmScienceUsage = vi.fn(async (window: GmScienceUsageWindow) => usageSnapshot(window));
+    installClient({ getGmScienceStorage, getGmScienceUsage });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /Protein design/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Customize" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Storage" }));
+
+    const storageDialog = await screen.findByRole("dialog", { name: "Storage" });
+    await waitFor(() => expect(getGmScienceStorage).toHaveBeenCalledTimes(1));
+    expect(within(storageDialog).getByText("/tmp/gm-science")).toBeInTheDocument();
+
+    fireEvent.click(within(storageDialog).getByRole("button", { name: "Usage" }));
+    const usageDialog = await screen.findByRole("dialog", { name: "Usage" });
+    await waitFor(() => expect(getGmScienceUsage).toHaveBeenCalledWith("7d"));
+    expect(within(usageDialog).getByText("openai-codex/gpt-5.5")).toBeInTheDocument();
+    fireEvent.click(within(usageDialog).getByRole("button", { name: "30 days" }));
+    await waitFor(() => expect(getGmScienceUsage).toHaveBeenCalledWith("30d"));
   });
 
   it("shows the configured model in the Composer and General settings", async () => {

@@ -112,6 +112,27 @@ class TokenUsageStoreTests(unittest.TestCase):
         self.assertEqual(all_stats["response_tokens"], 22)
         self.assertEqual(all_stats["total_tokens"], 50)
         self.assertEqual(len(all_stats["recent"]), 2)
+        self.assertEqual(
+            all_stats["by_model"],
+            [
+                {
+                    "provider": "google",
+                    "model": "gemini-2.5-pro",
+                    "requests": 1,
+                    "request_tokens": 20,
+                    "response_tokens": 10,
+                    "total_tokens": 30,
+                },
+                {
+                    "provider": "openai",
+                    "model": "openai/gpt-5",
+                    "requests": 1,
+                    "request_tokens": 8,
+                    "response_tokens": 12,
+                    "total_tokens": 20,
+                },
+            ],
+        )
 
         self.assertEqual(google_stats["requests"], 1)
         self.assertEqual(google_stats["total_tokens"], 30)

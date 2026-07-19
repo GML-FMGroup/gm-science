@@ -22,6 +22,8 @@ import type {
   GmScienceSessionPolicySpecialist,
   GmScienceSessionPolicyValues,
   GmScienceSettings,
+  GmScienceStorageSnapshot,
+  GmScienceUsageSnapshot,
   GmScienceMemoryCandidate,
   GmScienceMemoryNote,
   GmScienceMemoryWorkspace,
@@ -530,6 +532,138 @@ export function normalizeGmScienceComputeHealth(payload: unknown): GmScienceComp
     executable: health.executable === true,
     detail: asString(health.detail),
     checkedAt: asString(health.checked_at ?? health.checkedAt),
+  };
+}
+
+const GM_SCIENCE_STORAGE_CATEGORY_IDS = new Set([
+  "workspaces",
+  "databases",
+  "cache",
+  "configuration",
+  "logs",
+  "other",
+] as const);
+
+export function normalizeGmScienceStorage(payload: unknown): GmScienceStorageSnapshot | null {
+  const storage = asRecord(payload);
+  const cloudStorage = asRecord(storage?.cloud_storage ?? storage?.cloudStorage);
+  if (!storage || !cloudStorage || !Array.isArray(storage.categories) || !Array.isArray(storage.issues)) {
+    return null;
+  }
+  const categories = storage.categories.map((item) => {
+    const category = asRecord(item);
+    const id = asString(category?.id) as GmScienceStorageSnapshot["categories"][number]["id"];
+    if (!category || !GM_SCIENCE_STORAGE_CATEGORY_IDS.has(id)) {
+      return null;
+    }
+    return {
+      id,
+      name: asString(category.name),
+      bytes: Math.max(0, asNumber(category.bytes)),
+      files: Math.max(0, asNumber(category.files)),
+    };
+  });
+  if (categories.some((item) => item === null)) {
+    return null;
+  }
+  return {
+    dataLocation: asString(storage.data_location ?? storage.dataLocation),
+    exists: storage.exists === true,
+    writable: storage.writable === true,
+    scannedAt: asString(storage.scanned_at ?? storage.scannedAt),
+    scanComplete: storage.scan_complete === true || storage.scanComplete === true,
+    partialReason: asString(storage.partial_reason ?? storage.partialReason),
+    entriesScanned: Math.max(0, asNumber(storage.entries_scanned ?? storage.entriesScanned)),
+    elapsedMs: Math.max(0, asNumber(storage.elapsed_ms ?? storage.elapsedMs)),
+    totalBytes: Math.max(0, asNumber(storage.total_bytes ?? storage.totalBytes)),
+    totalFiles: Math.max(0, asNumber(storage.total_files ?? storage.totalFiles)),
+    categories: categories as GmScienceStorageSnapshot["categories"],
+    issues: asStringList(storage.issues),
+    cloudStorage: {
+      supported: cloudStorage.supported === true,
+      configured: cloudStorage.configured === true,
+      detail: asString(cloudStorage.detail),
+    },
+  };
+}
+
+const GM_SCIENCE_USAGE_WINDOWS = new Set(["24h", "7d", "30d"] as const);
+
+export function normalizeGmScienceUsage(payload: unknown): GmScienceUsageSnapshot | null {
+  const usage = asRecord(payload);
+  const cost = asRecord(usage?.cost);
+  const tokens = asRecord(usage?.tokens);
+  const runs = asRecord(usage?.runs);
+  const window = asString(usage?.window) as GmScienceUsageSnapshot["window"];
+  if (
+    !usage || !cost || !tokens || !runs || !GM_SCIENCE_USAGE_WINDOWS.has(window)
+    || !Array.isArray(tokens.by_model ?? tokens.byModel)
+    || !Array.isArray(runs.by_status ?? runs.byStatus)
+    || !Array.isArray(runs.by_kind ?? runs.byKind)
+  ) {
+    return null;
+  }
+  const rawByModel = (tokens.by_model ?? tokens.byModel) as unknown[];
+  const rawByStatus = (runs.by_status ?? runs.byStatus) as unknown[];
+  const rawByKind = (runs.by_kind ?? runs.byKind) as unknown[];
+  const byModel = rawByModel.map((item) => {
+    const row = asRecord(item);
+    return row ? {
+      provider: asString(row.provider),
+      model: asString(row.model),
+      requests: Math.max(0, asNumber(row.requests)),
+      inputTokens: Math.max(0, asNumber(row.input_tokens ?? row.inputTokens)),
+      outputTokens: Math.max(0, asNumber(row.output_tokens ?? row.outputTokens)),
+      totalTokens: Math.max(0, asNumber(row.total_tokens ?? row.totalTokens)),
+    } : null;
+  });
+  const byStatus = rawByStatus.map((item) => {
+    const row = asRecord(item);
+    return row ? {
+      status: asString(row.status),
+      runs: Math.max(0, asNumber(row.runs)),
+      runtimeMs: Math.max(0, asNumber(row.runtime_ms ?? row.runtimeMs)),
+    } : null;
+  });
+  const byKind = rawByKind.map((item) => {
+    const row = asRecord(item);
+    return row ? {
+      kind: asString(row.kind),
+      runs: Math.max(0, asNumber(row.runs)),
+      runtimeMs: Math.max(0, asNumber(row.runtime_ms ?? row.runtimeMs)),
+    } : null;
+  });
+  if (byModel.some((item) => item === null) || byStatus.some((item) => item === null) || byKind.some((item) => item === null)) {
+    return null;
+  }
+  return {
+    window,
+    generatedAt: asString(usage.generated_at ?? usage.generatedAt),
+    since: asString(usage.since),
+    until: asString(usage.until),
+    localEstimate: usage.local_estimate === true || usage.localEstimate === true,
+    cost: { available: cost.available === true, reason: asString(cost.reason) },
+    tokens: {
+      recordingStarted: tokens.recording_started === true || tokens.recordingStarted === true,
+      requests: Math.max(0, asNumber(tokens.requests)),
+      inputTokens: Math.max(0, asNumber(tokens.input_tokens ?? tokens.inputTokens)),
+      outputTokens: Math.max(0, asNumber(tokens.output_tokens ?? tokens.outputTokens)),
+      inputTextTokens: Math.max(0, asNumber(tokens.input_text_tokens ?? tokens.inputTextTokens)),
+      outputTextTokens: Math.max(0, asNumber(tokens.output_text_tokens ?? tokens.outputTextTokens)),
+      inputImageTokens: Math.max(0, asNumber(tokens.input_image_tokens ?? tokens.inputImageTokens)),
+      outputImageTokens: Math.max(0, asNumber(tokens.output_image_tokens ?? tokens.outputImageTokens)),
+      totalTokens: Math.max(0, asNumber(tokens.total_tokens ?? tokens.totalTokens)),
+      byModel: byModel as GmScienceUsageSnapshot["tokens"]["byModel"],
+    },
+    runs: {
+      recordingStarted: runs.recording_started === true || runs.recordingStarted === true,
+      runs: Math.max(0, asNumber(runs.runs)),
+      activeRuns: Math.max(0, asNumber(runs.active_runs ?? runs.activeRuns)),
+      terminalRuns: Math.max(0, asNumber(runs.terminal_runs ?? runs.terminalRuns)),
+      runtimeMs: Math.max(0, asNumber(runs.runtime_ms ?? runs.runtimeMs)),
+      byStatus: byStatus as GmScienceUsageSnapshot["runs"]["byStatus"],
+      byKind: byKind as GmScienceUsageSnapshot["runs"]["byKind"],
+    },
   };
 }
 

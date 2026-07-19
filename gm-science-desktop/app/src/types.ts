@@ -262,6 +262,75 @@ export interface GmScienceComputeHealth {
   checkedAt: string;
 }
 
+export interface GmScienceStorageCategory {
+  id: "workspaces" | "databases" | "cache" | "configuration" | "logs" | "other";
+  name: string;
+  bytes: number;
+  files: number;
+}
+
+export interface GmScienceStorageSnapshot {
+  dataLocation: string;
+  exists: boolean;
+  writable: boolean;
+  scannedAt: string;
+  scanComplete: boolean;
+  partialReason: string;
+  entriesScanned: number;
+  elapsedMs: number;
+  totalBytes: number;
+  totalFiles: number;
+  categories: GmScienceStorageCategory[];
+  issues: string[];
+  cloudStorage: {
+    supported: boolean;
+    configured: boolean;
+    detail: string;
+  };
+}
+
+export type GmScienceUsageWindow = "24h" | "7d" | "30d";
+
+export interface GmScienceUsageSnapshot {
+  window: GmScienceUsageWindow;
+  generatedAt: string;
+  since: string;
+  until: string;
+  localEstimate: boolean;
+  cost: {
+    available: boolean;
+    reason: string;
+  };
+  tokens: {
+    recordingStarted: boolean;
+    requests: number;
+    inputTokens: number;
+    outputTokens: number;
+    inputTextTokens: number;
+    outputTextTokens: number;
+    inputImageTokens: number;
+    outputImageTokens: number;
+    totalTokens: number;
+    byModel: Array<{
+      provider: string;
+      model: string;
+      requests: number;
+      inputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+    }>;
+  };
+  runs: {
+    recordingStarted: boolean;
+    runs: number;
+    activeRuns: number;
+    terminalRuns: number;
+    runtimeMs: number;
+    byStatus: Array<{ status: string; runs: number; runtimeMs: number }>;
+    byKind: Array<{ kind: string; runs: number; runtimeMs: number }>;
+  };
+}
+
 export interface GmScienceSettings {
   model: {
     provider: string;
@@ -729,6 +798,8 @@ export interface PpxClientApi {
   getGmScienceSettings(): Promise<GmScienceSettings>;
   updateGmScienceSettings(input: UpdateGmScienceSettingsInput): Promise<GmScienceSettingsUpdateResult>;
   checkGmScienceComputeTarget(targetId: string): Promise<GmScienceComputeHealth>;
+  getGmScienceStorage(): Promise<GmScienceStorageSnapshot>;
+  getGmScienceUsage(window: GmScienceUsageWindow): Promise<GmScienceUsageSnapshot>;
   getGmScienceMemory(projectId: string): Promise<GmScienceMemoryWorkspace>;
   createGmScienceMemoryNote(
     projectId: string,

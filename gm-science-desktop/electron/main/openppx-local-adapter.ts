@@ -21,6 +21,8 @@ import {
   getGmScienceResourceDetail as mockGetGmScienceResourceDetail,
   getGmScienceSessionPolicy as mockGetGmScienceSessionPolicy,
   getGmScienceSettings as mockGetGmScienceSettings,
+  getGmScienceStorage as mockGetGmScienceStorage,
+  getGmScienceUsage as mockGetGmScienceUsage,
   getGmScienceMemory as mockGetGmScienceMemory,
   listGmScienceCapabilities as mockListGmScienceCapabilities,
   listGmScienceArtifacts as mockListGmScienceArtifacts,
@@ -60,6 +62,8 @@ import {
   normalizeGmScienceRun,
   normalizeGmScienceSessionPolicy,
   normalizeGmScienceSettings,
+  normalizeGmScienceStorage,
+  normalizeGmScienceUsage,
   normalizeGmScienceMemoryCandidate,
   normalizeGmScienceMemoryNote,
   normalizeGmScienceMemoryWorkspace,
@@ -104,6 +108,9 @@ import type {
   GmScienceSessionPolicy,
   GmScienceSettings,
   GmScienceSettingsUpdateResult,
+  GmScienceStorageSnapshot,
+  GmScienceUsageSnapshot,
+  GmScienceUsageWindow,
   GmScienceMemoryCandidate,
   GmScienceMemoryNote,
   GmScienceMemoryScope,
@@ -884,6 +891,42 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
       throw new Error("Client API returned an invalid Compute health payload.");
     }
     return health;
+  }
+
+  public async getGmScienceStorage(): Promise<GmScienceStorageSnapshot> {
+    if (this.shouldUseMock()) {
+      return mockGetGmScienceStorage();
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson("/api/v1/gm-science/storage");
+    const storage = normalizeGmScienceStorage(
+      (payload.data as Record<string, unknown> | undefined)?.storage,
+    );
+    if (!storage) {
+      throw new Error("Client API returned an invalid Storage payload.");
+    }
+    return storage;
+  }
+
+  public async getGmScienceUsage(window: GmScienceUsageWindow): Promise<GmScienceUsageSnapshot> {
+    if (this.shouldUseMock()) {
+      return mockGetGmScienceUsage(window);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson(
+      `/api/v1/gm-science/usage?window=${encodeURIComponent(window)}`,
+    );
+    const usage = normalizeGmScienceUsage(
+      (payload.data as Record<string, unknown> | undefined)?.usage,
+    );
+    if (!usage) {
+      throw new Error("Client API returned an invalid Usage payload.");
+    }
+    return usage;
   }
 
   public async getGmScienceMemory(projectId: string): Promise<GmScienceMemoryWorkspace> {

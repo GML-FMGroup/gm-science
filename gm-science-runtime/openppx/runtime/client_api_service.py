@@ -32,6 +32,7 @@ from ..gm_science.infrastructure import RegistryPermissionError
 from ..gm_science.literature.config import load_literature_config, select_literature_sources
 from ..gm_science.memory import GmScienceMemoryService
 from ..gm_science.models import ArtifactRecord, ProjectRecord, ProjectSessionRecord
+from ..gm_science.observability import GmScienceObservabilityService
 from ..gm_science.resources import (
     ResourceCatalogService,
     ResourceContextService,
@@ -946,6 +947,7 @@ class ClientApiCoordinator:
         self._gm_science_settings = GmScienceSettingsService(
             config_path=agent_config_path(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir),
         )
+        self._gm_science_observability = GmScienceObservabilityService(data_dir=self.data_dir)
         self._dataset_service = DatasetService(
             store=self._gm_science_store,
             config_path=agent_config_path(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir),
@@ -1563,6 +1565,20 @@ class ClientApiCoordinator:
         except ValueError as exc:
             return _error("COMPUTE_TARGET_NOT_FOUND", str(exc))
         return _ok({"health": health})
+
+    def get_gm_science_storage(self) -> dict[str, Any]:
+        """Return a bounded read-only snapshot of local gm-science storage."""
+
+        return _ok({"storage": self._gm_science_observability.get_storage_snapshot()})
+
+    def get_gm_science_usage(self, window: str = "7d") -> dict[str, Any]:
+        """Return locally recorded model and TaskRun usage for one window."""
+
+        try:
+            usage = self._gm_science_observability.get_usage_snapshot(window)
+        except ValueError as exc:
+            return _error("INVALID_REQUEST", str(exc))
+        return _ok({"usage": usage})
 
     def get_gm_science_memory(self, project_id: str, *, user_id: str) -> dict[str, Any]:
         """Return reviewable User and current-Project Memory state."""
@@ -3439,6 +3455,13 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
             return
         if segments == ["api", "v1", "gm-science", "settings"]:
             self._send_json(200, self.coordinator.get_gm_science_settings())
+            return
+        if segments == ["api", "v1", "gm-science", "storage"]:
+            self._send_json(200, self.coordinator.get_gm_science_storage())
+            return
+        if segments == ["api", "v1", "gm-science", "usage"]:
+            payload = self.coordinator.get_gm_science_usage(str(query.get("window") or "7d"))
+            self._send_json(200 if payload.get("ok") else 400, payload)
             return
         if segments == ["api", "v1", "gm-science", "projects"]:
             self._send_json(200, self.coordinator.list_gm_science_projects())

@@ -112,6 +112,53 @@ def test_handler_routes_expose_gm_science_project_and_artifact_api(tmp_path: Pat
     assert sent[-1][1]["data"]["items"] == [artifact["data"]["artifact"]]
 
 
+def test_handler_routes_expose_local_storage_and_usage_snapshots(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    handler, sent = _fake_handler(coordinator)
+
+    handler._parse = lambda: (
+        "/api/v1/gm-science/storage",
+        ["api", "v1", "gm-science", "storage"],
+        {},
+    )
+    _ClientApiHandler.do_GET(handler)
+    assert sent[-1][0] == 200
+    storage = sent[-1][1]["data"]["storage"]
+    assert storage["data_location"] == str(tmp_path.resolve())
+    assert storage["scan_complete"] is True
+    assert {item["id"] for item in storage["categories"]} == {
+        "workspaces",
+        "databases",
+        "cache",
+        "configuration",
+        "logs",
+        "other",
+    }
+
+    handler._parse = lambda: (
+        "/api/v1/gm-science/usage?window=24h",
+        ["api", "v1", "gm-science", "usage"],
+        {"window": "24h"},
+    )
+    _ClientApiHandler.do_GET(handler)
+    assert sent[-1][0] == 200
+    usage = sent[-1][1]["data"]["usage"]
+    assert usage["window"] == "24h"
+    assert usage["local_estimate"] is True
+    assert usage["cost"]["available"] is False
+
+    handler._parse = lambda: (
+        "/api/v1/gm-science/usage?window=90d",
+        ["api", "v1", "gm-science", "usage"],
+        {"window": "90d"},
+    )
+    _ClientApiHandler.do_GET(handler)
+    assert sent[-1][0] == 400
+    assert sent[-1][1]["error"]["code"] == "INVALID_REQUEST"
+
+
 def test_handler_routes_manage_reviewable_project_memory(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("GM_SCIENCE_MODE", "1")
     monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path / "gm-science"))

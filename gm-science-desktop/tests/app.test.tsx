@@ -197,6 +197,8 @@ function installClient(overrides: Partial<PpxClientApi> = {}): { client: PpxClie
       messages: buildBootstrapPayload().messages.filter((message) => message.sessionId === sessionId),
     }),
     sendMessage: async () => new Promise<{ runId: string }>(() => undefined),
+    getGmScienceStorage: async () => { throw new Error("Unused in this test."); },
+    getGmScienceUsage: async () => { throw new Error("Unused in this test."); },
     listGmScienceProjects: async () => ({ projects: [buildProject()] }),
     createGmScienceProject: async (input) => ({
       project: {

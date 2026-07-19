@@ -16,6 +16,7 @@ import type {
   UpdateGmScienceSettingsInput,
   UpdateGmScienceMemoryNoteInput,
   GmScienceMemoryScope,
+  GmScienceUsageWindow,
 } from "../../app/src/types";
 
 const api: PpxClientApi = {
@@ -41,6 +42,9 @@ const api: PpxClientApi = {
     ipcRenderer.invoke("ppx-client:update-gm-science-settings", input),
   checkGmScienceComputeTarget: (targetId: string) =>
     ipcRenderer.invoke("ppx-client:check-gm-science-compute-target", targetId),
+  getGmScienceStorage: () => ipcRenderer.invoke("ppx-client:get-gm-science-storage"),
+  getGmScienceUsage: (window: GmScienceUsageWindow) =>
+    ipcRenderer.invoke("ppx-client:get-gm-science-usage", window),
   getGmScienceMemory: (projectId: string) =>
     ipcRenderer.invoke("ppx-client:get-gm-science-memory", projectId),
   createGmScienceMemoryNote: (projectId: string, input: CreateGmScienceMemoryNoteInput) =>

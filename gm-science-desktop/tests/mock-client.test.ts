@@ -10,6 +10,8 @@ import {
   getGmScienceResourceDetail,
   getGmScienceSessionPolicy,
   getGmScienceMemory,
+  getGmScienceStorage,
+  getGmScienceUsage,
   listGmScienceCapabilities,
   listGmScienceArtifacts,
   importGmScienceDataset,
@@ -32,6 +34,17 @@ import {
 } from "../app/src/lib/mock-client";
 
 describe("mock client adapter", () => {
+  it("returns local Storage and selectable Usage snapshots", async () => {
+    const storage = await getGmScienceStorage();
+    const usage = await getGmScienceUsage("30d");
+
+    expect(storage.dataLocation).toBe("~/.gm-science");
+    expect(storage.categories.some((item) => item.id === "databases")).toBe(true);
+    expect(usage.window).toBe("30d");
+    expect(usage.localEstimate).toBe(true);
+    expect(usage.tokens.byModel[0].model).toBe("openai-codex/gpt-5.5");
+  });
+
   it("returns initial local bootstrap payload", async () => {
     const payload = await bootstrap();
     expect(payload.runtime.target.type).toBe("local");

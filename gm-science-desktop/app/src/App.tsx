@@ -11,12 +11,10 @@ import {
   Cpu,
   FileText,
   Folder,
-  HardDrive,
   KeyRound,
   LayoutGrid,
   Library,
   Menu,
-  MessageSquarePlus,
   Network,
   PanelLeftClose,
   PanelRightClose,
@@ -31,7 +29,6 @@ import {
   UserRound,
   UsersRound,
   X,
-  Zap,
 } from "lucide-react";
 import { CapabilitiesPanel } from "./components/CapabilitiesPanel";
 import { ArtifactInspector } from "./components/ArtifactInspector";
@@ -45,6 +42,7 @@ import {
 } from "./components/InfrastructureSettingsPanels";
 import { SessionOptionsMenu } from "./components/SessionOptionsMenu";
 import { CredentialsSettingsPanel, GeneralSettingsPanel } from "./components/SettingsPanels";
+import { StorageSettingsPanel, UsageSettingsPanel } from "./components/WorkspaceObservabilityPanels";
 import type {
   AgentProfile,
   BootstrapPayload,
@@ -59,6 +57,9 @@ import type {
   GmScienceRun,
   GmScienceSessionPolicy,
   GmScienceSettings,
+  GmScienceStorageSnapshot,
+  GmScienceUsageSnapshot,
+  GmScienceUsageWindow,
   RuntimeStatus,
   SessionSummary,
   UpdateGmScienceSessionPolicyInput,
@@ -440,6 +441,12 @@ export function App() {
   const [scienceSettings, setScienceSettings] = useState<GmScienceSettings | null>(null);
   const [scienceSettingsLoading, setScienceSettingsLoading] = useState(false);
   const [scienceSettingsSaving, setScienceSettingsSaving] = useState(false);
+  const [storageSnapshot, setStorageSnapshot] = useState<GmScienceStorageSnapshot | null>(null);
+  const [storageLoading, setStorageLoading] = useState(false);
+  const [usageSnapshot, setUsageSnapshot] = useState<GmScienceUsageSnapshot | null>(null);
+  const [usageWindow, setUsageWindow] = useState<GmScienceUsageWindow>("7d");
+  const [usageLoading, setUsageLoading] = useState(false);
+  const [observabilityError, setObservabilityError] = useState<string | null>(null);
   const [sessionPolicy, setSessionPolicy] = useState<GmScienceSessionPolicy | null>(null);
   const [sessionPolicyLoading, setSessionPolicyLoading] = useState(false);
   const [sessionPolicySaving, setSessionPolicySaving] = useState(false);
@@ -651,6 +658,20 @@ export function App() {
   }, [settingsOpen, selectedProjectId]);
 
   useEffect(() => {
+    if (!settingsOpen || settingsSection !== "storage") {
+      return;
+    }
+    void refreshStorage();
+  }, [settingsOpen, settingsSection]);
+
+  useEffect(() => {
+    if (!settingsOpen || settingsSection !== "usage") {
+      return;
+    }
+    void refreshUsage(usageWindow);
+  }, [settingsOpen, settingsSection, usageWindow]);
+
+  useEffect(() => {
     runsRef.current = runs;
   }, [runs]);
 
@@ -705,6 +726,30 @@ export function App() {
       setSettingsError(error instanceof Error ? error.message : String(error));
     } finally {
       setScienceSettingsLoading(false);
+    }
+  }
+
+  async function refreshStorage(): Promise<void> {
+    setStorageLoading(true);
+    setObservabilityError(null);
+    try {
+      setStorageSnapshot(await window.ppxClient.getGmScienceStorage());
+    } catch (error) {
+      setObservabilityError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setStorageLoading(false);
+    }
+  }
+
+  async function refreshUsage(selectedWindow: GmScienceUsageWindow): Promise<void> {
+    setUsageLoading(true);
+    setObservabilityError(null);
+    try {
+      setUsageSnapshot(await window.ppxClient.getGmScienceUsage(selectedWindow));
+    } catch (error) {
+      setObservabilityError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setUsageLoading(false);
     }
   }
 
@@ -1787,19 +1832,23 @@ export function App() {
                 ) : null}
 
                 {settingsSection === "storage" ? (
-                  <div className="settings-page science-settings-page">
-                    <div className="settings-page-title"><div><h3>Storage</h3><p>Local locations used for projects, files, and history.</p></div></div>
-                    <section className="settings-section-block settings-row-section"><div><h4>Data location</h4><p className="path-value">{diagnostics?.globalConfigPath || "Local gm-science configuration"}</p></div><HardDrive size={20} /></section>
-                    <section className="settings-section-block"><h4>Workspace data</h4><div className="storage-grid"><span><Folder size={18} />Projects<strong>{projects.length}</strong></span><span><MessageSquarePlus size={18} />Sessions<strong>{sessions.length}</strong></span><span><FileText size={18} />Artifacts<strong>{resources.length}</strong></span><span><Play size={18} />Runs<strong>{runs.length}</strong></span></div></section>
-                    <section className="settings-section-block settings-row-section"><div><h4>Cloud storage</h4><p>Browse and manage bucket connections.</p></div><span className="muted-value">Not configured</span></section>
-                  </div>
+                  <StorageSettingsPanel
+                    snapshot={storageSnapshot}
+                    loading={storageLoading}
+                    error={observabilityError}
+                    onRefresh={refreshStorage}
+                  />
                 ) : null}
 
                 {settingsSection === "usage" ? (
-                  <div className="settings-page science-settings-page">
-                    <div className="settings-page-title"><div><h3>Usage</h3><p>Runtime and model usage for this local workspace.</p></div></div>
-                    <section className="settings-section-block"><h4>Where tokens go</h4><p>Detailed token accounting is not yet reported by the configured provider adapter.</p><div className="usage-placeholder"><Zap size={24} /><span>No usage data available</span></div></section>
-                  </div>
+                  <UsageSettingsPanel
+                    snapshot={usageSnapshot}
+                    window={usageWindow}
+                    loading={usageLoading}
+                    error={observabilityError}
+                    onWindowChange={setUsageWindow}
+                    onRefresh={() => refreshUsage(usageWindow)}
+                  />
                 ) : null}
 
                 {settingsSection === "general" ? (

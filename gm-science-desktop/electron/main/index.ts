@@ -17,6 +17,7 @@ import type {
   UpdateGmScienceSettingsInput,
   UpdateGmScienceMemoryNoteInput,
   GmScienceMemoryScope,
+  GmScienceUsageWindow,
 } from "../../app/src/types";
 import { OpenPpxLocalAdapter } from "./openppx-local-adapter";
 
@@ -123,6 +124,11 @@ app.whenReady().then(() => {
   ipcMain.handle(
     "ppx-client:check-gm-science-compute-target",
     async (_event, targetId: string) => adapter!.checkGmScienceComputeTarget(targetId),
+  );
+  ipcMain.handle("ppx-client:get-gm-science-storage", async () => adapter!.getGmScienceStorage());
+  ipcMain.handle(
+    "ppx-client:get-gm-science-usage",
+    async (_event, window: GmScienceUsageWindow) => adapter!.getGmScienceUsage(window),
   );
   ipcMain.handle("ppx-client:get-gm-science-memory", async (_event, projectId: string) =>
     adapter!.getGmScienceMemory(projectId),

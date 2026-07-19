@@ -277,6 +277,22 @@ def read_token_usage_stats(
             [*params, max(1, int(limit))],
         ).fetchall()
 
+        model_rows = conn.execute(
+            (
+                "SELECT provider, model, "
+                "COUNT(*) AS requests, "
+                "COALESCE(SUM(request_tokens), 0) AS request_tokens, "
+                "COALESCE(SUM(response_tokens), 0) AS response_tokens, "
+                "COALESCE(SUM(total_tokens), 0) AS total_tokens "
+                "FROM llm_token_usage_events"
+                f"{where} "
+                "GROUP BY provider, model "
+                "ORDER BY total_tokens DESC, provider ASC, model ASC "
+                "LIMIT 50"
+            ),
+            params,
+        ).fetchall()
+
     return {
         "requests": int(totals["requests"]) if totals else 0,
         "request_tokens": int(totals["request_tokens"]) if totals else 0,
@@ -289,4 +305,5 @@ def read_token_usage_stats(
         "since_ms": int(since_ms) if since_ms is not None else None,
         "until_ms": int(until_ms) if until_ms is not None else None,
         "recent": [dict(row) for row in recent_rows],
+        "by_model": [dict(row) for row in model_rows],
     }

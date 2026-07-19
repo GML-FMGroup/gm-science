@@ -22,6 +22,9 @@ import type {
   GmScienceSessionPolicyValues,
   GmScienceSettings,
   GmScienceSettingsUpdateResult,
+  GmScienceStorageSnapshot,
+  GmScienceUsageSnapshot,
+  GmScienceUsageWindow,
   GmScienceComputeHealth,
   GmScienceMemoryCandidate,
   GmScienceMemoryNote,
@@ -44,6 +47,8 @@ interface StoreState {
   runtime: RuntimeStatus;
   agents: AgentProfile[];
   settings: GmScienceSettings;
+  storage: GmScienceStorageSnapshot;
+  usage: GmScienceUsageSnapshot;
   memoryByProject: Record<string, GmScienceMemoryWorkspace>;
   projects: GmScienceProject[];
   artifactsByProject: Record<string, GmScienceArtifact[]>;
@@ -179,6 +184,73 @@ const state: StoreState = {
       arxiv: { status: "ready", statusDetail: "" },
       pubmed: { email: "", apiKeyConfigured: false, status: "needs_configuration", statusDetail: "Add a PubMed contact email." },
       openalex: { apiKeyConfigured: false, status: "needs_configuration", statusDetail: "Add an OpenAlex API key." },
+    },
+  },
+  storage: {
+    dataLocation: "~/.gm-science",
+    exists: true,
+    writable: true,
+    scannedAt: now(),
+    scanComplete: true,
+    partialReason: "",
+    entriesScanned: 73,
+    elapsedMs: 5,
+    totalBytes: 3_145_728,
+    totalFiles: 54,
+    categories: [
+      { id: "workspaces", name: "Workspaces", bytes: 1_572_864, files: 19 },
+      { id: "databases", name: "Databases", bytes: 1_048_576, files: 8 },
+      { id: "cache", name: "Cache", bytes: 393_216, files: 17 },
+      { id: "configuration", name: "Agent configuration", bytes: 65_536, files: 7 },
+      { id: "logs", name: "Logs", bytes: 65_536, files: 3 },
+      { id: "other", name: "Other", bytes: 0, files: 0 },
+    ],
+    issues: [],
+    cloudStorage: {
+      supported: false,
+      configured: false,
+      detail: "No cloud storage adapter is available in this build.",
+    },
+  },
+  usage: {
+    window: "7d",
+    generatedAt: now(),
+    since: now(),
+    until: now(),
+    localEstimate: true,
+    cost: {
+      available: false,
+      reason: "Provider pricing and invoice reconciliation are not configured.",
+    },
+    tokens: {
+      recordingStarted: true,
+      requests: 4,
+      inputTokens: 8_400,
+      outputTokens: 1_920,
+      inputTextTokens: 8_400,
+      outputTextTokens: 1_920,
+      inputImageTokens: 0,
+      outputImageTokens: 0,
+      totalTokens: 10_320,
+      byModel: [
+        {
+          provider: "openai_codex",
+          model: "openai-codex/gpt-5.5",
+          requests: 4,
+          inputTokens: 8_400,
+          outputTokens: 1_920,
+          totalTokens: 10_320,
+        },
+      ],
+    },
+    runs: {
+      recordingStarted: true,
+      runs: 2,
+      activeRuns: 0,
+      terminalRuns: 2,
+      runtimeMs: 42_000,
+      byStatus: [{ status: "completed", runs: 2, runtimeMs: 42_000 }],
+      byKind: [{ kind: "data_analysis", runs: 2, runtimeMs: 42_000 }],
     },
   },
   memoryByProject: {
@@ -769,6 +841,20 @@ function cloneSettings(): GmScienceSettings {
 
 export async function getGmScienceSettings(): Promise<GmScienceSettings> {
   return cloneSettings();
+}
+
+export async function getGmScienceStorage(): Promise<GmScienceStorageSnapshot> {
+  return structuredClone(state.storage);
+}
+
+export async function getGmScienceUsage(window: GmScienceUsageWindow): Promise<GmScienceUsageSnapshot> {
+  const usage = structuredClone(state.usage);
+  usage.window = window;
+  usage.generatedAt = now();
+  usage.until = usage.generatedAt;
+  const durationMs = window === "24h" ? 86_400_000 : window === "7d" ? 604_800_000 : 2_592_000_000;
+  usage.since = new Date(Date.parse(usage.until) - durationMs).toISOString();
+  return usage;
 }
 
 function applyMockSecretMutation(

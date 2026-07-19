@@ -64,9 +64,9 @@ gm-science 当前设计和实现已经正确吸收了以下产品结构：
 采用两套口径：
 
 - **已有路线完成度**：Phase 1 到 Phase 7C 的基础闭环约完成 96%。
-- **科研工作台语义完成度**：按 Claude Science 的核心产品结构估算，目前约完成 88%。
+- **科研工作台语义完成度**：按 Claude Science 的核心产品结构估算，目前约完成 90%。
 
-第二个口径仍低于已有路线完成度，主要因为能力安装/编辑、远程 Compute executor、Storage/Usage 完整产品语义和专业科研生态尚未完成，而不是因为已有科研流程不可用。可审阅 Memory、Credentials、Permissions、Network、Compute Target registry、Session Policy 和只读 Artifact inspection 已完成第一版。
+第二个口径仍低于已有路线完成度，主要因为能力安装/编辑、远程 Compute executor、数据目录迁移、云存储和专业科研生态尚未完成，而不是因为已有科研流程不可用。可审阅 Memory、Credentials、Permissions、Network、Compute Target registry、Session Policy、只读 Artifact inspection，以及本地 Storage/Usage 可观测性已完成第一版。
 
 ### 2.4 2026-07-18 Specialist 实机补充结论
 
@@ -109,7 +109,7 @@ gm-science 当前设计和实现已经正确吸收了以下产品结构：
 | P1 | 凭据与审批 | Credentials 和全局 registry write 授权第一版完成 | 后续增加 Project/Session/one-time approval，不建立第二套权限系统 |
 | P1 | Compute Target | Local executor、统一 registry、远程配置和健康检查第一版完成 | 后续为 SSH、Modal、NIM 增加复用 TaskRun 的 executor adapter |
 | P2 | Network 管理 | 镜像、CA、分类域名和受管 HTTP/MCP 强制第一版完成 | 后续随沙箱增加进程级网络强制，不夸大当前边界 |
-| P2 | Storage、Usage、General | 配置和诊断分散 | 提供数据目录、用量和模型策略的统一管理界面 |
+| P2 | Storage、Usage、General | Storage/Usage 本地可观测性和 General provider/model 第一版完成 | 后续仅在具备真实后端契约时增加迁移、计费或模型策略控制 |
 | P3 | 专业科研生态 | 三个文献源和少量专家 | 框架冻结后接入 ToolUniverse 和领域工具 |
 
 ## 5. 目标架构
@@ -539,6 +539,19 @@ General：
 - Usage 不把估算值展示为 provider 官方账单。
 - 数据目录迁移失败不会损坏原目录。
 
+#### Phase 14 实施结果（2026-07-19）
+
+本轮完成 Storage 和 Usage 的本地可观测性第一版；General 保持已有 provider/model 与 diagnostics 契约，不增加 runtime 无法执行的候选项。
+
+- 后端新增有条目数和时间预算的磁盘扫描；统计真实 gm-science 数据根目录、可写状态、文件数、总占用和 Workspaces、Databases、Cache、Agent configuration、Logs、Other 六类非重叠数据。
+- 扫描不跟随符号链接，达到预算或遇到不可读条目时返回 partial 状态与 diagnostics；缺失目录和数据库的只读查询不会创建新数据。
+- Usage 复用 openppx token store 和 TaskRun，提供 24h、7d、30d 的请求、输入/输出/总 token、provider/model 分布、运行数量、状态和窗口内运行时间。
+- client-api、Electron IPC/preload、typed adapter、mock 和 Claude Science 风格设置页使用同一事实源；页面明确标注 `Local estimate` 和 `Cost unavailable`。
+- 自动化验证为后端 `1361 passed, 111 skipped, 15 subtests passed`，桌面端 `110 passed`，TypeScript、renderer/Electron production build 与一键启动 dry-run 通过。
+- 隔离 client-api 验证 token/TaskRun 持久化和重启恢复；真实 Electron 验证 Storage 分类、Usage 模型分布和 24h/7d/30d 切换，默认窗口未发现重叠或溢出。
+
+数据目录迁移、云存储、provider 账单和 plan 限额没有实现，也没有用不可用按钮冒充。它们必须分别拥有原子迁移、storage adapter 或价格/账单事实源后再进入产品界面。
+
 ### Phase 9：科研工具和领域能力扩展
 
 只有 Phase 8A 到 Phase 8C 完成并冻结公共契约后，才开始大规模增加专业能力。
@@ -727,6 +740,7 @@ Phase 8D 的可审阅 Memory 核心于 2026-07-19 完成第一版：
 | 可审阅 Memory | User/Project note、候选审批、全局/Session 开关、来源和召回审计第一版完成；批量导入导出与更强检索待后续阶段 |
 | Credentials / Permissions / Network | Credentials、全局 registry write 授权、镜像/CA/分类域名和受管 HTTP/MCP 强制第一版完成；作用域审批和进程级隔离待后续阶段 |
 | 多 Compute Target | Local executor、统一 registry、脱敏配置和健康检查第一版完成；SSH/Modal/NIM/HTTP endpoint executor 尚未实现 |
+| Storage / Usage / General | 本地数据目录和磁盘分类、token/TaskRun 用量窗口、provider/model 分布和 General provider/model 第一版完成；迁移、云存储、官方账单和更多模型策略待真实后端契约 |
 | 专业科研生态 | 等框架冻结后扩展 |
 
-近期目标是完成真实桌面验收并继续收口能力安装/编辑治理、Storage/Usage/General 产品语义和 Artifact 生命周期操作。远程 Compute adapter 必须继续复用 TaskRun；框架稳定后再扩展 ToolUniverse 和领域工具。
+近期目标是继续收口能力安装/编辑治理、Files 内容预览和 Artifact 生命周期操作，并执行覆盖新建 Project、对话、文献、Memory、数据分析和设置页的整体人工回归。远程 Compute adapter 必须继续复用 TaskRun；框架冻结后再扩展 ToolUniverse 和领域工具。

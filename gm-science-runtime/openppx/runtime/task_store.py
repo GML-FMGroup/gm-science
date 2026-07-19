@@ -664,6 +664,76 @@ class TaskStore:
             ).fetchall()
         return {str(row["status"]): int(row["count"]) for row in rows}
 
+    def read_usage_stats(
+        self,
+        *,
+        since_ms: int,
+        until_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """Aggregate TaskRun activity that overlaps one wall-clock window.
+
+        Runtime is clipped to the requested window. Active tasks use ``until_ms``
+        as their temporary endpoint, so the result remains deterministic for one
+        snapshot and does not require a separate mutable metrics store.
+        """
+
+        normalized_since = max(0, int(since_ms))
+        normalized_until = _now_ms() if until_ms is None else max(normalized_since, int(until_ms))
+        where = "created_at_ms <= ? AND (ended_at_ms IS NULL OR ended_at_ms >= ?)"
+        params = (normalized_until, normalized_since)
+        duration_sql = (
+            "MAX(0, MIN(COALESCE(ended_at_ms, ?), ?) - MAX(created_at_ms, ?))"
+        )
+        with _connect(self._db_path) as conn:
+            totals = conn.execute(
+                (
+                    "SELECT COUNT(*) AS runs, "
+                    f"COALESCE(SUM({duration_sql}), 0) AS runtime_ms "
+                    f"FROM task_runs WHERE {where}"
+                ),
+                (normalized_until, normalized_until, normalized_since, *params),
+            ).fetchone()
+            status_rows = conn.execute(
+                (
+                    "SELECT status, COUNT(*) AS runs, "
+                    f"COALESCE(SUM({duration_sql}), 0) AS runtime_ms "
+                    f"FROM task_runs WHERE {where} "
+                    "GROUP BY status ORDER BY status ASC"
+                ),
+                (normalized_until, normalized_until, normalized_since, *params),
+            ).fetchall()
+            kind_rows = conn.execute(
+                (
+                    "SELECT kind, COUNT(*) AS runs, "
+                    f"COALESCE(SUM({duration_sql}), 0) AS runtime_ms "
+                    f"FROM task_runs WHERE {where} "
+                    "GROUP BY kind ORDER BY runtime_ms DESC, kind ASC LIMIT 50"
+                ),
+                (normalized_until, normalized_until, normalized_since, *params),
+            ).fetchall()
+
+        by_status = [dict(row) for row in status_rows]
+        active_runs = sum(
+            int(row["runs"])
+            for row in by_status
+            if str(row["status"]) in TASK_ACTIVE_STATUSES
+        )
+        terminal_runs = sum(
+            int(row["runs"])
+            for row in by_status
+            if str(row["status"]) in TASK_TERMINAL_STATUSES
+        )
+        return {
+            "runs": int(totals["runs"]) if totals else 0,
+            "active_runs": active_runs,
+            "terminal_runs": terminal_runs,
+            "runtime_ms": int(totals["runtime_ms"]) if totals else 0,
+            "since_ms": normalized_since,
+            "until_ms": normalized_until,
+            "by_status": by_status,
+            "by_kind": [dict(row) for row in kind_rows],
+        }
+
     def list_stuck_tasks(
         self,
         *,

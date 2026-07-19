@@ -250,3 +250,41 @@ URL 可能包含 `user:password@host`、query token 或 fragment。原样投影�
 - Local 是唯一真实 Compute executor，远程 target 只提供脱敏配置和健康状态；
 - package mirror 和 model endpoint URL 不承载凭据，公共投影不会返回用户信息、query 或 fragment；
 - 任何界面都不得把凭据存在、端口可达或 endpoint HTTP 响应解释为远程 TaskRun 可执行。
+
+## 8. Phase 14 新增修正记录
+
+### DOC-CORRECTION-011：Storage 第一版是有边界的本地可观测性，不是迁移或云存储管理
+
+**原有判断**
+
+早期规划把数据目录展示、磁盘分类、修改数据目录和云存储连接放在同一个 Storage 阶段，容易为了对齐界面而提前暴露没有事务保障的操作。
+
+**新证据**
+
+gm-science 的 launcher 已经统一控制产品数据根目录，但安全迁移还需要停写、原子复制、完整性校验、重启和失败回滚；当前也没有云 bucket adapter。直接提供 `Change location` 或 `Connect cloud storage` 只会形成不可兑现的产品承诺。
+
+**修正结论**
+
+Phase 14 Storage 只提供只读本地观测：真实数据根目录、可写状态、文件数量、总占用、非重叠分类和扫描诊断。扫描有条目数与时间预算，不跟随符号链接；达到边界或遇到不可读条目时返回 partial 状态，而不是长期阻塞或静默漏算。数据根目录迁移与云存储必须在拥有独立后端事务契约后再进入界面。
+
+### DOC-CORRECTION-012：Usage 是本地记录的事实汇总，不是官方账单
+
+**原有判断**
+
+Claude Science 的 Usage 页面包含 plan 和 token 消耗信息，容易被解释为 gm-science 也应展示费用、账户额度或 provider 账单。
+
+**新证据**
+
+openppx 已持久化每次模型调用的 token 事件，并以 TaskRun 保存受管执行状态和时间；但当前没有 provider invoice、价格版本账本或账户 plan API。模型返回的 token 字段也可能因 provider 能力而不完整。
+
+**修正结论**
+
+Phase 14 Usage 只汇总本地记录的 24 小时、7 天和 30 天窗口：请求数、输入/输出/总 token、provider/model 分布，以及 TaskRun 数量、状态和窗口内运行时间。界面固定标注 `Local estimate` 和 `Cost unavailable`，不得将缺失记录转换成官方零费用，也不得声称代表 provider 账单或账户限额。
+
+## 9. Phase 14 后的有效实施基线
+
+- Storage 与 Usage 通过 client-api、Electron IPC/preload 和 typed adapter 使用同一后端事实源；
+- 磁盘分类为 Workspaces、Databases、Cache、Agent configuration、Logs 和 Other，分类不重叠且扫描不跟随符号链接；
+- token 事实继续来自 openppx token store，运行事实继续来自 TaskRun，不建立 gm-science 第二套 usage 数据库；
+- 数据目录迁移、云存储、费用核算和 plan 限额仍是明确未实现能力，界面不提供伪操作；
+- General 只展示 runtime 能实际执行的 provider/model 与诊断设置，不复制无法落地的 Claude Science 候选项。
