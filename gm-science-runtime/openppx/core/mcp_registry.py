@@ -781,6 +781,14 @@ def build_mcp_toolsets(mcp_servers: dict[str, Any], *, log_registered: bool = Tr
     return toolsets
 
 
-def build_mcp_toolsets_from_env(*, log_registered: bool = True) -> list[ManagedMcpToolset]:
+def build_mcp_toolsets_from_env(
+    *,
+    log_registered: bool = True,
+    server_filter: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+) -> list[ManagedMcpToolset]:
     """Build MCP toolsets from `OPENPPX_MCP_SERVERS_JSON`."""
-    return build_mcp_toolsets(_load_servers_from_env(), log_registered=log_registered)
+
+    servers = _load_servers_from_env()
+    if server_filter is not None:
+        servers = server_filter(servers)
+    return build_mcp_toolsets(servers, log_registered=log_registered)

@@ -39,6 +39,8 @@ const api: PpxClientApi = {
   getGmScienceSettings: () => ipcRenderer.invoke("ppx-client:get-gm-science-settings"),
   updateGmScienceSettings: (input: UpdateGmScienceSettingsInput) =>
     ipcRenderer.invoke("ppx-client:update-gm-science-settings", input),
+  checkGmScienceComputeTarget: (targetId: string) =>
+    ipcRenderer.invoke("ppx-client:check-gm-science-compute-target", targetId),
   getGmScienceMemory: (projectId: string) =>
     ipcRenderer.invoke("ppx-client:get-gm-science-memory", projectId),
   createGmScienceMemoryNote: (projectId: string, input: CreateGmScienceMemoryNoteInput) =>

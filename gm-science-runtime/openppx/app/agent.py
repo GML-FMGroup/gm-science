@@ -17,6 +17,7 @@ from ..core.mcp_registry import build_mcp_toolsets_from_env
 from ..core.provider import build_adk_model_from_env
 from ..gm_science.analysis.tools import science_list_datasets, science_plan_data_analysis
 from ..gm_science.literature.tools import science_list_sources, science_register_review, science_search
+from ..gm_science.infrastructure import filter_mcp_servers_by_network
 from ..gm_science.memory import science_propose_memory
 from ..gm_science.session_policy import session_policy_from_env
 from ..gm_science.specialists.agents import build_specialist_tools, specialist_dispatch_guidance
@@ -262,7 +263,11 @@ def _apply_science_privilege(tools: list[Any]) -> list[Any]:
             for tool in tools
             if _tool_name(tool) in allowed_names or isinstance(tool, PreloadMemoryTool)
         ]
-    tools.extend(build_mcp_toolsets_from_env())
+    tools.extend(
+        build_mcp_toolsets_from_env(
+            server_filter=lambda servers: filter_mcp_servers_by_network(servers)[0]
+        )
+    )
     return tools
 
 

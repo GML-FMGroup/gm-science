@@ -9,7 +9,6 @@ import {
   Cloud,
   Columns2,
   Cpu,
-  Database,
   FileText,
   Folder,
   HardDrive,
@@ -39,6 +38,11 @@ import { ArtifactInspector } from "./components/ArtifactInspector";
 import { DataPanel } from "./components/DataPanel";
 import { MessageBubble } from "./components/MessageBubble";
 import { MemorySettingsPanel } from "./components/MemorySettingsPanel";
+import {
+  ComputeSettingsPanel,
+  NetworkSettingsPanel,
+  PermissionsSettingsPanel,
+} from "./components/InfrastructureSettingsPanels";
 import { SessionOptionsMenu } from "./components/SessionOptionsMenu";
 import { CredentialsSettingsPanel, GeneralSettingsPanel } from "./components/SettingsPanels";
 import type {
@@ -55,7 +59,6 @@ import type {
   GmScienceRun,
   GmScienceSessionPolicy,
   GmScienceSettings,
-  RuntimeState,
   RuntimeStatus,
   SessionSummary,
   UpdateGmScienceSessionPolicyInput,
@@ -181,16 +184,6 @@ function mergeSessionSummary(existing: SessionSummary | undefined, incoming: Ses
     return { ...merged, title: existing.title };
   }
   return merged;
-}
-
-function runtimeActionLabel(state: RuntimeState): string {
-  if (state === "stopped") {
-    return "启动";
-  }
-  if (state === "healthy") {
-    return "重启";
-  }
-  return "重试";
 }
 
 function buildConnectionSettings(diagnostics: ClientDiagnostics | null): ConnectionSettings {
@@ -1293,34 +1286,6 @@ export function App() {
     void handleSend();
   }
 
-  async function handleRuntimeAction(): Promise<void> {
-    if (!runtime) {
-      return;
-    }
-    setSettingsError(null);
-    try {
-      const command = runtime.state === "stopped" ? "start" : "restart";
-      const next = await window.ppxClient.runRuntimeCommand(command);
-      setRuntime(next);
-      const nextDiagnostics = await window.ppxClient.getDiagnostics();
-      setDiagnostics(nextDiagnostics);
-      setConnectionForm(buildConnectionSettings(nextDiagnostics));
-    } catch (error) {
-      setSettingsError(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  async function refreshDiagnostics(): Promise<void> {
-    setSettingsError(null);
-    try {
-      const nextDiagnostics = await window.ppxClient.getDiagnostics();
-      setDiagnostics(nextDiagnostics);
-      setConnectionForm(buildConnectionSettings(nextDiagnostics));
-    } catch (error) {
-      setSettingsError(error instanceof Error ? error.message : String(error));
-    }
-  }
-
   async function handleConnectionSave(): Promise<void> {
     const nextSettings = normalizeConnectionSettings(connectionForm);
     setSavingConnection(true);
@@ -1781,51 +1746,34 @@ export function App() {
                 ) : null}
 
                 {settingsSection === "compute" ? (
-                  <div className="settings-page science-settings-page">
-                    <div className="settings-page-title"><div><h3>Compute</h3><p>Choose where scientific workloads run.</p></div></div>
-                    {settingsError ? <p className="composer-error">{settingsError}</p> : null}
-                    <section className="settings-section-block settings-row-section">
-                      <div><h4>Local computer</h4><p>{runtime.summary}</p><small>{runtime.detail}</small></div>
-                      <span className={`status-chip ${runtime.state}`}>{runtime.state}</span>
-                    </section>
-                    <section className="settings-section-block settings-row-section">
-                      <div><h4>SSH hosts</h4><p>Remote servers and clusters.</p></div>
-                      <span className="muted-value">Not configured</span>
-                    </section>
-                    <section className="settings-section-block settings-row-section">
-                      <div><h4>Cloud providers</h4><p>Modal and remote GPU providers.</p></div>
-                      <span className="muted-value">Not configured</span>
-                    </section>
-                    <div className="settings-actions-row">
-                      <button className="secondary" onClick={() => void handleRuntimeAction()}>{runtimeActionLabel(runtime.state)}</button>
-                      <button className="secondary" onClick={() => void refreshDiagnostics()}><RefreshCw size={15} />Refresh</button>
-                      {selectedProject ? <button className="secondary" onClick={() => { setSettingsOpen(false); setFilesOpen(true); setWorkspacePanel("runs"); }}><Play size={15} />Open runs</button> : null}
-                    </div>
-                  </div>
+                  <ComputeSettingsPanel
+                    settings={scienceSettings}
+                    loading={scienceSettingsLoading}
+                    saving={scienceSettingsSaving}
+                    error={settingsError}
+                    onUpdate={updateScienceSettings}
+                    onCheck={(targetId) => window.ppxClient.checkGmScienceComputeTarget(targetId)}
+                  />
                 ) : null}
 
                 {settingsSection === "network" ? (
-                  <div className="settings-page science-settings-page">
-                    <div className="settings-page-title"><div><h3>Network</h3><p>Research services currently exposed through configured connectors.</p></div></div>
-                    <section className="settings-section-block">
-                      <h4>Research data sources</h4>
-                      <div className="service-list">
-                        {capabilities.filter((item) => item.kind === "connector").map((item) => (
-                          <div className="service-row" key={item.id}><span><Database size={17} /><strong>{item.name}</strong></span><span className={`status-chip ${item.status}`}>{item.status.replaceAll("_", " ")}</span></div>
-                        ))}
-                        {capabilities.every((item) => item.kind !== "connector") ? <p>No connectors discovered.</p> : null}
-                      </div>
-                    </section>
-                    <section className="settings-section-block settings-row-section"><div><h4>Package mirrors</h4><p>Conda and Python mirrors use the host environment.</p></div><span className="muted-value">System default</span></section>
-                  </div>
+                  <NetworkSettingsPanel
+                    settings={scienceSettings}
+                    loading={scienceSettingsLoading}
+                    saving={scienceSettingsSaving}
+                    error={settingsError}
+                    onUpdate={updateScienceSettings}
+                  />
                 ) : null}
 
                 {settingsSection === "permissions" ? (
-                  <div className="settings-page science-settings-page">
-                    <div className="settings-page-title"><div><h3>Permissions</h3><p>Control persistent agent and capability changes.</p></div></div>
-                    <div className="settings-notice"><ShieldCheck size={19} /><div><strong>Trusted local mode</strong><p>gm-science currently runs on your computer without a sandbox or per-action grant registry.</p></div></div>
-                    <section className="settings-section-block"><h4>Registry writes</h4><div className="permission-list">{["Update project capabilities", "Create project sessions", "Create local artifacts", "Run local analyses"].map((label) => <div key={label}><span>{label}</span><span className="status-chip">Local</span></div>)}</div></section>
-                  </div>
+                  <PermissionsSettingsPanel
+                    settings={scienceSettings}
+                    loading={scienceSettingsLoading}
+                    saving={scienceSettingsSaving}
+                    error={settingsError}
+                    onUpdate={updateScienceSettings}
+                  />
                 ) : null}
 
                 {settingsSection === "credentials" ? (

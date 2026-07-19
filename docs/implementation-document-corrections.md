@@ -184,3 +184,69 @@ Phase 12 结束后的有效基线：
 - 全局和 Session Memory 开关关闭时停止召回与候选生成，但不删除已有 note；
 - Electron、client-api 和 worker 已通过真实新增、编辑、拒绝候选、跨 Session 召回与跨 Project 隔离验收；
 - TaskRun 对外终态包含 Artifact 提升完成，不暴露“已完成但产物尚未注册”的中间窗口。
+
+## 6. Phase 13 新增修正记录
+
+### DOC-CORRECTION-007：Permissions 是产品注册表授权，不是本机沙箱
+
+**原有判断**
+
+早期规划把 registry writes、本机目录附加、credential use 和远程 Compute 混在同一个 Permissions 阶段，容易让设置页开关被理解为操作系统级隔离。
+
+**新证据**
+
+Claude Science 可见 Permissions 条目主要是 Create/Update Agent、Publish/Edit/Attach/Detach Skill 和 Attach/Detach Connector；gm-science 当前也没有进程沙箱作为这些开关的执行底座。
+
+**修正结论**
+
+第一版 Permissions 只授权持久化 registry mutation，并在 backend mutation boundary 强制。它不限制本机文件、shell、任意 Python 进程或操作系统权限。后续沙箱治理必须使用独立、可验证的执行边界，不能复用 UI 文案冒充。
+
+### DOC-CORRECTION-008：Compute 的 configured、reachable、executable 必须分离
+
+**原有判断**
+
+“支持 SSH、Modal 或 model endpoint”容易被简化为保存配置后即可作为 Session Compute Target 执行。
+
+**新证据**
+
+远程目标可能只有凭据、端口可达或健康端点，但仍缺少 TaskRun executor、取消、重试、日志和 Artifact 回收适配器。
+
+**修正结论**
+
+Compute Target 必须分别报告配置完整性、连通性和可执行性。Phase 13 只有 Local 可执行；SSH、Modal、NVIDIA BioNeMo NIM 和自定义 model endpoint 即使已配置或可达，也不能出现在 Session 的可执行候选中。
+
+### DOC-CORRECTION-009：Network 第一版只强制受管产品边界
+
+**原有判断**
+
+统一 Network allowlist 容易被理解为可以阻止本机所有子进程访问未授权域名。
+
+**新证据**
+
+当前可稳定控制的是 gm-science 原生 HTTP connector、远程 MCP 装配、显式 Compute 健康检查和 TaskRun package/CA 环境。任意用户 Python 代码仍运行在本机普通进程中。
+
+**修正结论**
+
+第一版 Network 对受管 HTTP/MCP 路径执行策略，并明确失败关闭和私网规则；它不是进程级网络隔离。完整子进程网络强制随未来沙箱阶段实现。
+
+### DOC-CORRECTION-010：基础设施 URL 不是凭据传输通道
+
+**原有判断**
+
+Network mirror 和自定义 model endpoint 只要是合法 HTTP(S) URL 就可以原样保存并投影到设置页。
+
+**新证据**
+
+URL 可能包含 `user:password@host`、query token 或 fragment。原样投影会把凭据带回 renderer、截图和诊断；把它写入 TaskRun 环境也会扩大泄露面。
+
+**修正结论**
+
+所有基础设施 URL 在保存、公共投影和 mock 路径中统一删除用户名、密码、query 和 fragment。Model endpoint 的 API Key 只能通过 write-only secret mutation 写入；私有 package mirror 的 URL 凭据当前不受支持，不能把 token 嵌入 URL 作为替代方案。
+
+## 7. Phase 13 后的有效实施基线
+
+- 八类 registry write 使用全局 durable grants，并由后端 mutation service 检查；
+- Network 策略统一投影到原生科研 HTTP、远程 MCP 和 worker 环境；
+- Local 是唯一真实 Compute executor，远程 target 只提供脱敏配置和健康状态；
+- package mirror 和 model endpoint URL 不承载凭据，公共投影不会返回用户信息、query 或 fragment；
+- 任何界面都不得把凭据存在、端口可达或 endpoint HTTP 响应解释为远程 TaskRun 可执行。

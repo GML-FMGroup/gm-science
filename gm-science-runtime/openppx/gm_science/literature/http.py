@@ -6,6 +6,8 @@ from typing import Any, Mapping
 
 import httpx
 
+from ..infrastructure import network_policy_from_env
+
 
 USER_AGENT = "gm-science/0.1 (+local research agent)"
 
@@ -38,6 +40,10 @@ def safe_get(
     timeout_seconds: float,
 ) -> httpx.Response:
     """Issue a GET request and convert transport failures to stable errors."""
+
+    decision = network_policy_from_env().evaluate_url(url, purpose=f"{source} request")
+    if not decision.allowed:
+        raise LiteratureConnectorError(source, "network_blocked", decision.reason)
 
     try:
         response = client.get(

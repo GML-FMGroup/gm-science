@@ -1,5 +1,6 @@
 import {
   bootstrap,
+  checkGmScienceComputeTarget,
   createGmScienceAnalysis,
   createGmScienceArtifact,
   createGmScienceProject,
@@ -186,6 +187,75 @@ describe("mock client adapter", () => {
     expect(removed.settings.literature.openalex.status).toBe("needs_configuration");
     expect(JSON.stringify(removed)).not.toContain("provider-secret");
     expect(JSON.stringify(removed)).not.toContain("openalex-secret");
+  });
+
+  it("keeps infrastructure mock contracts aligned with the local adapter", async () => {
+    const updated = await updateGmScienceSettings({
+      permissionGrants: { attach_skill: false },
+      network: {
+        pythonPackageIndex: "https://packages.example.test/simple",
+        categoryEnabled: { research_data: false },
+        customDomains: ["data.example.test"],
+      },
+      computeTarget: {
+        operation: "upsert",
+        target: {
+          id: "lab_cluster",
+          type: "ssh",
+          name: "Lab cluster",
+          enabled: true,
+          host: "cluster.example.test",
+          port: 22,
+          username: "researcher",
+        },
+      },
+    });
+
+    expect(updated.settings.permissions.items.find((item) => item.id === "attach_skill")).toMatchObject({
+      granted: false,
+      source: "user",
+    });
+    expect(updated.settings.network.packageMirrors.pythonPackageIndex).toBe(
+      "https://packages.example.test/simple",
+    );
+    expect(updated.settings.network.categories.find((item) => item.id === "research_data")?.enabled).toBe(false);
+    const remote = updated.settings.compute.targets.find((item) => item.id === "lab_cluster");
+    expect(remote).toMatchObject({ configured: true, executable: false, status: "unavailable" });
+    expect((await checkGmScienceComputeTarget("local")).executable).toBe(true);
+
+    await updateGmScienceSettings({ permissionGrants: { attach_skill: true } });
+    await updateGmScienceSettings({ computeTarget: { operation: "remove", id: "lab_cluster" } });
+  });
+
+  it("redacts credentials and query values from mock infrastructure URLs", async () => {
+    const result = await updateGmScienceSettings({
+      network: {
+        condaChannelMirror: "https://user:password@packages.example.test/conda?token=secret",
+        pythonPackageIndex: "https://token@packages.example.test/simple?key=secret",
+      },
+      computeTarget: {
+        operation: "upsert",
+        target: {
+          id: "redacted_endpoint",
+          type: "model_endpoint",
+          name: "Redacted endpoint",
+          enabled: true,
+          url: "https://user:password@endpoint.example.test/v1?token=secret",
+        },
+      },
+    });
+
+    expect(result.settings.network.packageMirrors).toEqual({
+      condaChannelMirror: "https://packages.example.test/conda",
+      pythonPackageIndex: "https://packages.example.test/simple",
+      caBundlePath: "",
+    });
+    const endpoint = result.settings.compute.targets.find((target) => target.id === "redacted_endpoint");
+    expect(endpoint?.metadata.url).toBe("https://endpoint.example.test/v1");
+    expect(JSON.stringify(result.settings)).not.toContain("password");
+    expect(JSON.stringify(result.settings)).not.toContain("token=secret");
+
+    await updateGmScienceSettings({ computeTarget: { operation: "remove", id: "redacted_endpoint" } });
   });
 
   it("supports reviewed User and Project Memory lifecycle", async () => {

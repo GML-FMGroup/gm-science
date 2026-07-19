@@ -25,6 +25,8 @@ from ...runtime.task_store import (
     TaskStore,
     ToolCallRecordStore,
 )
+from ...core.config import get_config_path, load_config
+from ..infrastructure import package_environment
 from ..models import ScienceRunRecord
 from ..store import GmScienceStore
 from .config import ScienceExecutionConfig, load_execution_config
@@ -43,6 +45,7 @@ class ScienceExecutionService:
     ) -> None:
         self.data_dir = Path(data_dir).expanduser()
         self.store = store or GmScienceStore(self.data_dir)
+        self.config_path = config_path or get_config_path()
         self.config = config or load_execution_config(config_path)
         task_store = TaskStore(db_path=self.data_dir / "database" / "tasks.db")
         event_store = TaskEventStore(db_path=task_store.db_path)
@@ -126,7 +129,11 @@ class ScienceExecutionService:
                         str(self.config.default_timeout_seconds),
                     ],
                     cwd=run_dir,
-                    env={**os.environ, "PYTHONUNBUFFERED": "1"},
+                    env={
+                        **os.environ,
+                        **package_environment(load_config(config_path=self.config_path)),
+                        "PYTHONUNBUFFERED": "1",
+                    },
                     context=TaskInvocationContext(
                         user_id=user_id,
                         session_id=normalized_session_id or "",

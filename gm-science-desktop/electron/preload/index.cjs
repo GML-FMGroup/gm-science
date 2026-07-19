@@ -18,6 +18,7 @@ const api = {
     ipcRenderer.invoke("ppx-client:update-gm-science-project-capabilities", projectId, input),
   getGmScienceSettings: () => ipcRenderer.invoke("ppx-client:get-gm-science-settings"),
   updateGmScienceSettings: (input) => ipcRenderer.invoke("ppx-client:update-gm-science-settings", input),
+  checkGmScienceComputeTarget: (targetId) => ipcRenderer.invoke("ppx-client:check-gm-science-compute-target", targetId),
   getGmScienceMemory: (projectId) => ipcRenderer.invoke("ppx-client:get-gm-science-memory", projectId),
   createGmScienceMemoryNote: (projectId, input) =>
     ipcRenderer.invoke("ppx-client:create-gm-science-memory-note", projectId, input),

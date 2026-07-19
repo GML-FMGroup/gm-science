@@ -9,6 +9,7 @@ import {
   normalizeGmScienceRun,
   normalizeGmScienceSessionPolicy,
   normalizeGmScienceSettings,
+  normalizeGmScienceComputeHealth,
   normalizeGmScienceMemoryWorkspace,
 } from "../app/src/lib/client-api-projection";
 
@@ -31,6 +32,50 @@ describe("gm-science client-api projection", () => {
             access_token: "must-not-project",
           },
         ],
+        permissions: {
+          items: [{
+            id: "attach_skill",
+            name: "Attach skill",
+            description: "Attach a Skill to a Project.",
+            category: "registry_writes",
+            granted: true,
+            scope: "global",
+            source: "user",
+            updated_at: "2026-07-19T01:00:00Z",
+          }],
+        },
+        network: {
+          enabled: true,
+          enforce_allowlist: true,
+          allow_private_networks: false,
+          package_mirrors: {
+            conda_channel_mirror: "",
+            python_package_index: "https://packages.example.test/simple",
+            ca_bundle_path: "",
+          },
+          categories: [{
+            id: "research_data",
+            name: "Research data",
+            description: "Literature and research data services.",
+            enabled: true,
+            domains: ["pubmed.ncbi.nlm.nih.gov"],
+          }],
+          custom_domains: ["data.example.test"],
+          enforcement_boundary: "Managed gm-science HTTP clients and TaskRun environments.",
+        },
+        compute: {
+          targets: [{
+            id: "local",
+            type: "local",
+            name: "This computer",
+            enabled: true,
+            configured: true,
+            executable: true,
+            status: "ready",
+            status_detail: "Local TaskRun execution is available.",
+            metadata: { runtime: "managed_python" },
+          }],
+        },
         literature: {
           arxiv: { status: "ready", status_detail: "" },
           pubmed: {
@@ -62,6 +107,50 @@ describe("gm-science client-api projection", () => {
           active: true,
         },
       ],
+      permissions: {
+        items: [{
+          id: "attach_skill",
+          name: "Attach skill",
+          description: "Attach a Skill to a Project.",
+          category: "registry_writes",
+          granted: true,
+          scope: "global",
+          source: "user",
+          updatedAt: "2026-07-19T01:00:00Z",
+        }],
+      },
+      network: {
+        enabled: true,
+        enforceAllowlist: true,
+        allowPrivateNetworks: false,
+        packageMirrors: {
+          condaChannelMirror: "",
+          pythonPackageIndex: "https://packages.example.test/simple",
+          caBundlePath: "",
+        },
+        categories: [{
+          id: "research_data",
+          name: "Research data",
+          description: "Literature and research data services.",
+          enabled: true,
+          domains: ["pubmed.ncbi.nlm.nih.gov"],
+        }],
+        customDomains: ["data.example.test"],
+        enforcementBoundary: "Managed gm-science HTTP clients and TaskRun environments.",
+      },
+      compute: {
+        targets: [{
+          id: "local",
+          type: "local",
+          name: "This computer",
+          enabled: true,
+          configured: true,
+          executable: true,
+          status: "ready",
+          statusDetail: "Local TaskRun execution is available.",
+          metadata: { runtime: "managed_python" },
+        }],
+      },
       literature: {
         arxiv: { status: "ready", statusDetail: "" },
         pubmed: {
@@ -76,6 +165,24 @@ describe("gm-science client-api projection", () => {
           statusDetail: "Add an OpenAlex API key.",
         },
       },
+    });
+  });
+
+  it("normalizes Compute health without inferring executability from reachability", () => {
+    expect(normalizeGmScienceComputeHealth({
+      target_id: "lab_cluster",
+      status: "reachable",
+      reachable: true,
+      executable: false,
+      detail: "SSH port is reachable; remote execution is not implemented.",
+      checked_at: "2026-07-19T02:00:00Z",
+    })).toEqual({
+      targetId: "lab_cluster",
+      status: "reachable",
+      reachable: true,
+      executable: false,
+      detail: "SSH port is reachable; remote execution is not implemented.",
+      checkedAt: "2026-07-19T02:00:00Z",
     });
   });
 

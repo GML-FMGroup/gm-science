@@ -18,6 +18,12 @@ from ..core.config import (
 )
 from ..core.provider import normalize_model_name
 from ..core.provider_registry import ProviderSpec, find_provider_spec
+from .infrastructure import (
+    apply_infrastructure_update,
+    check_compute_target,
+    public_infrastructure_settings,
+    require_registry_permissions,
+)
 from .literature.config import parse_literature_config
 
 GM_SCIENCE_PROVIDER_IDS: tuple[str, ...] = (
@@ -69,8 +75,11 @@ class GmScienceSettingsService:
         if not isinstance(update, Mapping):
             raise ValueError("Settings update must be a JSON object.")
         allowed_fields = {
+            "compute_target",
             "model",
             "memory_enabled",
+            "network",
+            "permission_grants",
             "provider_api_key",
             "pubmed_email",
             "pubmed_api_key",
@@ -121,12 +130,36 @@ class GmScienceSettingsService:
                 runtime_env = _mutable_mapping(runtime_config.get("env"))
                 runtime_env["OPENPPX_MEMORY_ENABLED"] = memory_enabled
 
+            infrastructure_update = {
+                key: update[key]
+                for key in ("permission_grants", "network", "compute_target")
+                if key in update
+            }
+            if infrastructure_update:
+                apply_infrastructure_update(config, infrastructure_update)
+
             save_config(config, config_path=self.config_path)
             save_runtime_config(
                 runtime_config,
                 runtime_config_path=self._runtime_config_path,
             )
             return _public_settings(config, runtime_config)
+
+    def require_permissions(self, permission_ids: list[str] | tuple[str, ...]) -> None:
+        """Require durable registry permissions against the latest saved config."""
+
+        with self._lock:
+            require_registry_permissions(
+                load_config(config_path=self.config_path),
+                permission_ids,
+            )
+
+    def check_compute_target(self, target_id: str) -> dict[str, Any]:
+        """Run one bounded Compute Target health check without changing config."""
+
+        with self._lock:
+            config = load_config(config_path=self.config_path)
+        return check_compute_target(config, target_id)
 
 
 def _public_settings(
@@ -179,6 +212,7 @@ def _public_settings(
                 "status_detail": openalex_detail,
             },
         },
+        **public_infrastructure_settings(config),
     }
 
 

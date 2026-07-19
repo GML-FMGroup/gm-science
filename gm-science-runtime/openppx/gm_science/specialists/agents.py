@@ -12,6 +12,7 @@ from loguru import logger
 from ...core.mcp_registry import build_mcp_toolsets
 from ...core.provider import build_adk_model_from_env
 from ...tooling.skills_adapter import get_registry
+from ..infrastructure import filter_mcp_servers_by_network
 from ..literature.tools import science_search
 from .agent_tool import ConfiguredSpecialistTool, ProjectSpecialistTool
 from .config import SpecialistConfig, load_specialist_config
@@ -214,7 +215,7 @@ def _configured_specialist_tools(spec: SpecialistSpec) -> tuple[list[Any], tuple
     if native_sources:
         tools.append(_literature_search_tool(native_sources))
 
-    raw_servers = _mcp_servers_from_env()
+    raw_servers, _blocked_servers = filter_mcp_servers_by_network(_mcp_servers_from_env())
     selected_server_names = {
         connector.split(":", 1)[1].casefold()
         for connector in spec.connectors

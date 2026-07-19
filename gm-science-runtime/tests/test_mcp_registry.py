@@ -236,6 +236,26 @@ class McpRegistryTests(unittest.TestCase):
         self.assertEqual(len(toolsets), 1)
         self.assertEqual(toolsets[0].meta.name, "enabled_server")
 
+    def test_build_mcp_toolsets_from_env_applies_product_server_filter(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                _MCP_SERVERS_ENV: (
+                    '{"local":{"command":"python"},'
+                    '"remote":{"url":"https://blocked.example.test/mcp"}}'
+                )
+            },
+            clear=False,
+        ):
+            toolsets = build_mcp_toolsets_from_env(
+                log_registered=False,
+                server_filter=lambda servers: {
+                    name: value for name, value in servers.items() if name == "local"
+                },
+            )
+
+        self.assertEqual([toolset.meta.name for toolset in toolsets], ["local"])
+
     def test_build_mcp_toolsets_skips_invalid_server_config(self) -> None:
         toolsets = build_mcp_toolsets({"bad": "oops"})
         self.assertEqual(toolsets, [])

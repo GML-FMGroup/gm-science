@@ -27,6 +27,23 @@ function settings(): GmScienceSettings {
       { id: "openai_codex", name: "OpenAI Codex", defaultModel: "openai-codex/gpt-5.5", authType: "oauth", credentialRequired: true, credentialConfigured: true, credentialSource: "oauth_cache", active: true },
       { id: "openai", name: "OpenAI", defaultModel: "openai/gpt-5.4", authType: "api_key", credentialRequired: true, credentialConfigured: false, credentialSource: "none", active: false },
     ],
+    permissions: {
+      items: [
+        { id: "attach_skill", name: "Attach skill", description: "Attach a Skill to a Project.", category: "registry_writes", granted: true, scope: "global", source: "default", updatedAt: "" },
+      ],
+    },
+    network: {
+      enabled: true,
+      enforceAllowlist: true,
+      allowPrivateNetworks: false,
+      packageMirrors: { condaChannelMirror: "", pythonPackageIndex: "", caBundlePath: "" },
+      categories: [{ id: "research_data", name: "Research data", description: "Literature and research data services.", enabled: true, domains: ["pubmed.ncbi.nlm.nih.gov"] }],
+      customDomains: [],
+      enforcementBoundary: "Managed gm-science network clients.",
+    },
+    compute: {
+      targets: [{ id: "local", type: "local", name: "This computer", enabled: true, configured: true, executable: true, status: "ready", statusDetail: "Local execution is available.", metadata: {} }],
+    },
     literature: {
       arxiv: { status: "ready", statusDetail: "" },
       pubmed: { email: "", apiKeyConfigured: false, status: "needs_configuration", statusDetail: "Configuration required." },
@@ -316,6 +333,14 @@ function installClient(overrides: Partial<PpxClientApi> = {}): {
     updateGmScienceSettings: async () => {
       throw new Error("Settings updates are not configured in this test");
     },
+    checkGmScienceComputeTarget: async (targetId) => ({
+      targetId,
+      status: "ready",
+      reachable: true,
+      executable: true,
+      detail: "Local execution is available.",
+      checkedAt: "2026-07-10T10:00:00.000Z",
+    }),
     getGmScienceMemory: async (projectId) => ({ projectId, notes: [], candidates: [], categories: [] }),
     createGmScienceMemoryNote: async () => {
       throw new Error("Memory creation is not configured in this test");

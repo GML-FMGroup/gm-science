@@ -197,6 +197,71 @@ export interface GmScienceProviderOption {
   active: boolean;
 }
 
+export type GmScienceInfrastructureStatus =
+  | "ready"
+  | "needs_configuration"
+  | "unavailable"
+  | "disabled"
+  | "blocked"
+  | "reachable"
+  | "unreachable";
+
+export interface GmSciencePermissionGrant {
+  id: string;
+  name: string;
+  description: string;
+  category: "registry_writes";
+  granted: boolean;
+  scope: "global";
+  source: "default" | "user";
+  updatedAt: string;
+}
+
+export interface GmScienceNetworkCategory {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  domains: string[];
+}
+
+export interface GmScienceNetworkSettings {
+  enabled: boolean;
+  enforceAllowlist: boolean;
+  allowPrivateNetworks: boolean;
+  packageMirrors: {
+    condaChannelMirror: string;
+    pythonPackageIndex: string;
+    caBundlePath: string;
+  };
+  categories: GmScienceNetworkCategory[];
+  customDomains: string[];
+  enforcementBoundary: string;
+}
+
+export type GmScienceComputeTargetType = "local" | "ssh" | "cloud_provider" | "model_endpoint";
+
+export interface GmScienceComputeTarget {
+  id: string;
+  type: GmScienceComputeTargetType;
+  name: string;
+  enabled: boolean;
+  configured: boolean;
+  executable: boolean;
+  status: GmScienceInfrastructureStatus;
+  statusDetail: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface GmScienceComputeHealth {
+  targetId: string;
+  status: GmScienceInfrastructureStatus;
+  reachable: boolean;
+  executable: boolean;
+  detail: string;
+  checkedAt: string;
+}
+
 export interface GmScienceSettings {
   model: {
     provider: string;
@@ -206,6 +271,13 @@ export interface GmScienceSettings {
     enabled: boolean;
   };
   providers: GmScienceProviderOption[];
+  permissions: {
+    items: GmSciencePermissionGrant[];
+  };
+  network: GmScienceNetworkSettings;
+  compute: {
+    targets: GmScienceComputeTarget[];
+  };
   literature: {
     arxiv: {
       status: GmScienceCapabilityStatus;
@@ -241,6 +313,34 @@ export interface UpdateGmScienceSettingsInput {
   pubmedEmail?: string;
   pubmedApiKey?: GmScienceSecretMutation;
   openalexApiKey?: GmScienceSecretMutation;
+  permissionGrants?: Record<string, boolean>;
+  network?: {
+    enabled?: boolean;
+    enforceAllowlist?: boolean;
+    allowPrivateNetworks?: boolean;
+    condaChannelMirror?: string;
+    pythonPackageIndex?: string;
+    caBundlePath?: string;
+    categoryEnabled?: Record<string, boolean>;
+    customDomains?: string[];
+  };
+  computeTarget?: {
+    operation: "upsert" | "remove";
+    id?: string;
+    target?: {
+      id: string;
+      type: "ssh" | "model_endpoint";
+      name: string;
+      enabled: boolean;
+      host?: string;
+      port?: number;
+      username?: string;
+      identityFile?: string;
+      url?: string;
+      healthPath?: string;
+      apiKey?: GmScienceSecretMutation;
+    };
+  };
 }
 
 export type GmScienceMemoryScope = "user" | "project";
@@ -628,6 +728,7 @@ export interface PpxClientApi {
   ): Promise<{ project: GmScienceProject; capabilities: GmScienceCapability[] }>;
   getGmScienceSettings(): Promise<GmScienceSettings>;
   updateGmScienceSettings(input: UpdateGmScienceSettingsInput): Promise<GmScienceSettingsUpdateResult>;
+  checkGmScienceComputeTarget(targetId: string): Promise<GmScienceComputeHealth>;
   getGmScienceMemory(projectId: string): Promise<GmScienceMemoryWorkspace>;
   createGmScienceMemoryNote(
     projectId: string,

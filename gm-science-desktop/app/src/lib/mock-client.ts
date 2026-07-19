@@ -22,6 +22,7 @@ import type {
   GmScienceSessionPolicyValues,
   GmScienceSettings,
   GmScienceSettingsUpdateResult,
+  GmScienceComputeHealth,
   GmScienceMemoryCandidate,
   GmScienceMemoryNote,
   GmScienceMemoryScope,
@@ -131,6 +132,49 @@ const state: StoreState = {
       { id: "custom", name: "Custom OpenAI-Compatible", defaultModel: "openai/gpt-5.4", authType: "optional_api_key", credentialRequired: false, credentialConfigured: false, credentialSource: "none", active: false },
       { id: "vllm", name: "vLLM/Local", defaultModel: "meta-llama/Llama-3.1-8B-Instruct", authType: "optional_api_key", credentialRequired: false, credentialConfigured: false, credentialSource: "none", active: false },
     ],
+    permissions: {
+      items: [
+        ["create_agent", "Create agent", "Create a persistent specialist Agent definition."],
+        ["update_agent", "Update agent", "Update or attach a persistent specialist Agent definition."],
+        ["publish_skill", "Publish skill", "Publish a Skill into the local registry."],
+        ["edit_skill", "Edit skill", "Modify a Skill already stored in the local registry."],
+        ["attach_skill", "Attach skill", "Attach a Skill to a Project."],
+        ["detach_skill", "Detach skill", "Detach a Skill from a Project."],
+        ["attach_connector", "Attach connector", "Attach a Connector to a Project."],
+        ["detach_connector", "Detach connector", "Detach a Connector from a Project."],
+      ].map(([id, name, description]) => ({
+        id,
+        name,
+        description,
+        category: "registry_writes" as const,
+        granted: true,
+        scope: "global" as const,
+        source: "default" as const,
+        updatedAt: "",
+      })),
+    },
+    network: {
+      enabled: true,
+      enforceAllowlist: true,
+      allowPrivateNetworks: false,
+      packageMirrors: { condaChannelMirror: "", pythonPackageIndex: "", caBundlePath: "" },
+      categories: [
+        { id: "package_management", name: "Package management", description: "Package and source repositories.", enabled: true, domains: ["pypi.org", "github.com"] },
+        { id: "research_data", name: "Research data", description: "Public scientific data services.", enabled: true, domains: ["export.arxiv.org", "eutils.ncbi.nlm.nih.gov", "api.openalex.org"] },
+        { id: "model_providers", name: "Model providers", description: "Language and scientific model APIs.", enabled: true, domains: ["chatgpt.com", "api.openai.com"] },
+        { id: "cloud_compute", name: "Cloud compute", description: "Optional compute providers.", enabled: true, domains: ["modal.com", "integrate.api.nvidia.com"] },
+        { id: "configured_connectors", name: "Configured Connectors", description: "Configured remote MCP domains.", enabled: true, domains: [] },
+      ],
+      customDomains: [],
+      enforcementBoundary: "Applied to gm-science managed network boundaries; not process-level isolation.",
+    },
+    compute: {
+      targets: [
+        { id: "local", type: "local", name: "This computer", enabled: true, configured: true, executable: true, status: "ready", statusDetail: "Managed local Python TaskRun.", metadata: {} },
+        { id: "modal", type: "cloud_provider", name: "Modal", enabled: true, configured: false, executable: false, status: "needs_configuration", statusDetail: "Serverless GPU provider; execution adapter is not implemented.", metadata: {} },
+        { id: "nvidia_bionemo_nim", type: "model_endpoint", name: "NVIDIA BioNeMo NIM", enabled: true, configured: false, executable: false, status: "needs_configuration", statusDetail: "Scientific model endpoint; execution adapter is not implemented.", metadata: {} },
+      ],
+    },
     literature: {
       arxiv: { status: "ready", statusDetail: "" },
       pubmed: { email: "", apiKeyConfigured: false, status: "needs_configuration", statusDetail: "Add a PubMed contact email." },
@@ -779,6 +823,75 @@ export async function updateGmScienceSettings(
     state.settings.literature.openalex.apiKeyConfigured,
     input.openalexApiKey,
   );
+  if (input.permissionGrants) {
+    state.settings.permissions.items = state.settings.permissions.items.map((permission) => (
+      Object.hasOwn(input.permissionGrants ?? {}, permission.id)
+        ? {
+            ...permission,
+            granted: input.permissionGrants?.[permission.id] === true,
+            source: "user",
+            updatedAt: now(),
+          }
+        : permission
+    ));
+  }
+  if (input.network) {
+    state.settings.network = {
+      ...state.settings.network,
+      enabled: input.network.enabled ?? state.settings.network.enabled,
+      enforceAllowlist: input.network.enforceAllowlist ?? state.settings.network.enforceAllowlist,
+      allowPrivateNetworks: input.network.allowPrivateNetworks ?? state.settings.network.allowPrivateNetworks,
+      packageMirrors: {
+        condaChannelMirror: input.network.condaChannelMirror === undefined
+          ? state.settings.network.packageMirrors.condaChannelMirror
+          : safePublicUrl(input.network.condaChannelMirror),
+        pythonPackageIndex: input.network.pythonPackageIndex === undefined
+          ? state.settings.network.packageMirrors.pythonPackageIndex
+          : safePublicUrl(input.network.pythonPackageIndex),
+        caBundlePath: input.network.caBundlePath ?? state.settings.network.packageMirrors.caBundlePath,
+      },
+      categories: state.settings.network.categories.map((category) => ({
+        ...category,
+        enabled: input.network?.categoryEnabled?.[category.id] ?? category.enabled,
+      })),
+      customDomains: input.network.customDomains ?? state.settings.network.customDomains,
+    };
+  }
+  if (input.computeTarget?.operation === "remove" && input.computeTarget.id) {
+    state.settings.compute.targets = state.settings.compute.targets.filter(
+      (target) => target.id !== input.computeTarget?.id,
+    );
+  }
+  if (input.computeTarget?.operation === "upsert" && input.computeTarget.target) {
+    const target = input.computeTarget.target;
+    const metadata = target.type === "ssh"
+      ? {
+          host: target.host ?? "",
+          port: target.port ?? 22,
+          username: target.username ?? "",
+          identity_configured: Boolean(target.identityFile),
+        }
+      : {
+          url: safePublicUrl(target.url ?? ""),
+          health_path: target.healthPath ?? "/health",
+          api_key_configured: target.apiKey?.operation === "replace",
+        };
+    const nextTarget = {
+      id: target.id,
+      type: target.type,
+      name: target.name,
+      enabled: target.enabled,
+      configured: Boolean(target.type === "ssh" ? target.host : target.url),
+      executable: false,
+      status: "unavailable" as const,
+      statusDetail: "Configured; remote execution adapter is not implemented.",
+      metadata,
+    };
+    state.settings.compute.targets = [
+      ...state.settings.compute.targets.filter((item) => item.id !== target.id),
+      nextTarget,
+    ];
+  }
 
   const pubmedReady = Boolean(state.settings.literature.pubmed.email);
   state.settings.literature.pubmed.status = pubmedReady ? "ready" : "needs_configuration";
@@ -803,6 +916,22 @@ export async function updateGmScienceSettings(
     agent: { ...state.agents[0] },
     projectId: input.projectId ?? "",
     capabilities,
+  };
+}
+
+export async function checkGmScienceComputeTarget(targetId: string): Promise<GmScienceComputeHealth> {
+  const target = state.settings.compute.targets.find((item) => item.id === targetId);
+  if (!target) {
+    throw new Error(`Compute Target ${targetId} was not found.`);
+  }
+  const reachable = target.id === "local";
+  return {
+    targetId,
+    status: reachable ? "ready" : target.configured ? "unavailable" : "needs_configuration",
+    reachable,
+    executable: target.executable,
+    detail: reachable ? "Local Python execution is available." : target.statusDetail,
+    checkedAt: now(),
   };
 }
 

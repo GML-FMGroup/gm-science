@@ -12,6 +12,17 @@ function settings(enabled = true): GmScienceSettings {
     model: { provider: "openai_codex", model: "openai-codex/gpt-5.5" },
     memory: { enabled },
     providers: [],
+    permissions: { items: [] },
+    network: {
+      enabled: true,
+      enforceAllowlist: true,
+      allowPrivateNetworks: false,
+      packageMirrors: { condaChannelMirror: "", pythonPackageIndex: "", caBundlePath: "" },
+      categories: [],
+      customDomains: [],
+      enforcementBoundary: "Managed gm-science network clients.",
+    },
+    compute: { targets: [] },
     literature: {
       arxiv: { status: "ready", statusDetail: "" },
       pubmed: { email: "", apiKeyConfigured: false, status: "ready", statusDetail: "" },

@@ -5,6 +5,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   bootstrap as mockBootstrap,
+  checkGmScienceComputeTarget as mockCheckGmScienceComputeTarget,
   createGmScienceAnalysis as mockCreateGmScienceAnalysis,
   createGmScienceArtifact as mockCreateGmScienceArtifact,
   createGmSciencePythonRun as mockCreateGmSciencePythonRun,
@@ -48,6 +49,7 @@ import {
   normalizeClientApiPart,
   normalizeClientApiRuntime,
   normalizeClientApiSession,
+  normalizeGmScienceComputeHealth,
   normalizeGmScienceArtifact,
   normalizeGmScienceAnalysis,
   normalizeGmScienceCapability,
@@ -92,6 +94,7 @@ import type {
   GmScienceAnalysis,
   GmScienceCapability,
   GmScienceCapabilityCatalog,
+  GmScienceComputeHealth,
   GmScienceProject,
   GmScienceResource,
   GmScienceResourceDetail,
@@ -813,6 +816,34 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
         pubmed_email: input.pubmedEmail,
         pubmed_api_key: input.pubmedApiKey,
         openalex_api_key: input.openalexApiKey,
+        permission_grants: input.permissionGrants,
+        network: input.network ? {
+          enabled: input.network.enabled,
+          enforce_allowlist: input.network.enforceAllowlist,
+          allow_private_networks: input.network.allowPrivateNetworks,
+          conda_channel_mirror: input.network.condaChannelMirror,
+          python_package_index: input.network.pythonPackageIndex,
+          ca_bundle_path: input.network.caBundlePath,
+          category_enabled: input.network.categoryEnabled,
+          custom_domains: input.network.customDomains,
+        } : undefined,
+        compute_target: input.computeTarget ? {
+          operation: input.computeTarget.operation,
+          id: input.computeTarget.id,
+          target: input.computeTarget.target ? {
+            id: input.computeTarget.target.id,
+            type: input.computeTarget.target.type,
+            name: input.computeTarget.target.name,
+            enabled: input.computeTarget.target.enabled,
+            host: input.computeTarget.target.host,
+            port: input.computeTarget.target.port,
+            username: input.computeTarget.target.username,
+            identity_file: input.computeTarget.target.identityFile,
+            url: input.computeTarget.target.url,
+            health_path: input.computeTarget.target.healthPath,
+            api_key: input.computeTarget.target.apiKey,
+          } : undefined,
+        } : undefined,
       }),
     });
     const data = (payload.data as Record<string, unknown> | undefined) ?? {};
@@ -833,6 +864,26 @@ export class OpenPpxLocalAdapter implements PpxClientApi {
       projectId: String(data.project_id ?? ""),
       capabilities,
     };
+  }
+
+  public async checkGmScienceComputeTarget(targetId: string): Promise<GmScienceComputeHealth> {
+    if (this.shouldUseMock()) {
+      return mockCheckGmScienceComputeTarget(targetId);
+    }
+    if (!(await this.ensureClientApiAvailable())) {
+      throw new Error("Local gm-science client-api is unavailable.");
+    }
+    const payload = await this.fetchClientApiJson("/api/v1/gm-science/settings/compute/check", {
+      method: "POST",
+      body: JSON.stringify({ target_id: targetId }),
+    });
+    const health = normalizeGmScienceComputeHealth(
+      (payload.data as Record<string, unknown> | undefined)?.health,
+    );
+    if (!health) {
+      throw new Error("Client API returned an invalid Compute health payload.");
+    }
+    return health;
   }
 
   public async getGmScienceMemory(projectId: string): Promise<GmScienceMemoryWorkspace> {

@@ -64,9 +64,9 @@ gm-science 当前设计和实现已经正确吸收了以下产品结构：
 采用两套口径：
 
 - **已有路线完成度**：Phase 1 到 Phase 7C 的基础闭环约完成 96%。
-- **科研工作台语义完成度**：按 Claude Science 的核心产品结构估算，目前约完成 82%。
+- **科研工作台语义完成度**：按 Claude Science 的核心产品结构估算，目前约完成 88%。
 
-第二个口径仍低于已有路线完成度，主要因为 Permissions、Network、多 Compute Target 和能力安装/编辑尚未完成，而不是因为已有科研流程不可用。可审阅 Memory、Credentials、Session Policy 和只读 Artifact inspection 已完成第一版。
+第二个口径仍低于已有路线完成度，主要因为能力安装/编辑、远程 Compute executor、Storage/Usage 完整产品语义和专业科研生态尚未完成，而不是因为已有科研流程不可用。可审阅 Memory、Credentials、Permissions、Network、Compute Target registry、Session Policy 和只读 Artifact inspection 已完成第一版。
 
 ### 2.4 2026-07-18 Specialist 实机补充结论
 
@@ -106,9 +106,9 @@ gm-science 当前设计和实现已经正确吸收了以下产品结构：
 | P0 | 统一 Files 与引用 | Artifacts、Data、Runs 分离，Composer 只有纯文本 | 统一资源浏览，并使用结构化引用进入消息上下文 |
 | P0 | 会话级调度 | 主要依赖 Project 默认值和主控自动判断 | Session 可选择 Delegation、Specialist、Memory、Compute 和 Review Policy |
 | P1 | Memory 产品层 | 第一版完成：User/Project scope、人工 note、候选审批、召回审计 | 后续补充分类治理、批量导入导出和更强检索，不建立第二套 Memory |
-| P1 | 凭据与审批 | 主要依赖配置文件 | 敏感凭据加密保存，连接器和注册表写操作可审批 |
-| P1 | Compute Target | 已有本地 Python TaskRun | 将执行目标与 TaskRun 状态机分离，先支持 Local |
-| P2 | Network 管理 | 文献源配置存在，无统一界面 | 配置镜像、CA 和连接器域名策略，沙箱级强制后置 |
+| P1 | 凭据与审批 | Credentials 和全局 registry write 授权第一版完成 | 后续增加 Project/Session/one-time approval，不建立第二套权限系统 |
+| P1 | Compute Target | Local executor、统一 registry、远程配置和健康检查第一版完成 | 后续为 SSH、Modal、NIM 增加复用 TaskRun 的 executor adapter |
+| P2 | Network 管理 | 镜像、CA、分类域名和受管 HTTP/MCP 强制第一版完成 | 后续随沙箱增加进程级网络强制，不夸大当前边界 |
 | P2 | Storage、Usage、General | 配置和诊断分散 | 提供数据目录、用量和模型策略的统一管理界面 |
 | P3 | 专业科研生态 | 三个文献源和少量专家 | 框架冻结后接入 ToolUniverse 和领域工具 |
 
@@ -475,6 +475,36 @@ Network：
 - unavailable target 和重试测试。
 - target provenance 和 client-api contract 测试。
 
+#### Phase 13 实施结果（2026-07-19）
+
+本轮完成 Phase 8E/8F 的治理基础，但不把尚未实现的审批层和远程 executor 记为完成。
+
+Permissions：
+
+- 使用 `science.infrastructure.permissions` 保存八类全局 registry write 授权：Create/Update Agent、Publish/Edit/Attach/Detach Skill、Attach/Detach Connector。
+- Project 创建和能力更新在 backend mutation boundary 检查实际需要的授权；拒绝结果使用稳定 `PERMISSION_DENIED` 和 HTTP 403。
+- 当前只有 Global grant/revoke，没有 Project、Session、one-time approval 或 approval request 队列。
+- 权限开关管理产品注册表写入，不代表本机进程沙箱或操作系统权限。
+
+Network：
+
+- 使用 `science.network` 保存总开关、allowlist 开关、私网开关、pip/conda mirror、CA bundle、分类域名和自定义域名。
+- package mirror 和 model endpoint URL 在保存和公开投影时删除用户信息、query 和 fragment；endpoint API Key 只接受 write-only mutation。
+- 原生文献 HTTP 请求在传输前执行策略；远程 MCP 在能力投影和 ADK toolset 装配时执行同一策略。
+- 受管 worker 通过有边界的环境 payload 接收策略；损坏 payload 失败关闭。
+- 本地 TaskRun 继承 package mirror 和 CA 环境，但当前不限制任意用户 Python 代码自行建立网络连接。
+
+Compute：
+
+- 建立统一 target registry，公开 Local、SSH、Modal、NVIDIA BioNeMo NIM 和自定义 HTTP model endpoint。
+- public API 只投影脱敏元数据；SSH identity path 和 endpoint API key 不返回 renderer。
+- Local 是唯一 `executable=true` 的 target。SSH 和 endpoint 只进行有超时的连通性检查；Modal/NVIDIA 只检查凭据存在性。
+- `configured`、`reachable` 和 `executable` 是独立状态。远程可达不意味着可以提交 TaskRun。
+
+已完成 client-api、Electron IPC/preload、typed adapter、mock 和 Claude Science 风格设置页接线。自动化验证为后端 `1354 passed, 111 skipped, 15 subtests passed`，桌面端 `104 passed`，TypeScript 与 renderer/Electron production build 通过。
+
+隔离真实验收覆盖：撤销 Attach Skill 后 Project 创建返回 `403 PERMISSION_DENIED`，恢复授权后创建成功；Network 和 Compute 配置在 client-api 重启后保持；公开设置不返回 endpoint 凭据、URL 用户信息或 query；含 secret 的 Agent 配置文件权限为 `0600`。真实 Electron 已检查首页、Settings、Permissions、Network、Compute、Add target 和 Local health check，状态与后端一致且没有把远程目标显示为可执行。
+
 ### Phase 8G：Storage、Usage 与 General
 
 #### 目标
@@ -695,8 +725,8 @@ Phase 8D 的可审阅 Memory 核心于 2026-07-19 完成第一版：
 | 统一 Files 与上下文引用 | 统一目录、搜索、Files 选择和 ADK 原生结构化资源上下文完成；内容预览、Composer 命令和附加目录待后续迭代 |
 | 会话级调度控制 | Session Policy、继承、ADK Specialist 路由、Memory 读取门控和 Auto-review 第一版完成；Reviewer 模型候选与专用生命周期 UI 待完成 |
 | 可审阅 Memory | User/Project note、候选审批、全局/Session 开关、来源和召回审计第一版完成；批量导入导出与更强检索待后续阶段 |
-| Credentials / Permissions / Network | Credentials 第一版完成，包含模型、PubMed、OpenAlex、安全投影和独立注册说明；Permissions 与 Network 待完成 |
-| 多 Compute Target | 仅完成 Local Run 基础 |
+| Credentials / Permissions / Network | Credentials、全局 registry write 授权、镜像/CA/分类域名和受管 HTTP/MCP 强制第一版完成；作用域审批和进程级隔离待后续阶段 |
+| 多 Compute Target | Local executor、统一 registry、脱敏配置和健康检查第一版完成；SSH/Modal/NIM/HTTP endpoint executor 尚未实现 |
 | 专业科研生态 | 等框架冻结后扩展 |
 
-近期目标不是把科研工具数量做大，而是基于已经完成的前三个 P0 项，补齐 Permissions、Network 和 Compute Target 治理，使以后安装或修改一个 Skill、Connector 或 Specialist 时具备明确的授权、连接和执行位置合同。
+近期目标是完成真实桌面验收并继续收口能力安装/编辑治理、Storage/Usage/General 产品语义和 Artifact 生命周期操作。远程 Compute adapter 必须继续复用 TaskRun；框架稳定后再扩展 ToolUniverse 和领域工具。

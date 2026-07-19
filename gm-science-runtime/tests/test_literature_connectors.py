@@ -188,6 +188,41 @@ def test_connector_http_errors_have_stable_safe_kinds(status_code: int, kind: st
     assert "openalex-secret" not in str(caught.value)
 
 
+def test_connector_network_policy_blocks_before_transport(monkeypatch) -> None:
+    requested = False
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requested
+        requested = True
+        return httpx.Response(200, json={"results": []})
+
+    monkeypatch.setenv(
+        "GM_SCIENCE_NETWORK_POLICY_JSON",
+        json.dumps({
+            "enabled": True,
+            "enforce_allowlist": True,
+            "allow_private_networks": False,
+            "allowed_domains": ["allowed.example.test"],
+        }),
+    )
+    connector = OpenAlexConnector(
+        LiteratureSourceConfig(
+            name="openalex",
+            enabled=True,
+            api_base="https://blocked.example.test",
+            api_key="openalex-secret",
+        ),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        timeout_seconds=5,
+    )
+
+    with pytest.raises(LiteratureConnectorError) as caught:
+        connector.search("protein folding", max_results=2)
+
+    assert caught.value.kind == "network_blocked"
+    assert requested is False
+
+
 def test_openalex_rejects_missing_key_without_network_request() -> None:
     requested = False
 

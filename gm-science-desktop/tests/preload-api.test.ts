@@ -81,6 +81,10 @@ describe("preload API", () => {
       channel: "ppx-client:update-gm-science-settings",
       args: [{ projectId: "proj-1", pubmedEmail: "researcher@example.org" }],
     });
+    expect(api.checkGmScienceComputeTarget("local")).toEqual({
+      channel: "ppx-client:check-gm-science-compute-target",
+      args: ["local"],
+    });
     expect(api.getGmScienceMemory("proj-1")).toEqual({
       channel: "ppx-client:get-gm-science-memory",
       args: ["proj-1"],
@@ -188,6 +192,6 @@ describe("preload API", () => {
       channel: "ppx-client:run-gm-science-analysis",
       args: ["proj-1", "analysis-1"],
     });
-    expect(invoke).toHaveBeenCalledTimes(33);
+    expect(invoke).toHaveBeenCalledTimes(34);
   });
 });

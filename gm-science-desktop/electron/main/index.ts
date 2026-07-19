@@ -120,6 +120,10 @@ app.whenReady().then(() => {
     "ppx-client:update-gm-science-settings",
     async (_event, input: UpdateGmScienceSettingsInput) => adapter!.updateGmScienceSettings(input),
   );
+  ipcMain.handle(
+    "ppx-client:check-gm-science-compute-target",
+    async (_event, targetId: string) => adapter!.checkGmScienceComputeTarget(targetId),
+  );
   ipcMain.handle("ppx-client:get-gm-science-memory", async (_event, projectId: string) =>
     adapter!.getGmScienceMemory(projectId),
   );

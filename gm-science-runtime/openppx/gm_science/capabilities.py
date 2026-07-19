@@ -15,6 +15,7 @@ from .catalog import (
     ScienceCapabilityDefinition,
 )
 from .literature.config import load_literature_config
+from .infrastructure import parse_network_policy
 from .models import ProjectRecord
 from .specialists.config import load_specialist_config
 from .specialists.registry import list_specialist_specs, specialist_configuration_issues
@@ -51,6 +52,7 @@ def build_capability_catalog(
     literature = load_literature_config(config_path)
     specialists = load_specialist_config(config_path)
     config = load_config(config_path=config_path)
+    network_policy = parse_network_policy(config)
     defaults = specialists.project_defaults
     project_values = _project_capability_sets(project)
 
@@ -132,10 +134,25 @@ def build_capability_catalog(
     if isinstance(mcp_servers, dict):
         for raw_server_name in sorted(mcp_servers, key=lambda value: str(value).casefold()):
             server_name = str(raw_server_name)
-            description = describe_mcp_server_config(server_name, mcp_servers[raw_server_name])
+            raw_server = mcp_servers[raw_server_name]
+            description = describe_mcp_server_config(server_name, raw_server)
             metadata = dict(description["metadata"])
             metadata["catalog_group"] = "custom"
             transport = str(metadata.get("transport") or "")
+            available = bool(description["available"])
+            status = str(description["status"])
+            status_detail = str(description["status_detail"])
+            server_url = str(raw_server.get("url") or "").strip() if isinstance(raw_server, dict) else ""
+            if available and server_url:
+                network_decision = network_policy.evaluate_url(
+                    server_url,
+                    purpose=f"MCP server '{server_name}'",
+                )
+                if not network_decision.allowed:
+                    available = False
+                    status = "disabled"
+                    status_detail = network_decision.reason
+                    metadata["network_policy"] = "blocked"
             items.append(
                 _capability_payload(
                     capability_id=f"mcp:{server_name}",
@@ -147,11 +164,11 @@ def build_capability_catalog(
                         else "MCP server configuration requires attention."
                     ),
                     source="local",
-                    available=bool(description["available"]),
+                    available=available,
                     default_enabled=f"mcp:{server_name}" in defaults.enabled_connectors,
                     project_enabled=_project_enabled(project_values, "connector", f"mcp:{server_name}"),
-                    status=str(description["status"]),
-                    status_detail=str(description["status_detail"]),
+                    status=status,
+                    status_detail=status_detail,
                     metadata=metadata,
                 )
             )

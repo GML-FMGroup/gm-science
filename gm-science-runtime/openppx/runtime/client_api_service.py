@@ -28,6 +28,7 @@ from ..gm_science.capabilities import (
 from ..gm_science.analysis import AnalysisService
 from ..gm_science.data import DatasetService
 from ..gm_science.execution import ScienceExecutionService
+from ..gm_science.infrastructure import RegistryPermissionError
 from ..gm_science.literature.config import load_literature_config, select_literature_sources
 from ..gm_science.memory import GmScienceMemoryService
 from ..gm_science.models import ArtifactRecord, ProjectRecord, ProjectSessionRecord
@@ -1382,46 +1383,59 @@ class ClientApiCoordinator:
         try:
             config_path = agent_config_path(GM_SCIENCE_DEFAULT_AGENT_NAME, self.data_dir)
             catalog = build_capability_catalog(config_path=config_path)
+            enabled_skills = normalize_capability_selection(
+                kind="skill",
+                values=_project_capability_values(
+                    body,
+                    "enabled_skills",
+                    "enabledSkills",
+                    _default_capability_ids("skill", catalog),
+                ),
+                catalog=catalog,
+            )
+            enabled_connectors = normalize_capability_selection(
+                kind="connector",
+                values=_project_capability_values(
+                    body,
+                    "enabled_connectors",
+                    "enabledConnectors",
+                    _default_capability_ids("connector", catalog),
+                ),
+                catalog=catalog,
+            )
+            enabled_specialists = normalize_capability_selection(
+                kind="specialist",
+                values=_project_capability_values(
+                    body,
+                    "enabled_specialists",
+                    "enabledSpecialists",
+                    _default_capability_ids("specialist", catalog),
+                ),
+                catalog=catalog,
+            )
+            required_permissions: list[str] = []
+            if enabled_skills:
+                required_permissions.append("attach_skill")
+            if enabled_connectors:
+                required_permissions.append("attach_connector")
+            if enabled_specialists:
+                required_permissions.append("update_agent")
+            self._gm_science_settings.require_permissions(required_permissions)
             project = self._gm_science_store.create_project(
                 name=name,
                 description=str(body.get("description") or ""),
                 agent_context=str(body.get("agent_context") or body.get("agentContext") or ""),
-                enabled_skills=normalize_capability_selection(
-                    kind="skill",
-                    values=_project_capability_values(
-                        body,
-                        "enabled_skills",
-                        "enabledSkills",
-                        _default_capability_ids("skill", catalog),
-                    ),
-                    catalog=catalog,
-                ),
-                enabled_connectors=normalize_capability_selection(
-                    kind="connector",
-                    values=_project_capability_values(
-                        body,
-                        "enabled_connectors",
-                        "enabledConnectors",
-                        _default_capability_ids("connector", catalog),
-                    ),
-                    catalog=catalog,
-                ),
-                enabled_specialists=normalize_capability_selection(
-                    kind="specialist",
-                    values=_project_capability_values(
-                        body,
-                        "enabled_specialists",
-                        "enabledSpecialists",
-                        _default_capability_ids("specialist", catalog),
-                    ),
-                    catalog=catalog,
-                ),
+                enabled_skills=enabled_skills,
+                enabled_connectors=enabled_connectors,
+                enabled_specialists=enabled_specialists,
                 session_policy_defaults=normalize_session_policy(
                     body.get("session_policy_defaults")
                     or body.get("sessionPolicyDefaults")
                     or None
                 ),
             )
+        except RegistryPermissionError as exc:
+            return _error("PERMISSION_DENIED", str(exc))
         except ValueError as exc:
             return _error("INVALID_REQUEST", str(exc))
         return _ok({"project": _gm_science_project_payload(project)})
@@ -1537,6 +1551,18 @@ class ClientApiCoordinator:
                 "capabilities": build_capability_catalog(config_path=config_path, project=project),
             }
         )
+
+    def check_gm_science_compute_target(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Run one explicit bounded Compute Target health check."""
+
+        target_id = str(body.get("target_id") or body.get("targetId") or "").strip()
+        if not target_id:
+            return _error("INVALID_REQUEST", "Field 'target_id' is required.")
+        try:
+            health = self._gm_science_settings.check_compute_target(target_id)
+        except ValueError as exc:
+            return _error("COMPUTE_TARGET_NOT_FOUND", str(exc))
+        return _ok({"health": health})
 
     def get_gm_science_memory(self, project_id: str, *, user_id: str) -> dict[str, Any]:
         """Return reviewable User and current-Project Memory state."""
@@ -1677,20 +1703,37 @@ class ClientApiCoordinator:
                 "enabledSpecialists",
                 tuple(project.enabled_specialists),
             )
+            enabled_skills = normalize_capability_selection(kind="skill", values=skills, catalog=catalog)
+            enabled_connectors = normalize_capability_selection(
+                kind="connector",
+                values=connectors,
+                catalog=catalog,
+            )
+            enabled_specialists = normalize_capability_selection(
+                kind="specialist",
+                values=specialists,
+                catalog=catalog,
+            )
+            required_permissions: list[str] = []
+            if set(enabled_skills).difference(project.enabled_skills):
+                required_permissions.append("attach_skill")
+            if set(project.enabled_skills).difference(enabled_skills):
+                required_permissions.append("detach_skill")
+            if set(enabled_connectors).difference(project.enabled_connectors):
+                required_permissions.append("attach_connector")
+            if set(project.enabled_connectors).difference(enabled_connectors):
+                required_permissions.append("detach_connector")
+            if set(enabled_specialists) != set(project.enabled_specialists):
+                required_permissions.append("update_agent")
+            self._gm_science_settings.require_permissions(required_permissions)
             updated = self._gm_science_store.update_project_capabilities(
                 project_id,
-                enabled_skills=normalize_capability_selection(kind="skill", values=skills, catalog=catalog),
-                enabled_connectors=normalize_capability_selection(
-                    kind="connector",
-                    values=connectors,
-                    catalog=catalog,
-                ),
-                enabled_specialists=normalize_capability_selection(
-                    kind="specialist",
-                    values=specialists,
-                    catalog=catalog,
-                ),
+                enabled_skills=enabled_skills,
+                enabled_connectors=enabled_connectors,
+                enabled_specialists=enabled_specialists,
             )
+        except RegistryPermissionError as exc:
+            return _error("PERMISSION_DENIED", str(exc))
         except ValueError as exc:
             return _error("INVALID_REQUEST", str(exc))
         updated_catalog = build_capability_catalog(config_path=config_path, project=updated)
@@ -3640,8 +3683,12 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
         ):
             payload = self.coordinator.update_gm_science_project_capabilities(segments[4], body)
             status = 200 if payload.get("ok") else 400
-            if not payload.get("ok") and payload.get("error", {}).get("code") == "PROJECT_NOT_FOUND":
-                status = 404
+            if not payload.get("ok"):
+                code = payload.get("error", {}).get("code")
+                if code == "PROJECT_NOT_FOUND":
+                    status = 404
+                elif code == "PERMISSION_DENIED":
+                    status = 403
             self._send_json(status, payload)
             return
         if (
@@ -3667,7 +3714,17 @@ class _ClientApiHandler(BaseHTTPRequestHandler):
             return
         if segments == ["api", "v1", "gm-science", "projects"]:
             payload = self.coordinator.create_gm_science_project(body)
-            self._send_json(200 if payload.get("ok") else 400, payload)
+            status = 200 if payload.get("ok") else 400
+            if not payload.get("ok") and payload.get("error", {}).get("code") == "PERMISSION_DENIED":
+                status = 403
+            self._send_json(status, payload)
+            return
+        if segments == ["api", "v1", "gm-science", "settings", "compute", "check"]:
+            payload = self.coordinator.check_gm_science_compute_target(body)
+            status = 200 if payload.get("ok") else 400
+            if not payload.get("ok") and payload.get("error", {}).get("code") == "COMPUTE_TARGET_NOT_FOUND":
+                status = 404
+            self._send_json(status, payload)
             return
         if (
             len(segments) == 7

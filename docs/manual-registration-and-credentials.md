@@ -5,7 +5,7 @@
 ## 基本原则
 
 - 凭据优先通过 gm-science 的 `Settings > Credentials` 写入本机配置。
-- 配置保存在 `~/.gm-science/config.json`；密钥不会从后端回传到界面。
+- 默认 Agent 配置保存在 `~/.gm-science/science-research/config.json`；密钥不会从后端回传到界面。
 - 密钥输入框留空表示保留现有值，只有点击 `Remove` 才会删除。
 - 不要把 API Key、OAuth Token 或账号信息写进项目文档、对话、代码仓库或截图。
 - 模型服务可能有地区、组织权限、套餐、额度或计费要求；注册成功不等于所有模型均可调用。
@@ -23,6 +23,11 @@
 | arXiv | 无 | 不需要注册 | 无 |
 | Custom OpenAI-compatible | 准备兼容端点及其可选凭据 | 仅选择该 provider 时 | 本机配置与 `Settings > Credentials` |
 | vLLM/Local | 自行启动本地 vLLM 服务 | 仅选择该 provider 时 | 本机配置；API Key 通常可选 |
+| 私有 package mirror | 准备 mirror URL 和可选 CA bundle | 仅使用组织内 pip/conda mirror 时 | `Settings > Network`；URL 凭据当前不支持 |
+| Modal | 注册 Modal 并创建 account token | 仅配置 Modal Compute Target 时 | 启动环境；当前只检测配置，不执行任务 |
+| NVIDIA 托管 NIM | 注册 NVIDIA Developer/NGC 并创建合适的 API Key | 仅配置 NVIDIA BioNeMo NIM 时 | 启动环境；当前只检测配置，不执行任务 |
+| SSH Compute Target | 准备 SSH 账号、网络和密钥文件 | 仅配置 SSH host 时 | `Settings > Compute`；当前只做连通性检查 |
+| 自定义 Model endpoint | 准备 HTTP(S) endpoint、健康路径和可选 API Key | 仅配置自定义 endpoint 时 | `Settings > Compute`；当前只做健康检查 |
 
 ## OpenAI Codex（推荐）
 
@@ -114,6 +119,40 @@ gm-science 不要求第三方账号，但用户必须自行准备可访问的 Op
 ### vLLM/Local
 
 本地 vLLM 不需要第三方注册。用户需要自行启动兼容服务并配置可访问的本地地址；是否启用 API Key 由本地部署策略决定。
+
+### 私有 package mirror
+
+组织内 pip/conda mirror 通常由管理员提供基础 URL、网络访问权限和可选 CA bundle。gm-science 当前只接受不含凭据、query 和 fragment 的 HTTP(S) URL，并把脱敏后的 URL 注入受管本地 TaskRun。不要把用户名、密码或 token 嵌入 mirror URL；需要鉴权的 mirror 必须等待后续独立的 write-only credential contract。
+
+## 可选 Compute 服务
+
+以下项目均不是 gm-science 本地科研闭环的必需条件。Phase 13 只保存脱敏配置并执行显式健康检查，尚未实现远程 TaskRun 提交、取消、重试、日志或 Artifact 回收。
+
+### Modal
+
+1. 注册或登录 Modal。
+2. 按 Modal 官方流程创建 account token。
+3. 让启动 gm-science 的环境可读取 `MODAL_TOKEN_ID` 和 `MODAL_TOKEN_SECRET`。
+4. `Settings > Compute` 只会显示凭据是否存在；当前不会向 Modal 提交任务。
+
+Modal 官方说明：[Invoking deployed Functions](https://modal.com/docs/guide/trigger-deployed-functions)。
+
+### NVIDIA 托管 NIM
+
+1. 注册或登录 NVIDIA Developer/NGC。
+2. 如果调用 NVIDIA 托管 NIM API，在 build.nvidia.com 创建 NVIDIA API Key，并确保账号具有对应 endpoint 权限。
+3. 让启动 gm-science 的环境可读取 `NVIDIA_API_KEY`。
+4. 该 key 与用于拉取 NGC 容器的 NGC personal key 用途不同，不应混用。
+
+NVIDIA 官方说明：[Authentication and API keys](https://docs.nvidia.com/nemo/retriever/latest/extraction/ngc-api-key/index.html)。
+
+### SSH Compute Target
+
+SSH 不要求特定第三方注册，但用户需要自行准备：可解析的 host、端口、用户名、网络访问权限和本机 SSH identity 文件。gm-science 不读取或回传 identity 文件内容；当前只检查目标端口是否可达。
+
+### 自定义 Model endpoint
+
+用户需要自行准备 HTTP(S) endpoint、无 query/fragment 的基础 URL、健康检查路径和可选 bearer API Key。API Key 采用 write-only 更新，不从公共设置 API 返回。当前健康检查只表示 endpoint 能响应，不表示 gm-science 已能用它执行科研任务。
 
 ## 维护要求
 

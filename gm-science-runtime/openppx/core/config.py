@@ -596,6 +596,22 @@ def default_config() -> dict[str, Any]:
                 "maxSourceChars": 200000,
                 "maxLogPreviewChars": 6000,
             },
+            "infrastructure": {
+                "permissions": {},
+            },
+            "network": {
+                "enabled": True,
+                "enforceAllowlist": True,
+                "allowPrivateNetworks": False,
+                "condaChannelMirror": "",
+                "pythonPackageIndex": "",
+                "caBundlePath": "",
+                "categoryEnabled": {},
+                "customDomains": [],
+            },
+            "compute": {
+                "targets": {},
+            },
             "resources": {
                 "enabled": True,
                 "maxWorkspaceFiles": 1000,
@@ -967,6 +983,18 @@ def _resolve_mcp_servers_json(cfg: dict[str, Any]) -> str:
     return json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
 
 
+def _resolve_gm_science_network_policy_json(cfg: dict[str, Any]) -> str:
+    """Serialize the bounded gm-science Network policy for worker processes."""
+
+    from ..gm_science.infrastructure import network_policy_env_payload
+
+    return json.dumps(
+        network_policy_env_payload(cfg),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
 def _resolve_gui_provider_env(cfg: dict[str, Any], *, provider_name: str) -> tuple[str, str, str, str]:
     """Resolve one GUI multimodal provider alias into model/api settings and provider identity."""
     name = str(provider_name).strip()
@@ -1156,6 +1184,7 @@ def config_to_env(
     )
     restrict_workspace, allow_exec, allow_network, exec_allowlist, filesystem_access = _resolve_security(cfg)
     mcp_servers_json = _resolve_mcp_servers_json(cfg)
+    gm_science_network_policy_json = _resolve_gm_science_network_policy_json(cfg)
     gui_multimodal_env = _resolve_gui_multimodal_env(cfg)
     gui_provider_api_env = _resolve_gui_provider_api_key_env(cfg)
     debug = cfg.get("debug", False)
@@ -1216,6 +1245,7 @@ def config_to_env(
         "OPENPPX_ALLOW_NETWORK": "1" if allow_network else "0",
         "OPENPPX_EXEC_ALLOWLIST": exec_allowlist,
         "OPENPPX_MCP_SERVERS_JSON": mcp_servers_json,
+        "GM_SCIENCE_NETWORK_POLICY_JSON": gm_science_network_policy_json,
         "OPENPPX_GUI_BUILTIN_TOOLS_ENABLED": "1"
         if is_enabled(gui.get("builtinGUIToolsEnabled"), default=True)
         else "0",

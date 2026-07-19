@@ -176,3 +176,47 @@ def test_global_memory_switch_requires_boolean(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="must be a boolean"):
         GmScienceSettingsService(config_path=path).update_settings({"memory_enabled": "false"})
+
+
+def test_settings_service_exposes_and_updates_infrastructure_without_secret_leakage(tmp_path: Path) -> None:
+    path = _config_path(tmp_path)
+    service = GmScienceSettingsService(config_path=path)
+
+    payload = service.update_settings(
+        {
+            "permission_grants": {"attach_connector": False},
+            "network": {"custom_domains": ["data.example.org"]},
+            "compute_target": {
+                "operation": "upsert",
+                "target": {
+                    "id": "lab_endpoint",
+                    "type": "model_endpoint",
+                    "name": "Lab endpoint",
+                    "enabled": True,
+                    "url": "https://data.example.org/v1",
+                    "api_key": {"operation": "replace", "value": "secret-value"},
+                },
+            },
+        }
+    )
+
+    assert next(
+        item for item in payload["permissions"]["items"] if item["id"] == "attach_connector"
+    )["granted"] is False
+    assert payload["network"]["custom_domains"] == ["data.example.org"]
+    target = next(item for item in payload["compute"]["targets"] if item["id"] == "lab_endpoint")
+    assert target["metadata"]["api_key_configured"] is True
+    assert "secret-value" not in json.dumps(payload)
+
+
+def test_settings_service_checks_registry_permissions_and_compute_health(tmp_path: Path) -> None:
+    path = _config_path(tmp_path)
+    service = GmScienceSettingsService(config_path=path)
+    service.update_settings({"permission_grants": {"attach_skill": False}})
+
+    with pytest.raises(PermissionError, match="Attach skill"):
+        service.require_permissions(["attach_skill"])
+
+    health = service.check_compute_target("local")
+    assert health["target_id"] == "local"
+    assert health["reachable"] is True

@@ -1,6 +1,7 @@
 import type {
   ChatMessage,
   GmScienceCapability,
+  GmScienceComputeHealth,
   GmScienceAnalysis,
   GmScienceArtifact,
   GmScienceDataset,
@@ -342,6 +343,15 @@ export function normalizeGmScienceCapability(payload: unknown): GmScienceCapabil
 const GM_SCIENCE_CAPABILITY_STATUSES = new Set(["ready", "needs_configuration", "disabled"] as const);
 const GM_SCIENCE_PROVIDER_AUTH_TYPES = new Set(["oauth", "api_key", "optional_api_key"] as const);
 const GM_SCIENCE_CREDENTIAL_SOURCES = new Set(["none", "local_config", "environment", "oauth_cache"] as const);
+const GM_SCIENCE_INFRASTRUCTURE_STATUSES = new Set([
+  "ready",
+  "needs_configuration",
+  "unavailable",
+  "disabled",
+  "blocked",
+  "reachable",
+  "unreachable",
+] as const);
 
 function normalizeCapabilityStatus(value: unknown): GmScienceCapability["status"] | null {
   const status = asString(value) as GmScienceCapability["status"];
@@ -356,7 +366,16 @@ export function normalizeGmScienceSettings(payload: unknown): GmScienceSettings 
   const arxiv = asRecord(literature?.arxiv);
   const pubmed = asRecord(literature?.pubmed);
   const openalex = asRecord(literature?.openalex);
-  if (!settings || !model || !memory || !literature || !arxiv || !pubmed || !openalex || !Array.isArray(settings.providers)) {
+  const permissions = asRecord(settings?.permissions);
+  const network = asRecord(settings?.network);
+  const packageMirrors = asRecord(network?.package_mirrors ?? network?.packageMirrors);
+  const compute = asRecord(settings?.compute);
+  if (
+    !settings || !model || !memory || !literature || !arxiv || !pubmed || !openalex
+    || !permissions || !network || !packageMirrors || !compute
+    || !Array.isArray(settings.providers) || !Array.isArray(permissions.items)
+    || !Array.isArray(network.categories) || !Array.isArray(compute.targets)
+  ) {
     return null;
   }
 
@@ -394,6 +413,66 @@ export function normalizeGmScienceSettings(payload: unknown): GmScienceSettings 
     return null;
   }
 
+  const permissionItems = permissions.items.map((item) => {
+    const permission = asRecord(item);
+    if (!permission) {
+      return null;
+    }
+    return {
+      id: asString(permission.id),
+      name: asString(permission.name),
+      description: asString(permission.description),
+      category: "registry_writes" as const,
+      granted: permission.granted === true,
+      scope: "global" as const,
+      source: permission.source === "user" ? "user" as const : "default" as const,
+      updatedAt: asString(permission.updated_at ?? permission.updatedAt),
+    };
+  });
+  const categories = network.categories.map((item) => {
+    const category = asRecord(item);
+    if (!category) {
+      return null;
+    }
+    return {
+      id: asString(category.id),
+      name: asString(category.name),
+      description: asString(category.description),
+      enabled: category.enabled === true,
+      domains: asStringList(category.domains),
+    };
+  });
+  const targets = compute.targets.map((item) => {
+    const target = asRecord(item);
+    const status = asString(target?.status) as GmScienceSettings["compute"]["targets"][number]["status"];
+    const type = asString(target?.type) as GmScienceSettings["compute"]["targets"][number]["type"];
+    if (
+      !target
+      || !GM_SCIENCE_INFRASTRUCTURE_STATUSES.has(status)
+      || !["local", "ssh", "cloud_provider", "model_endpoint"].includes(type)
+    ) {
+      return null;
+    }
+    return {
+      id: asString(target.id),
+      type,
+      name: asString(target.name),
+      enabled: target.enabled === true,
+      configured: target.configured === true,
+      executable: target.executable === true,
+      status,
+      statusDetail: asString(target.status_detail ?? target.statusDetail),
+      metadata: asLooseRecord(target.metadata),
+    };
+  });
+  if (
+    permissionItems.some((item) => item === null)
+    || categories.some((item) => item === null)
+    || targets.some((item) => item === null)
+  ) {
+    return null;
+  }
+
   return {
     model: {
       provider: asString(model.provider),
@@ -403,6 +482,21 @@ export function normalizeGmScienceSettings(payload: unknown): GmScienceSettings 
       enabled: memory.enabled === true,
     },
     providers: providers as GmScienceSettings["providers"],
+    permissions: { items: permissionItems as GmScienceSettings["permissions"]["items"] },
+    network: {
+      enabled: network.enabled === true,
+      enforceAllowlist: network.enforce_allowlist === true || network.enforceAllowlist === true,
+      allowPrivateNetworks: network.allow_private_networks === true || network.allowPrivateNetworks === true,
+      packageMirrors: {
+        condaChannelMirror: asString(packageMirrors.conda_channel_mirror ?? packageMirrors.condaChannelMirror),
+        pythonPackageIndex: asString(packageMirrors.python_package_index ?? packageMirrors.pythonPackageIndex),
+        caBundlePath: asString(packageMirrors.ca_bundle_path ?? packageMirrors.caBundlePath),
+      },
+      categories: categories as GmScienceSettings["network"]["categories"],
+      customDomains: asStringList(network.custom_domains ?? network.customDomains),
+      enforcementBoundary: asString(network.enforcement_boundary ?? network.enforcementBoundary),
+    },
+    compute: { targets: targets as GmScienceSettings["compute"]["targets"] },
     literature: {
       arxiv: {
         status: arxivStatus,
@@ -420,6 +514,22 @@ export function normalizeGmScienceSettings(payload: unknown): GmScienceSettings 
         statusDetail: asString(openalex.status_detail ?? openalex.statusDetail),
       },
     },
+  };
+}
+
+export function normalizeGmScienceComputeHealth(payload: unknown): GmScienceComputeHealth | null {
+  const health = asRecord(payload);
+  const status = asString(health?.status) as GmScienceComputeHealth["status"];
+  if (!health || !GM_SCIENCE_INFRASTRUCTURE_STATUSES.has(status)) {
+    return null;
+  }
+  return {
+    targetId: asString(health.target_id ?? health.targetId),
+    status,
+    reachable: health.reachable === true,
+    executable: health.executable === true,
+    detail: asString(health.detail),
+    checkedAt: asString(health.checked_at ?? health.checkedAt),
   };
 }
 

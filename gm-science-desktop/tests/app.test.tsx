@@ -19,6 +19,19 @@ function buildSettings(): GmScienceSettings {
     model: { provider: "openai_codex", model: "openai-codex/gpt-5.5" },
     memory: { enabled: true },
     providers: [{ id: "openai_codex", name: "OpenAI Codex", defaultModel: "openai-codex/gpt-5.5", authType: "oauth", credentialRequired: true, credentialConfigured: true, credentialSource: "oauth_cache", active: true }],
+    permissions: { items: [] },
+    network: {
+      enabled: true,
+      enforceAllowlist: true,
+      allowPrivateNetworks: false,
+      packageMirrors: { condaChannelMirror: "", pythonPackageIndex: "", caBundlePath: "" },
+      categories: [],
+      customDomains: [],
+      enforcementBoundary: "Managed gm-science network clients.",
+    },
+    compute: {
+      targets: [{ id: "local", type: "local", name: "This computer", enabled: true, configured: true, executable: true, status: "ready", statusDetail: "Local execution is available.", metadata: {} }],
+    },
     literature: {
       arxiv: { status: "ready", statusDetail: "" },
       pubmed: { email: "", apiKeyConfigured: false, status: "needs_configuration", statusDetail: "Configuration required." },
@@ -233,6 +246,14 @@ function installClient(overrides: Partial<PpxClientApi> = {}): { client: PpxClie
     updateGmScienceSettings: async () => {
       throw new Error("Settings updates are not configured in this test");
     },
+    checkGmScienceComputeTarget: async (targetId) => ({
+      targetId,
+      status: "ready",
+      reachable: true,
+      executable: true,
+      detail: "Local execution is available.",
+      checkedAt: "2026-04-02T10:00:00.000Z",
+    }),
     getGmScienceMemory: async (projectId) => ({ projectId, notes: [], candidates: [], categories: [] }),
     createGmScienceMemoryNote: async () => {
       throw new Error("Memory creation is not configured in this test");
@@ -775,10 +796,10 @@ describe("App sending state", () => {
     expect(screen.getByText("This Mac (local)")).toBeInTheDocument();
   });
 
-  it("shows runtime restart failures in the settings view", async () => {
+  it("shows Compute health-check failures in the settings view", async () => {
     installClient({
-      runRuntimeCommand: async () => {
-        throw new Error("Local gm-science client-api failed to start: address already in use");
+      checkGmScienceComputeTarget: async () => {
+        throw new Error("Local Compute health check failed");
       },
     });
 
@@ -786,9 +807,9 @@ describe("App sending state", () => {
     await screen.findByText("gm-science");
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     fireEvent.click(await screen.findByRole("button", { name: "Compute" }));
-    fireEvent.click(await screen.findByRole("button", { name: "重启" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Check" }));
 
-    await screen.findByText("Local gm-science client-api failed to start: address already in use");
+    await screen.findByText("Local Compute health check failed");
   });
 
   it("shows connection save failures in the settings view", async () => {

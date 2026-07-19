@@ -683,6 +683,17 @@ def test_handler_routes_expose_safe_config_backed_settings(tmp_path: Path, monke
     assert sent[-1][0] == 400
     assert sent[-1][1]["error"]["code"] == "INVALID_REQUEST"
 
+    handler._parse = lambda: (
+        "/api/v1/gm-science/settings/compute/check",
+        ["api", "v1", "gm-science", "settings", "compute", "check"],
+        {},
+    )
+    handler._read_json_body = lambda: {"target_id": "local"}
+    _ClientApiHandler.do_POST(handler)
+    assert sent[-1][0] == 200
+    assert sent[-1][1]["data"]["health"]["reachable"] is True
+    assert sent[-1][1]["data"]["health"]["executable"] is True
+
 
 def test_client_api_bootstraps_default_science_agent_in_gm_science_mode(
     tmp_path: Path,
@@ -975,6 +986,71 @@ def test_client_api_rejects_unknown_project_capability(tmp_path: Path, monkeypat
     assert payload["ok"] is False
     assert payload["error"]["code"] == "INVALID_REQUEST"
     assert "unknown-skill" in payload["error"]["message"]
+
+
+def test_client_api_enforces_revoked_registry_permissions_on_project_capabilities(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    project = coordinator.create_gm_science_project(
+        {
+            "name": "Permission boundary",
+            "enabled_skills": [],
+            "enabled_connectors": [],
+            "enabled_specialists": [],
+        }
+    )["data"]["project"]
+    coordinator.update_gm_science_settings(
+        {"permission_grants": {"attach_skill": False, "attach_connector": False}}
+    )
+
+    skill = coordinator.update_gm_science_project_capabilities(
+        project["id"],
+        {
+            "enabled_skills": ["literature-review"],
+            "enabled_connectors": [],
+            "enabled_specialists": [],
+        },
+    )
+    connector = coordinator.update_gm_science_project_capabilities(
+        project["id"],
+        {
+            "enabled_skills": [],
+            "enabled_connectors": ["arxiv"],
+            "enabled_specialists": [],
+        },
+    )
+
+    assert skill["ok"] is False
+    assert skill["error"]["code"] == "PERMISSION_DENIED"
+    assert "Attach skill" in skill["error"]["message"]
+    assert connector["ok"] is False
+    assert connector["error"]["code"] == "PERMISSION_DENIED"
+
+
+def test_client_api_requires_attach_permissions_for_initial_project_capabilities(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GM_SCIENCE_MODE", "1")
+    monkeypatch.setenv("GM_SCIENCE_DATA_DIR", str(tmp_path))
+    coordinator = ClientApiCoordinator(data_dir=tmp_path)
+    coordinator.update_gm_science_settings({"permission_grants": {"attach_connector": False}})
+
+    payload = coordinator.create_gm_science_project(
+        {
+            "name": "Blocked defaults",
+            "enabled_skills": [],
+            "enabled_connectors": ["arxiv"],
+            "enabled_specialists": [],
+        }
+    )
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "PERMISSION_DENIED"
 
 
 def test_client_api_rejects_gm_science_project_without_name(tmp_path: Path, monkeypatch) -> None:
